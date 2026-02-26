@@ -520,6 +520,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 }
             }
             std::sort(starts.begin(), starts.end());
+            starts.erase(std::unique(starts.begin(), starts.end()), starts.end());
 
             int minMs = 0;
             int maxMs = 0;
