@@ -420,12 +420,16 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
 
             std::string plugin = ReadParamString(params, "plugin");
             std::string trackName = ReadParamString(params, "trackName");
+            std::string mediaFile = ReadParamString(params, "mediaFile");
             bool replaceIfExists = ReadBool(ReadParamString(params, "replaceIfExists", "false"));
             bool addToAllViews = ReadBool(ReadParamString(params, "addToAllViews", "false"));
             bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
 
             if (plugin.empty() || trackName.empty()) {
                 return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "plugin and trackName are required.", requestId), "", 422, true);
+            }
+            if (!mediaFile.empty() && mediaFile != "null" && mediaFile != CurrentSeqXmlFile->GetMediaFile()) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "mediaFile must match the sequence's loaded media in this phase." , requestId), "", 422, true);
             }
 
             bool pluginExists = false;
@@ -655,6 +659,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             }
 
             std::string trackName = ReadParamString(params, "trackName");
+            std::string mediaFile = ReadParamString(params, "mediaFile");
             bool replaceIfExists = ReadBool(ReadParamString(params, "replaceIfExists", "false"));
             int smoothingMs = ReadParamInt(params, "smoothingMs", 0);
             bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
@@ -665,6 +670,9 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
 
             if (trackName.empty()) {
                 return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "trackName is required.", requestId), "", 422, true);
+            }
+            if (!mediaFile.empty() && mediaFile != "null" && mediaFile != CurrentSeqXmlFile->GetMediaFile()) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "mediaFile must match the sequence's loaded media in this phase." , requestId), "", 422, true);
             }
             if (smoothingMs < 0) {
                 return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "smoothingMs must be >= 0.", requestId), "", 422, true);
