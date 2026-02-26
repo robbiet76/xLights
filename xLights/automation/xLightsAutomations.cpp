@@ -88,6 +88,27 @@ inline bool ReadBool(const std::string &v) {
     return v == "true" || v == "1";
 }
 
+static std::string BuildV2ErrorResponse(int responseCode,
+                                        const std::string& cmd,
+                                        const std::string& code,
+                                        const std::string& message,
+                                        const std::string& requestId = "") {
+    nlohmann::json response;
+    response["res"] = responseCode;
+    response["apiVersion"] = 2;
+    response["cmd"] = cmd;
+    if (!requestId.empty()) {
+        response["requestId"] = requestId;
+    }
+    response["error"] = { {"code", code}, {"message", message} };
+    return response.dump();
+}
+
+static bool IsV2Command(const std::map<std::string, std::string>& params) {
+    auto it = params.find("_API_VERSION");
+    return it != params.end() && it->second == "2";
+}
+
 
 bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                                      std::map<std::string, std::string> &params,
@@ -101,6 +122,65 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
     }
 
     std::string cmd = paths[0];
+    if (IsV2Command(params)) {
+        auto requestIdIt = params.find("_REQUEST_ID");
+        std::string requestId = requestIdIt == params.end() ? "" : requestIdIt->second;
+
+        if (cmd == "system.getCapabilities") {
+            nlohmann::json response;
+            response["res"] = 200;
+            response["apiVersion"] = 2;
+            response["cmd"] = cmd;
+            if (!requestId.empty()) {
+                response["requestId"] = requestId;
+            }
+
+            nlohmann::json data;
+            data["apiVersions"] = { 2 };
+            data["commands"] = {
+                "system.getCapabilities",
+                "timing.listAnalysisPlugins"
+            };
+            data["features"] = {
+                {"vampPluginsAvailable", CurrentSeqXmlFile != nullptr && CurrentSeqXmlFile->HasAudioMedia()},
+                {"lyricsSrtImportAvailable", true},
+                {"songStructureDetectionAvailable", false}
+            };
+            response["data"] = data;
+            response["warnings"] = nlohmann::json::array();
+            return sendResponse(response.dump(), "", 200, true);
+        } else if (cmd == "timing.listAnalysisPlugins") {
+            if (CurrentSeqXmlFile == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            }
+            if (!CurrentSeqXmlFile->HasAudioMedia() || CurrentSeqXmlFile->GetMedia() == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "MEDIA_NOT_AVAILABLE", "Sequence media is not available.", requestId), "", 404, true);
+            }
+
+            auto plugins = CurrentSeqXmlFile->GetMedia()->GetVamp()->GetAvailablePlugins(CurrentSeqXmlFile->GetMedia());
+            nlohmann::json list = nlohmann::json::array();
+            for (const auto& p : plugins) {
+                nlohmann::json plugin;
+                plugin["id"] = p;
+                plugin["name"] = p;
+                list.push_back(plugin);
+            }
+
+            nlohmann::json response;
+            response["res"] = 200;
+            response["apiVersion"] = 2;
+            response["cmd"] = cmd;
+            if (!requestId.empty()) {
+                response["requestId"] = requestId;
+            }
+            response["data"] = { {"plugins", list} };
+            response["warnings"] = nlohmann::json::array();
+            return sendResponse(response.dump(), "", 200, true);
+        }
+
+        return sendResponse(BuildV2ErrorResponse(404, cmd, "UNKNOWN_COMMAND", "Unknown command: '" + cmd + "'.", requestId), "", 404, true);
+    }
+
     if (cmd == "getVersion") {
         return sendResponse(GetDisplayVersionString(), "version", 200, false);
     } else if (cmd == "openSequence" || cmd == "getOpenSequence" || cmd == "loadSequence") {
@@ -1179,7 +1259,56 @@ bool xLightsFrame::ProcessHttpRequest(HttpConnection& connection, HttpRequest& r
 
         try {
             nlohmann::json val = nlohmann::json::parse(request.Data().ToStdString());
-            if (!val.contains("cmd")) {
+            if (val.contains("apiVersion")) {
+                if (!val["apiVersion"].is_number_integer()) {
+                    HttpResponse resp(connection, request, (HttpStatus::HttpStatusCode)400);
+                    resp.AddHeader("access-control-allow-origin", "*");
+                    resp.MakeFromText(BuildV2ErrorResponse(400, "", "BAD_REQUEST", "apiVersion must be an integer."), MIME_JSON);
+                    connection.SendResponse(resp);
+                    return true;
+                }
+                int apiVersion = val["apiVersion"].get<int>();
+                if (apiVersion != 2) {
+                    HttpResponse resp(connection, request, (HttpStatus::HttpStatusCode)400);
+                    resp.AddHeader("access-control-allow-origin", "*");
+                    resp.MakeFromText(BuildV2ErrorResponse(400, "", "UNSUPPORTED_API_VERSION", "Only apiVersion=2 is supported."), MIME_JSON);
+                    connection.SendResponse(resp);
+                    return true;
+                }
+
+                if (!val.contains("cmd") || !val["cmd"].is_string() || val["cmd"].get<std::string>().empty()) {
+                    HttpResponse resp(connection, request, (HttpStatus::HttpStatusCode)400);
+                    resp.AddHeader("access-control-allow-origin", "*");
+                    resp.MakeFromText(BuildV2ErrorResponse(400, "", "BAD_REQUEST", "Missing cmd."), MIME_JSON);
+                    connection.SendResponse(resp);
+                    return true;
+                }
+
+                paths.push_back(val["cmd"].get<std::string>());
+                paramMap["_API_VERSION"] = "2";
+
+                if (val.contains("options") && val["options"].is_object()) {
+                    auto options = val["options"];
+                    if (options.contains("requestId") && options["requestId"].is_string()) {
+                        paramMap["_REQUEST_ID"] = options["requestId"].get<std::string>();
+                    }
+                }
+
+                if (val.contains("params") && val["params"].is_object()) {
+                    for (auto [mn, v] : val["params"].items()) {
+                        if (v.is_string()) {
+                            paramMap[mn] = v.get<std::string>();
+                        } else if (v.is_number_integer()) {
+                            paramMap[mn] = std::to_string(v.get<int>());
+                        } else if (v.is_number_float()) {
+                            paramMap[mn] = std::to_string(v.get<float>());
+                        } else if (v.is_boolean()) {
+                            paramMap[mn] = v.get<bool>() ? "true" : "false";
+                        }
+                    }
+                }
+                paramMap["_METHOD"] = "POST";
+            } else if (!val.contains("cmd")) {
                 HttpResponse resp(connection, request, (HttpStatus::HttpStatusCode)503);
                 resp.AddHeader("access-control-allow-origin", "*");
                 resp.MakeFromText("{\"res\":503,\"msg\":\"Missing cmd.\"}", MIME_JSON);
@@ -1187,7 +1316,6 @@ bool xLightsFrame::ProcessHttpRequest(HttpConnection& connection, HttpRequest& r
                 return true;
             } else {
                 for (auto [mn, v] : val.items()) {
-                    // nlohmann::json v = val[mn];
                     if (mn == "cmd") {
                         paths.push_back(v.get<std::string>());
                     } else if (v.is_string()) {
@@ -1212,9 +1340,7 @@ bool xLightsFrame::ProcessHttpRequest(HttpConnection& connection, HttpRequest& r
                     paramMap["_METHOD"] = "POST";
                 }
             }
-        }
-        catch(std::exception ex) {
-            
+        } catch (std::exception&) {
         }
        
     } else {
@@ -1300,7 +1426,43 @@ std::string xLightsFrame::ProcessxlDoAutomation(const std::string& msg)
     try
     {
         nlohmann::json val = nlohmann::json::parse(msg);
-        if (!val.contains("cmd")) {
+        if (val.contains("apiVersion")) {
+            if (!val["apiVersion"].is_number_integer()) {
+                return BuildV2ErrorResponse(400, "", "BAD_REQUEST", "apiVersion must be an integer.");
+            }
+            int apiVersion = val["apiVersion"].get<int>();
+            if (apiVersion != 2) {
+                return BuildV2ErrorResponse(400, "", "UNSUPPORTED_API_VERSION", "Only apiVersion=2 is supported.");
+            }
+            if (!val.contains("cmd") || !val["cmd"].is_string() || val["cmd"].get<std::string>().empty()) {
+                return BuildV2ErrorResponse(400, "", "BAD_REQUEST", "Missing cmd.");
+            }
+
+            paths.push_back(val["cmd"].get<std::string>());
+            paramMap["_API_VERSION"] = "2";
+
+            if (val.contains("options") && val["options"].is_object()) {
+                auto options = val["options"];
+                if (options.contains("requestId") && options["requestId"].is_string()) {
+                    paramMap["_REQUEST_ID"] = options["requestId"].get<std::string>();
+                }
+            }
+
+            if (val.contains("params") && val["params"].is_object()) {
+                for (auto [mn, v] : val["params"].items()) {
+                    if (v.is_string()) {
+                        paramMap[mn] = v.get<std::string>();
+                    } else if (v.is_number_integer()) {
+                        paramMap[mn] = std::to_string(v.get<int>());
+                    } else if (v.is_number_float()) {
+                        paramMap[mn] = std::to_string(v.get<float>());
+                    } else if (v.is_boolean()) {
+                        paramMap[mn] = v.get<bool>() ? "true" : "false";
+                    }
+                }
+            }
+            paramMap["_METHOD"] = "POST";
+        } else if (!val.contains("cmd")) {
             return "{\"res\":504,\"msg\":\"Missing cmd.\"}";
         } else {
             for (auto [mn, v] : val.items()) {
@@ -1328,30 +1490,34 @@ std::string xLightsFrame::ProcessxlDoAutomation(const std::string& msg)
             } else {
                 paramMap["_METHOD"] = "POST";
             }
+        }
 
-            std::string result;
-            bool processed = ProcessAutomation(paths, paramMap, [&](const std::string &msg,
-                                                                    const std::string &jsonKey,
-                                                                    int responseCode,
-                                                                    bool isJson) {
-                if (isJson) {
-                    if (jsonKey == "") {
-                        result = "{\"res\":" + std::to_string(responseCode) +"," + msg.substr(1);
+        std::string result;
+        bool processed = ProcessAutomation(paths, paramMap, [&](const std::string &msg,
+                                                                const std::string &jsonKey,
+                                                                int responseCode,
+                                                                bool isJson) {
+            if (isJson) {
+                if (jsonKey == "") {
+                    if (!msg.empty() && msg[0] == '{' && msg.find("\"res\"") != std::string::npos) {
+                        result = msg;
                     } else {
-                        result = "{\"res\":" + std::to_string(responseCode) +",\"" + jsonKey + "\":" + msg + "}";
+                        result = "{\"res\":" + std::to_string(responseCode) +"," + msg.substr(1);
                     }
                 } else {
-                    result = "{\"res\":" + std::to_string(responseCode) +",\"" + jsonKey + "\":\"" + msg + "\"}";
+                    result = "{\"res\":" + std::to_string(responseCode) +",\"" + jsonKey + "\":" + msg + "}";
                 }
-                return true;
-            });
-            
-            if (!processed) {
-                auto cmd = val["cmd"].get<std::string>();
-                return wxString::Format("{\"res\":504,\"msg\":\"Unknown command: '%s'.\"}", cmd);
+            } else {
+                result = "{\"res\":" + std::to_string(responseCode) +",\"" + jsonKey + "\":\"" + msg + "\"}";
             }
-            return result;
+            return true;
+        });
+
+        if (!processed) {
+            auto cmd = val["cmd"].get<std::string>();
+            return wxString::Format("{\"res\":504,\"msg\":\"Unknown command: '%s'.\"}", cmd);
         }
+        return result;
     } catch (std::exception &)
     {}
     return "{\"res\":504,\"msg\":\"Error parsing request.\"}";
