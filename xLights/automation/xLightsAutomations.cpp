@@ -630,21 +630,18 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             auto sourceEffects = sourceLayer->GetAllEffects();
             std::vector<int> beatStarts;
             int sequenceEnd = CurrentSeqXmlFile->GetSequenceDurationMS();
+            int lastAccepted = -1;
             for (auto* effect : sourceEffects) {
                 int start = effect->GetStartTimeMS();
                 if (start < 0 || start > sequenceEnd) {
                     continue;
                 }
-                beatStarts.push_back(start);
-            }
-            std::sort(beatStarts.begin(), beatStarts.end());
-            std::vector<int> deduped;
-            for (int t : beatStarts) {
-                if (deduped.empty() || t > deduped.back()) {
-                    deduped.push_back(t);
+                if (lastAccepted >= 0 && start <= lastAccepted) {
+                    continue;
                 }
+                beatStarts.push_back(start);
+                lastAccepted = start;
             }
-            beatStarts.swap(deduped);
 
             if (beatStarts.size() < 2) {
                 return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "Insufficient valid beat marks in source track.", requestId), "", 422, true);
