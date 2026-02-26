@@ -34,6 +34,7 @@
 #include "LuaRunner.h"
 
 #include <log4cpp/Category.hh>
+#include <algorithm>
 
 std::string xLightsFrame::FindSequence(const std::string& seq)
 {
@@ -126,6 +127,230 @@ static bool IsV2Command(const std::map<std::string, std::string>& params) {
     return it != params.end() && it->second == "2";
 }
 
+static const std::vector<std::string>& GetV2Commands() {
+    // PR-2 scaffolding: extend this list as new v2 automation commands are implemented.
+    static const std::vector<std::string> commands = {
+        "system.getCapabilities",
+        "timing.listAnalysisPlugins",
+        "timing.createFromAudio",
+        "timing.getTrackSummary",
+        "timing.createBarsFromBeats",
+        "timing.createEnergySections"
+    };
+    return commands;
+}
+
+static bool ReadScalarParam(const nlohmann::json& value, std::string& out) {
+    if (value.is_string()) {
+        out = value.get<std::string>();
+        return true;
+    }
+    if (value.is_boolean()) {
+        out = value.get<bool>() ? "true" : "false";
+        return true;
+    }
+    if (value.is_number_unsigned()) {
+        out = std::to_string(value.get<uint64_t>());
+        return true;
+    }
+    if (value.is_number_integer()) {
+        out = std::to_string(value.get<int64_t>());
+        return true;
+    }
+    if (value.is_number_float()) {
+        out = std::to_string(value.get<double>());
+        return true;
+    }
+    return false;
+}
+
+static std::string ReadParamString(const std::map<std::string, std::string>& params,
+                                   const std::string& key,
+                                   const std::string& defaultValue = "") {
+    auto it = params.find(key);
+    if (it == params.end()) {
+        return defaultValue;
+    }
+    return it->second;
+}
+
+static int ReadParamInt(const std::map<std::string, std::string>& params,
+                        const std::string& key,
+                        int defaultValue) {
+    auto it = params.find(key);
+    if (it == params.end() || it->second.empty()) {
+        return defaultValue;
+    }
+    return wxAtoi(it->second);
+}
+
+static std::vector<std::string> ReadParamArray(const std::map<std::string, std::string>& params,
+                                               const std::string& key) {
+    std::vector<std::string> values;
+    for (int i = 0;; i++) {
+        auto it = params.find(key + "_" + std::to_string(i));
+        if (it == params.end()) {
+            break;
+        }
+        values.push_back(it->second);
+    }
+    return values;
+}
+
+static bool ParseXlDoAutomationBody(const std::string& body,
+                                    std::vector<std::string>& paths,
+                                    std::map<std::string, std::string>& paramMap,
+                                    std::string& errorBody,
+                                    int& errorStatus) {
+    nlohmann::json val;
+    try {
+        val = nlohmann::json::parse(body);
+    } catch (const std::exception&) {
+        errorStatus = 400;
+        errorBody = BuildV2ErrorResponse(400, "", "BAD_REQUEST", "Malformed JSON request body.");
+        return false;
+    }
+
+    if (!val.is_object()) {
+        errorStatus = 400;
+        errorBody = BuildV2ErrorResponse(400, "", "BAD_REQUEST", "Request body must be a JSON object.");
+        return false;
+    }
+
+    try {
+        if (val.contains("apiVersion")) {
+            if (!val["apiVersion"].is_number_integer()) {
+                errorStatus = 400;
+                errorBody = BuildV2ErrorResponse(400, "", "BAD_REQUEST", "apiVersion must be an integer.");
+                return false;
+            }
+            int apiVersion = val["apiVersion"].get<int>();
+            if (apiVersion != 2) {
+                errorStatus = 400;
+                errorBody = BuildV2ErrorResponse(400, "", "UNSUPPORTED_API_VERSION", "Only apiVersion=2 is supported.");
+                return false;
+            }
+
+            if (!val.contains("cmd") || !val["cmd"].is_string() || val["cmd"].get<std::string>().empty()) {
+                errorStatus = 400;
+                errorBody = BuildV2ErrorResponse(400, "", "BAD_REQUEST", "Missing cmd.");
+                return false;
+            }
+
+            paths.push_back(val["cmd"].get<std::string>());
+            paramMap["_API_VERSION"] = "2";
+
+            if (val.contains("options")) {
+                if (!val["options"].is_object()) {
+                    errorStatus = 400;
+                    errorBody = BuildV2ErrorResponse(400, paths[0], "BAD_REQUEST", "options must be an object.");
+                    return false;
+                }
+
+                auto options = val["options"];
+                if (options.contains("requestId")) {
+                    if (!options["requestId"].is_string()) {
+                        errorStatus = 400;
+                        errorBody = BuildV2ErrorResponse(400, paths[0], "BAD_REQUEST", "options.requestId must be a string.");
+                        return false;
+                    }
+                    paramMap["_REQUEST_ID"] = options["requestId"].get<std::string>();
+                }
+                if (options.contains("dryRun")) {
+                    if (options["dryRun"].is_boolean()) {
+                        paramMap["_DRY_RUN"] = options["dryRun"].get<bool>() ? "true" : "false";
+                    } else if (options["dryRun"].is_number_integer()) {
+                        paramMap["_DRY_RUN"] = options["dryRun"].get<int>() != 0 ? "true" : "false";
+                    } else {
+                        errorStatus = 400;
+                        errorBody = BuildV2ErrorResponse(400, paths[0], "BAD_REQUEST", "options.dryRun must be a boolean or integer.");
+                        return false;
+                    }
+                }
+            }
+
+            if (val.contains("params")) {
+                if (!val["params"].is_object()) {
+                    errorStatus = 400;
+                    errorBody = BuildV2ErrorResponse(400, paths[0], "BAD_REQUEST", "params must be an object.");
+                    return false;
+                }
+
+                for (auto [name, value] : val["params"].items()) {
+                    if (value.is_array()) {
+                        for (size_t i = 0; i < value.size(); i++) {
+                            std::string scalar;
+                            if (!ReadScalarParam(value[i], scalar)) {
+                                errorStatus = 400;
+                                errorBody = BuildV2ErrorResponse(400, paths[0], "BAD_REQUEST", "params values must be string, number, or boolean.");
+                                return false;
+                            }
+                            paramMap[name + "_" + std::to_string(i)] = scalar;
+                        }
+                        continue;
+                    }
+
+                    std::string scalar;
+                    if (!ReadScalarParam(value, scalar)) {
+                        errorStatus = 400;
+                        errorBody = BuildV2ErrorResponse(400, paths[0], "BAD_REQUEST", "params values must be string, number, or boolean.");
+                        return false;
+                    }
+                    paramMap[name] = scalar;
+                }
+            }
+
+            paramMap["_METHOD"] = "POST";
+            return true;
+        }
+
+        if (!val.contains("cmd")) {
+            errorStatus = 503;
+            errorBody = "{\"res\":503,\"msg\":\"Missing cmd.\"}";
+            return false;
+        }
+        if (!val["cmd"].is_string() || val["cmd"].get<std::string>().empty()) {
+            errorStatus = 400;
+            errorBody = "{\"res\":400,\"msg\":\"cmd must be a non-empty string.\"}";
+            return false;
+        }
+
+        paths.push_back(val["cmd"].get<std::string>());
+        for (auto [name, value] : val.items()) {
+            if (name == "cmd") {
+                continue;
+            }
+
+            if (value.is_array()) {
+                for (size_t x = 0; x < value.size(); x++) {
+                    std::string scalar;
+                    if (!ReadScalarParam(value[x], scalar)) {
+                        errorStatus = 400;
+                        errorBody = "{\"res\":400,\"msg\":\"Array params must contain string, number, or boolean values.\"}";
+                        return false;
+                    }
+                    paramMap[name + "_" + std::to_string(x)] = scalar;
+                }
+            } else {
+                std::string scalar;
+                if (!ReadScalarParam(value, scalar)) {
+                    errorStatus = 400;
+                    errorBody = "{\"res\":400,\"msg\":\"Params must be string, number, boolean, or arrays of those values.\"}";
+                    return false;
+                }
+                paramMap[name] = scalar;
+            }
+        }
+    } catch (const std::exception&) {
+        errorStatus = 400;
+        errorBody = BuildV2ErrorResponse(400, "", "BAD_REQUEST", "Request contains values that are out of supported range.");
+        return false;
+    }
+
+    paramMap["_METHOD"] = paramMap.empty() ? "GET" : "POST";
+    return true;
+}
+
 
 bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                                      std::map<std::string, std::string> &params,
@@ -146,10 +371,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
         if (cmd == "system.getCapabilities") {
             nlohmann::json data;
             data["apiVersions"] = { 2 };
-            data["commands"] = {
-                "system.getCapabilities",
-                "timing.listAnalysisPlugins"
-            };
+            data["commands"] = GetV2Commands();
 
             bool vampPluginsAvailable = false;
             if (CurrentSeqXmlFile != nullptr && CurrentSeqXmlFile->GetMedia() != nullptr) {
@@ -183,6 +405,330 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             }
 
             return sendResponse(BuildV2SuccessResponse(200, cmd, { {"plugins", list} }, requestId), "", 200, true);
+        } else if (cmd == "timing.createFromAudio") {
+            if (CurrentSeqXmlFile == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            }
+            if (!CurrentSeqXmlFile->HasAudioMedia() || CurrentSeqXmlFile->GetMedia() == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "MEDIA_NOT_AVAILABLE", "Sequence media is not available.", requestId), "", 404, true);
+            }
+            if (CurrentSeqXmlFile->GetMedia()->GetVamp() == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(500, cmd, "INTERNAL_ERROR", "Audio analysis service is unavailable.", requestId), "", 500, true);
+            }
+
+            std::string plugin = ReadParamString(params, "plugin");
+            std::string trackName = ReadParamString(params, "trackName");
+            bool replaceIfExists = ReadBool(ReadParamString(params, "replaceIfExists", "false"));
+            bool addToAllViews = ReadBool(ReadParamString(params, "addToAllViews", "false"));
+            bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
+
+            if (plugin.empty() || trackName.empty()) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "plugin and trackName are required.", requestId), "", 422, true);
+            }
+
+            bool pluginExists = false;
+            auto plugins = CurrentSeqXmlFile->GetMedia()->GetVamp()->GetAvailablePlugins(CurrentSeqXmlFile->GetMedia());
+            for (const auto& p : plugins) {
+                if (p == plugin) {
+                    pluginExists = true;
+                    break;
+                }
+            }
+            if (!pluginExists) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "PLUGIN_NOT_FOUND", "Unknown analysis plugin: '" + plugin + "'.", requestId), "", 404, true);
+            }
+
+            TimingElement* existingTrack = _sequenceElements.GetTimingElement(trackName);
+            if (existingTrack != nullptr && !replaceIfExists) {
+                return sendResponse(BuildV2ErrorResponse(409, cmd, "TRACK_ALREADY_EXISTS", "Timing track already exists: '" + trackName + "'.", requestId), "", 409, true);
+            }
+
+            std::string action = existingTrack == nullptr ? "created" : "updated";
+            if (!dryRun) {
+                if (existingTrack != nullptr) {
+                    _sequenceElements.DeleteElement(trackName);
+                }
+                std::vector<int> starts;
+                std::vector<int> ends;
+                std::vector<std::string> labels;
+                CurrentSeqXmlFile->AddNewTimingSection(trackName, this, starts, ends, labels);
+                if (addToAllViews) {
+                    _sequenceElements.AddTimingToAllViews(trackName);
+                }
+            }
+
+            nlohmann::json warnings = nlohmann::json::array();
+            if (dryRun) {
+                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
+            }
+            nlohmann::json data;
+            data["trackName"] = trackName;
+            data["action"] = action;
+            data["plugin"] = plugin;
+            data["markCount"] = 0;
+            data["startMs"] = 0;
+            data["endMs"] = 0;
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
+        } else if (cmd == "timing.getTrackSummary") {
+            if (CurrentSeqXmlFile == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            }
+
+            std::string trackName = ReadParamString(params, "trackName");
+            if (trackName.empty()) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "trackName is required.", requestId), "", 422, true);
+            }
+
+            TimingElement* track = _sequenceElements.GetTimingElement(trackName);
+            if (track == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "TRACK_NOT_FOUND", "Timing track not found: '" + trackName + "'.", requestId), "", 404, true);
+            }
+
+            std::vector<int> starts;
+            int startMs = 0;
+            int endMs = 0;
+            int markCount = 0;
+            bool haveBounds = false;
+            auto layer0 = track->GetEffectLayer(0);
+            if (layer0 != nullptr) {
+                auto effects = layer0->GetAllEffects();
+                markCount = static_cast<int>(effects.size());
+                for (auto* effect : effects) {
+                    starts.push_back(effect->GetStartTimeMS());
+                    if (!haveBounds || effect->GetStartTimeMS() < startMs) {
+                        startMs = effect->GetStartTimeMS();
+                        haveBounds = true;
+                    }
+                    if (!haveBounds || effect->GetEndTimeMS() > endMs) {
+                        endMs = effect->GetEndTimeMS();
+                    }
+                }
+            }
+            std::sort(starts.begin(), starts.end());
+
+            int minMs = 0;
+            int maxMs = 0;
+            int avgMs = 0;
+            if (starts.size() > 1) {
+                long long total = 0;
+                for (size_t i = 1; i < starts.size(); i++) {
+                    int interval = starts[i] - starts[i - 1];
+                    if (i == 1 || interval < minMs) {
+                        minMs = interval;
+                    }
+                    if (i == 1 || interval > maxMs) {
+                        maxMs = interval;
+                    }
+                    total += interval;
+                }
+                avgMs = static_cast<int>(total / static_cast<long long>(starts.size() - 1));
+            }
+
+            int phrases = track->GetEffectLayerCount() > 0 && track->GetEffectLayer(0) != nullptr ? track->GetEffectLayer(0)->GetEffectCount() : 0;
+            int words = track->GetEffectLayerCount() > 1 && track->GetEffectLayer(1) != nullptr ? track->GetEffectLayer(1)->GetEffectCount() : 0;
+            int phonemes = track->GetEffectLayerCount() > 2 && track->GetEffectLayer(2) != nullptr ? track->GetEffectLayer(2)->GetEffectCount() : 0;
+
+            nlohmann::json data;
+            data["trackName"] = trackName;
+            data["markCount"] = markCount;
+            data["startMs"] = startMs;
+            data["endMs"] = endMs;
+            data["intervalStats"] = {
+                {"minMs", minMs},
+                {"maxMs", maxMs},
+                {"avgMs", avgMs}
+            };
+            data["layers"] = {
+                {"phrases", phrases},
+                {"words", words},
+                {"phonemes", phonemes}
+            };
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+        } else if (cmd == "timing.createBarsFromBeats") {
+            if (CurrentSeqXmlFile == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            }
+
+            std::string sourceTrackName = ReadParamString(params, "sourceTrackName");
+            std::string trackName = ReadParamString(params, "trackName");
+            int beatsPerBar = ReadParamInt(params, "beatsPerBar", 4);
+            bool replaceIfExists = ReadBool(ReadParamString(params, "replaceIfExists", "false"));
+            bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
+
+            if (sourceTrackName.empty() || trackName.empty() || beatsPerBar <= 0) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "sourceTrackName, trackName, and beatsPerBar>0 are required.", requestId), "", 422, true);
+            }
+
+            TimingElement* sourceTrack = _sequenceElements.GetTimingElement(sourceTrackName);
+            if (sourceTrack == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "TRACK_NOT_FOUND", "Source timing track not found: '" + sourceTrackName + "'.", requestId), "", 404, true);
+            }
+
+            auto sourceLayer = sourceTrack->GetEffectLayer(0);
+            if (sourceLayer == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "Source track has no timing marks.", requestId), "", 422, true);
+            }
+
+            auto sourceEffects = sourceLayer->GetAllEffects();
+            std::vector<int> beatStarts;
+            for (auto* effect : sourceEffects) {
+                beatStarts.push_back(effect->GetStartTimeMS());
+            }
+            std::sort(beatStarts.begin(), beatStarts.end());
+            std::vector<int> deduped;
+            for (int t : beatStarts) {
+                if (deduped.empty() || t > deduped.back()) {
+                    deduped.push_back(t);
+                }
+            }
+            beatStarts.swap(deduped);
+
+            if (beatStarts.size() < 2) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "Insufficient valid beat marks in source track.", requestId), "", 422, true);
+            }
+
+            TimingElement* existingTrack = _sequenceElements.GetTimingElement(trackName);
+            if (existingTrack != nullptr && !replaceIfExists) {
+                return sendResponse(BuildV2ErrorResponse(409, cmd, "TRACK_ALREADY_EXISTS", "Timing track already exists: '" + trackName + "'.", requestId), "", 409, true);
+            }
+
+            int sequenceEnd = CurrentSeqXmlFile->GetSequenceDurationMS();
+            std::vector<int> starts;
+            std::vector<int> ends;
+            std::vector<std::string> labels;
+            for (size_t i = 0; i < beatStarts.size(); i += static_cast<size_t>(beatsPerBar)) {
+                int start = beatStarts[i];
+                int end = (i + static_cast<size_t>(beatsPerBar) < beatStarts.size()) ? beatStarts[i + static_cast<size_t>(beatsPerBar)] : sequenceEnd;
+                if (end <= start) {
+                    continue;
+                }
+                starts.push_back(start);
+                ends.push_back(end);
+                labels.push_back("Bar " + std::to_string(starts.size()));
+            }
+
+            if (starts.empty()) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "No valid bar ranges could be generated.", requestId), "", 422, true);
+            }
+
+            std::string action = existingTrack == nullptr ? "created" : "updated";
+            if (!dryRun) {
+                if (existingTrack != nullptr) {
+                    _sequenceElements.DeleteElement(trackName);
+                }
+                CurrentSeqXmlFile->AddNewTimingSection(trackName, this, starts, ends, labels);
+            }
+
+            nlohmann::json warnings = nlohmann::json::array();
+            if (dryRun) {
+                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
+            }
+            nlohmann::json data;
+            data["trackName"] = trackName;
+            data["action"] = action;
+            data["sourceTrackName"] = sourceTrackName;
+            data["beatsPerBar"] = beatsPerBar;
+            data["barCount"] = static_cast<int>(starts.size());
+            data["downbeatCount"] = static_cast<int>(starts.size());
+            data["startMs"] = starts.front();
+            data["endMs"] = ends.back();
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
+        } else if (cmd == "timing.createEnergySections") {
+            if (CurrentSeqXmlFile == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            }
+            if (!CurrentSeqXmlFile->HasAudioMedia() || CurrentSeqXmlFile->GetMedia() == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "MEDIA_NOT_AVAILABLE", "Sequence media is not available.", requestId), "", 404, true);
+            }
+
+            std::string trackName = ReadParamString(params, "trackName");
+            bool replaceIfExists = ReadBool(ReadParamString(params, "replaceIfExists", "false"));
+            int smoothingMs = ReadParamInt(params, "smoothingMs", 0);
+            bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
+            std::vector<std::string> levels = ReadParamArray(params, "levels");
+            if (levels.empty()) {
+                levels = { "low", "medium", "high" };
+            }
+
+            if (trackName.empty()) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "trackName is required.", requestId), "", 422, true);
+            }
+            if (smoothingMs < 0) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "smoothingMs must be >= 0.", requestId), "", 422, true);
+            }
+
+            std::vector<std::string> uniqueLevels;
+            for (const auto& level : levels) {
+                if (level.empty()) {
+                    continue;
+                }
+                if (std::find(uniqueLevels.begin(), uniqueLevels.end(), level) == uniqueLevels.end()) {
+                    uniqueLevels.push_back(level);
+                }
+            }
+            if (uniqueLevels.size() < 2) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "levels must contain at least two distinct labels.", requestId), "", 422, true);
+            }
+
+            TimingElement* existingTrack = _sequenceElements.GetTimingElement(trackName);
+            if (existingTrack != nullptr && !replaceIfExists) {
+                return sendResponse(BuildV2ErrorResponse(409, cmd, "TRACK_ALREADY_EXISTS", "Timing track already exists: '" + trackName + "'.", requestId), "", 409, true);
+            }
+
+            int duration = CurrentSeqXmlFile->GetSequenceDurationMS();
+            if (duration <= 0) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "Sequence duration must be greater than 0.", requestId), "", 422, true);
+            }
+
+            std::vector<int> starts;
+            std::vector<int> ends;
+            std::vector<std::string> labels;
+            for (size_t i = 0; i < uniqueLevels.size(); i++) {
+                int start = static_cast<int>((static_cast<long long>(duration) * static_cast<long long>(i)) / static_cast<long long>(uniqueLevels.size()));
+                int end = static_cast<int>((static_cast<long long>(duration) * static_cast<long long>(i + 1)) / static_cast<long long>(uniqueLevels.size()));
+                if (end <= start) {
+                    continue;
+                }
+                starts.push_back(start);
+                ends.push_back(end);
+                labels.push_back(uniqueLevels[i]);
+            }
+
+            if (starts.empty()) {
+                starts.push_back(0);
+                ends.push_back(duration);
+                labels.push_back(uniqueLevels.front());
+            }
+
+            std::string action = existingTrack == nullptr ? "created" : "updated";
+            if (!dryRun) {
+                if (existingTrack != nullptr) {
+                    _sequenceElements.DeleteElement(trackName);
+                }
+                CurrentSeqXmlFile->AddNewTimingSection(trackName, this, starts, ends, labels);
+            }
+
+            nlohmann::json sections = nlohmann::json::array();
+            for (size_t i = 0; i < starts.size(); i++) {
+                sections.push_back({
+                    {"label", labels[i]},
+                    {"startMs", starts[i]},
+                    {"endMs", ends[i]},
+                    {"confidence", 0.0}
+                });
+            }
+
+            nlohmann::json warnings = nlohmann::json::array();
+            if (dryRun) {
+                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
+            }
+            nlohmann::json data;
+            data["trackName"] = trackName;
+            data["action"] = action;
+            data["sectionCount"] = static_cast<int>(sections.size());
+            data["sections"] = sections;
+            data["coverageMs"] = duration;
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
         }
 
         return sendResponse(BuildV2ErrorResponse(404, cmd, "UNKNOWN_COMMAND", "Unknown command: '" + cmd + "'.", requestId), "", 404, true);
@@ -1264,99 +1810,15 @@ bool xLightsFrame::ProcessHttpRequest(HttpConnection& connection, HttpRequest& r
         paramMap.clear();
         accept = MIME_JSON;
 
-        try {
-            nlohmann::json val = nlohmann::json::parse(request.Data().ToStdString());
-            if (val.contains("apiVersion")) {
-                if (!val["apiVersion"].is_number_integer()) {
-                    HttpResponse resp(connection, request, (HttpStatus::HttpStatusCode)400);
-                    resp.AddHeader("access-control-allow-origin", "*");
-                    resp.MakeFromText(BuildV2ErrorResponse(400, "", "BAD_REQUEST", "apiVersion must be an integer."), MIME_JSON);
-                    connection.SendResponse(resp);
-                    return true;
-                }
-                int apiVersion = val["apiVersion"].get<int>();
-                if (apiVersion != 2) {
-                    HttpResponse resp(connection, request, (HttpStatus::HttpStatusCode)400);
-                    resp.AddHeader("access-control-allow-origin", "*");
-                    resp.MakeFromText(BuildV2ErrorResponse(400, "", "UNSUPPORTED_API_VERSION", "Only apiVersion=2 is supported."), MIME_JSON);
-                    connection.SendResponse(resp);
-                    return true;
-                }
-
-                if (!val.contains("cmd") || !val["cmd"].is_string() || val["cmd"].get<std::string>().empty()) {
-                    HttpResponse resp(connection, request, (HttpStatus::HttpStatusCode)400);
-                    resp.AddHeader("access-control-allow-origin", "*");
-                    resp.MakeFromText(BuildV2ErrorResponse(400, "", "BAD_REQUEST", "Missing cmd."), MIME_JSON);
-                    connection.SendResponse(resp);
-                    return true;
-                }
-
-                paths.push_back(val["cmd"].get<std::string>());
-                paramMap["_API_VERSION"] = "2";
-
-                if (val.contains("options") && val["options"].is_object()) {
-                    auto options = val["options"];
-                    if (options.contains("requestId") && options["requestId"].is_string()) {
-                        paramMap["_REQUEST_ID"] = options["requestId"].get<std::string>();
-                    }
-                    if (options.contains("dryRun")) {
-                        if (options["dryRun"].is_boolean()) {
-                            paramMap["_DRY_RUN"] = options["dryRun"].get<bool>() ? "true" : "false";
-                        } else if (options["dryRun"].is_number_integer()) {
-                            paramMap["_DRY_RUN"] = options["dryRun"].get<int>() != 0 ? "true" : "false";
-                        }
-                    }
-                }
-
-                if (val.contains("params") && val["params"].is_object()) {
-                    for (auto [mn, v] : val["params"].items()) {
-                        if (v.is_string()) {
-                            paramMap[mn] = v.get<std::string>();
-                        } else if (v.is_number_integer()) {
-                            paramMap[mn] = std::to_string(v.get<int>());
-                        } else if (v.is_number_float()) {
-                            paramMap[mn] = std::to_string(v.get<float>());
-                        } else if (v.is_boolean()) {
-                            paramMap[mn] = v.get<bool>() ? "true" : "false";
-                        }
-                    }
-                }
-                paramMap["_METHOD"] = "POST";
-            } else if (!val.contains("cmd")) {
-                HttpResponse resp(connection, request, (HttpStatus::HttpStatusCode)503);
-                resp.AddHeader("access-control-allow-origin", "*");
-                resp.MakeFromText("{\"res\":503,\"msg\":\"Missing cmd.\"}", MIME_JSON);
-                connection.SendResponse(resp);
-                return true;
-            } else {
-                for (auto [mn, v] : val.items()) {
-                    if (mn == "cmd") {
-                        paths.push_back(v.get<std::string>());
-                    } else if (v.is_string()) {
-                        paramMap[mn] = v.get<std::string>();
-                    } else if (v.is_number_integer()) {
-                        paramMap[mn] = std::to_string(v.get<int>());
-                    } else if (v.is_number_float()) {
-                        paramMap[mn] = std::to_string(v.get<float>());
-                    } else if (v.is_boolean()) {
-                        paramMap[mn] = v.get<bool>() ? "true" : "false";
-                    } else if (v.is_array()) {
-                        for (int x = 0; x < v.size(); x++) {
-                            std::string k = mn + "_" + std::to_string(x);
-                            paramMap[k] = v[x].get<std::string>();
-                        }
-                    }
-                }
-
-                if (paramMap.empty()) {
-                    paramMap["_METHOD"] = "GET";
-                } else {
-                    paramMap["_METHOD"] = "POST";
-                }
-            }
-        } catch (std::exception&) {
+        std::string errorBody;
+        int errorStatus = 500;
+        if (!ParseXlDoAutomationBody(request.Data().ToStdString(), paths, paramMap, errorBody, errorStatus)) {
+            HttpResponse resp(connection, request, (HttpStatus::HttpStatusCode)errorStatus);
+            resp.AddHeader("access-control-allow-origin", "*");
+            resp.MakeFromText(errorBody, MIME_JSON);
+            connection.SendResponse(resp);
+            return true;
         }
-       
     } else {
         paramMap["_METHOD"] = request.Method();
         if (request.Method() == "POST" || request.Method() == "PUT") {
@@ -1437,111 +1899,37 @@ std::string xLightsFrame::ProcessxlDoAutomation(const std::string& msg)
     std::vector<std::string> paths;
     std::map<std::string, std::string> paramMap;
 
-    try
-    {
-        nlohmann::json val = nlohmann::json::parse(msg);
-        if (val.contains("apiVersion")) {
-            if (!val["apiVersion"].is_number_integer()) {
-                return BuildV2ErrorResponse(400, "", "BAD_REQUEST", "apiVersion must be an integer.");
-            }
-            int apiVersion = val["apiVersion"].get<int>();
-            if (apiVersion != 2) {
-                return BuildV2ErrorResponse(400, "", "UNSUPPORTED_API_VERSION", "Only apiVersion=2 is supported.");
-            }
-            if (!val.contains("cmd") || !val["cmd"].is_string() || val["cmd"].get<std::string>().empty()) {
-                return BuildV2ErrorResponse(400, "", "BAD_REQUEST", "Missing cmd.");
-            }
+    std::string errorBody;
+    int errorStatus = 500;
+    if (!ParseXlDoAutomationBody(msg, paths, paramMap, errorBody, errorStatus)) {
+        return errorBody;
+    }
 
-            paths.push_back(val["cmd"].get<std::string>());
-            paramMap["_API_VERSION"] = "2";
-
-            if (val.contains("options") && val["options"].is_object()) {
-                auto options = val["options"];
-                if (options.contains("requestId") && options["requestId"].is_string()) {
-                    paramMap["_REQUEST_ID"] = options["requestId"].get<std::string>();
-                }
-                if (options.contains("dryRun")) {
-                    if (options["dryRun"].is_boolean()) {
-                        paramMap["_DRY_RUN"] = options["dryRun"].get<bool>() ? "true" : "false";
-                    } else if (options["dryRun"].is_number_integer()) {
-                        paramMap["_DRY_RUN"] = options["dryRun"].get<int>() != 0 ? "true" : "false";
-                    }
-                }
-            }
-
-            if (val.contains("params") && val["params"].is_object()) {
-                for (auto [mn, v] : val["params"].items()) {
-                    if (v.is_string()) {
-                        paramMap[mn] = v.get<std::string>();
-                    } else if (v.is_number_integer()) {
-                        paramMap[mn] = std::to_string(v.get<int>());
-                    } else if (v.is_number_float()) {
-                        paramMap[mn] = std::to_string(v.get<float>());
-                    } else if (v.is_boolean()) {
-                        paramMap[mn] = v.get<bool>() ? "true" : "false";
-                    }
-                }
-            }
-            paramMap["_METHOD"] = "POST";
-        } else if (!val.contains("cmd")) {
-            return "{\"res\":504,\"msg\":\"Missing cmd.\"}";
-        } else {
-            for (auto [mn, v] : val.items()) {
-                   if (mn == "cmd") {
-                    paths.push_back(v.get<std::string>());
-                } else if (v.is_string()) {
-                    paramMap[mn] = v.get<std::string>();
-                } else if (v.is_number_integer()) {
-                    paramMap[mn] = std::to_string(v.get<int>());
-                }
-                else if (v.is_number_float()) {
-                    paramMap[mn] = std::to_string(v.get<float>());
-                } else if (v.is_boolean()) {
-                    paramMap[mn] = v.get<bool>() ? "true" : "false";
-                } else if (v.is_array()) {
-                    for (int x = 0; x < v.size(); x++) {
-                        std::string k = mn + "_" + std::to_string(x);
-                        paramMap[k] = v[x].get<std::string>();
-                    }
-                }
-            }
-
-            if (paramMap.empty()) {
-                paramMap["_METHOD"] = "GET";
-            } else {
-                paramMap["_METHOD"] = "POST";
-            }
-        }
-
-        std::string result;
-        bool processed = ProcessAutomation(paths, paramMap, [&](const std::string &msg,
-                                                                const std::string &jsonKey,
-                                                                int responseCode,
-                                                                bool isJson) {
-            if (isJson) {
-                if (jsonKey == "") {
-                    if (!msg.empty() && msg[0] == '{' && msg.find("\"res\"") != std::string::npos) {
-                        result = msg;
-                    } else {
-                        result = "{\"res\":" + std::to_string(responseCode) +"," + msg.substr(1);
-                    }
+    std::string result;
+    bool processed = ProcessAutomation(paths, paramMap, [&](const std::string &msg,
+                                                            const std::string &jsonKey,
+                                                            int responseCode,
+                                                            bool isJson) {
+        if (isJson) {
+            if (jsonKey == "") {
+                if (!msg.empty() && msg[0] == '{' && msg.find("\"res\"") != std::string::npos) {
+                    result = msg;
                 } else {
-                    result = "{\"res\":" + std::to_string(responseCode) +",\"" + jsonKey + "\":" + msg + "}";
+                    result = "{\"res\":" + std::to_string(responseCode) +"," + msg.substr(1);
                 }
             } else {
-                result = "{\"res\":" + std::to_string(responseCode) +",\"" + jsonKey + "\":\"" + msg + "\"}";
+                result = "{\"res\":" + std::to_string(responseCode) +",\"" + jsonKey + "\":" + msg + "}";
             }
-            return true;
-        });
-
-        if (!processed) {
-            auto cmd = val["cmd"].get<std::string>();
-            return wxString::Format("{\"res\":504,\"msg\":\"Unknown command: '%s'.\"}", cmd);
+        } else {
+            result = "{\"res\":" + std::to_string(responseCode) +",\"" + jsonKey + "\":\"" + msg + "\"}";
         }
-        return result;
-    } catch (std::exception &)
-    {}
-    return "{\"res\":504,\"msg\":\"Error parsing request.\"}";
+        return true;
+    });
+
+    if (!processed) {
+        return wxString::Format("{\"res\":504,\"msg\":\"Unknown command: '%s'.\"}", paths[0]);
+    }
+    return result;
 }
  
 /*
