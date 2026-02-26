@@ -586,8 +586,13 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
 
             auto sourceEffects = sourceLayer->GetAllEffects();
             std::vector<int> beatStarts;
+            int sequenceEnd = CurrentSeqXmlFile->GetSequenceDurationMS();
             for (auto* effect : sourceEffects) {
-                beatStarts.push_back(effect->GetStartTimeMS());
+                int start = effect->GetStartTimeMS();
+                if (start < 0 || start > sequenceEnd) {
+                    continue;
+                }
+                beatStarts.push_back(start);
             }
             std::sort(beatStarts.begin(), beatStarts.end());
             std::vector<int> deduped;
@@ -607,7 +612,6 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 return sendResponse(BuildV2ErrorResponse(409, cmd, "TRACK_ALREADY_EXISTS", "Timing track already exists: '" + trackName + "'.", requestId), "", 409, true);
             }
 
-            int sequenceEnd = CurrentSeqXmlFile->GetSequenceDurationMS();
             std::vector<int> starts;
             std::vector<int> ends;
             std::vector<std::string> labels;
