@@ -470,6 +470,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             nlohmann::json warnings = nlohmann::json::array();
             if (dryRun) {
                 warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
+                warnings.push_back({ {"code", "ESTIMATE_ONLY"}, {"message", "markCount/startMs/endMs are not computed in dryRun mode."} });
             }
             nlohmann::json data;
             data["trackName"] = trackName;
@@ -606,6 +607,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             std::vector<int> starts;
             std::vector<int> ends;
             std::vector<std::string> labels;
+            int downbeatCount = 0;
             for (size_t i = 0; i < beatStarts.size(); i += static_cast<size_t>(beatsPerBar)) {
                 int start = beatStarts[i];
                 int end = (i + static_cast<size_t>(beatsPerBar) < beatStarts.size()) ? beatStarts[i + static_cast<size_t>(beatsPerBar)] : sequenceEnd;
@@ -614,7 +616,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 }
                 starts.push_back(start);
                 ends.push_back(end);
-                labels.push_back("Bar " + std::to_string(starts.size()));
+                downbeatCount++;
+                labels.push_back("Downbeat " + std::to_string(downbeatCount));
             }
 
             if (starts.empty()) {
@@ -639,7 +642,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             data["sourceTrackName"] = sourceTrackName;
             data["beatsPerBar"] = beatsPerBar;
             data["barCount"] = static_cast<int>(starts.size());
-            data["downbeatCount"] = static_cast<int>(starts.size());
+            data["downbeatCount"] = downbeatCount;
             data["startMs"] = starts.front();
             data["endMs"] = ends.back();
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
