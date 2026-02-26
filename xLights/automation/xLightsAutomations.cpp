@@ -169,6 +169,9 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             if (!CurrentSeqXmlFile->HasAudioMedia() || CurrentSeqXmlFile->GetMedia() == nullptr) {
                 return sendResponse(BuildV2ErrorResponse(404, cmd, "MEDIA_NOT_AVAILABLE", "Sequence media is not available.", requestId), "", 404, true);
             }
+            if (CurrentSeqXmlFile->GetMedia()->GetVamp() == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(500, cmd, "INTERNAL_ERROR", "Audio analysis service is unavailable.", requestId), "", 500, true);
+            }
 
             auto plugins = CurrentSeqXmlFile->GetMedia()->GetVamp()->GetAvailablePlugins(CurrentSeqXmlFile->GetMedia());
             nlohmann::json list = nlohmann::json::array();
@@ -1258,7 +1261,7 @@ bool xLightsFrame::ProcessHttpRequest(HttpConnection& connection, HttpRequest& r
     wxString accept = request["Accept"];
     if (paths[0] == "xlDoAutomation") {
         paths.clear();
-        params.clear();
+        paramMap.clear();
         accept = MIME_JSON;
 
         try {
