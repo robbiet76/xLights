@@ -854,6 +854,13 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "Unable to derive valid energy sections.", requestId), "", 422, true);
             }
 
+            // Normalize to full-song contiguous coverage for deterministic machine consumers.
+            starts.front() = 0;
+            for (size_t i = 1; i < starts.size(); i++) {
+                starts[i] = ends[i - 1];
+            }
+            ends.back() = duration;
+
             std::string action = existingTrack == nullptr ? "created" : "updated";
             if (!dryRun) {
                 if (existingTrack != nullptr) {
@@ -864,11 +871,12 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
 
             nlohmann::json sections = nlohmann::json::array();
             for (size_t i = 0; i < starts.size(); i++) {
+                double confidence = std::max(0.0, std::min(1.0, confidences[i]));
                 sections.push_back({
                     {"label", labels[i]},
                     {"startMs", starts[i]},
                     {"endMs", ends[i]},
-                    {"confidence", confidences[i]}
+                    {"confidence", confidence}
                 });
             }
 
@@ -881,7 +889,11 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             data["action"] = action;
             data["sectionCount"] = static_cast<int>(sections.size());
             data["sections"] = sections;
-            data["coverageMs"] = ends.back() - starts.front();
+            int coverageMs = 0;
+            for (size_t i = 0; i < starts.size(); i++) {
+                coverageMs += std::max(0, ends[i] - starts[i]);
+            }
+            data["coverageMs"] = coverageMs;
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
         }
 
