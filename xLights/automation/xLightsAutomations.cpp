@@ -36,6 +36,7 @@
 
 #include <log4cpp/Category.hh>
 #include <algorithm>
+#include <cmath>
 
 std::string xLightsFrame::FindSequence(const std::string& seq)
 {
@@ -689,24 +690,113 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "Sequence duration must be greater than 0.", requestId), "", 422, true);
             }
 
+            auto* media = CurrentSeqXmlFile->GetMedia();
+            long sampleRate = media->GetRate();
+            long sampleCount = media->GetTrackSize();
+            if (sampleRate <= 0 || sampleCount <= 0) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "Unable to analyze audio for energy sections.", requestId), "", 422, true);
+            }
+
+            int windowMs = smoothingMs > 0 ? smoothingMs : 500;
+            if (windowMs < 50) {
+                windowMs = 50;
+            }
+            long windowSamples = (sampleRate * windowMs) / 1000;
+            if (windowSamples < 1) {
+                windowSamples = 1;
+            }
+            long hopSamples = windowSamples / 2;
+            if (hopSamples < 1) {
+                hopSamples = 1;
+            }
+
+            std::vector<double> energies;
+            std::vector<int> frameStartsMs;
+            std::vector<int> frameEndsMs;
+            for (long startSample = 0; startSample < sampleCount; startSample += hopSamples) {
+                long endSample = std::min(sampleCount, startSample + windowSamples);
+                if (endSample <= startSample) {
+                    continue;
+                }
+
+                double sumSq = 0.0;
+                for (long i = startSample; i < endSample; i++) {
+                    double l = media->GetFilteredLeftData(i);
+                    double sample = l;
+                    if (media->GetChannels() > 1) {
+                        double r = media->GetFilteredRightData(i);
+                        sample = 0.5 * (l + r);
+                    }
+                    sumSq += sample * sample;
+                }
+
+                double n = static_cast<double>(endSample - startSample);
+                energies.push_back(std::sqrt(sumSq / n));
+                frameStartsMs.push_back(static_cast<int>((startSample * 1000) / sampleRate));
+                frameEndsMs.push_back(static_cast<int>((endSample * 1000) / sampleRate));
+            }
+
+            if (energies.empty()) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "Unable to derive energy frames from audio.", requestId), "", 422, true);
+            }
+
+            double minEnergy = energies[0];
+            double maxEnergy = energies[0];
+            for (double e : energies) {
+                if (e < minEnergy) {
+                    minEnergy = e;
+                }
+                if (e > maxEnergy) {
+                    maxEnergy = e;
+                }
+            }
+
+            std::vector<int> frameBins;
+            std::vector<double> frameConfidence;
+            int bins = static_cast<int>(uniqueLevels.size());
+            for (double e : energies) {
+                double norm = (maxEnergy > minEnergy) ? ((e - minEnergy) / (maxEnergy - minEnergy)) : 0.5;
+                int idx = static_cast<int>(norm * bins);
+                if (idx >= bins) {
+                    idx = bins - 1;
+                }
+                if (idx < 0) {
+                    idx = 0;
+                }
+                frameBins.push_back(idx);
+
+                double center = (static_cast<double>(idx) + 0.5) / static_cast<double>(bins);
+                double conf = 1.0 - std::min(1.0, std::abs(norm - center) * 2.0);
+                frameConfidence.push_back(conf);
+            }
+
             std::vector<int> starts;
             std::vector<int> ends;
             std::vector<std::string> labels;
-            for (size_t i = 0; i < uniqueLevels.size(); i++) {
-                int start = static_cast<int>((static_cast<long long>(duration) * static_cast<long long>(i)) / static_cast<long long>(uniqueLevels.size()));
-                int end = static_cast<int>((static_cast<long long>(duration) * static_cast<long long>(i + 1)) / static_cast<long long>(uniqueLevels.size()));
-                if (end <= start) {
-                    continue;
+            std::vector<double> confidences;
+            size_t segmentStart = 0;
+            while (segmentStart < frameBins.size()) {
+                int currentBin = frameBins[segmentStart];
+                size_t segmentEnd = segmentStart + 1;
+                double confTotal = frameConfidence[segmentStart];
+                while (segmentEnd < frameBins.size() && frameBins[segmentEnd] == currentBin) {
+                    confTotal += frameConfidence[segmentEnd];
+                    segmentEnd++;
                 }
-                starts.push_back(start);
-                ends.push_back(end);
-                labels.push_back(uniqueLevels[i]);
+
+                int sectionStart = frameStartsMs[segmentStart];
+                int sectionEnd = frameEndsMs[segmentEnd - 1];
+                if (sectionEnd > sectionStart) {
+                    starts.push_back(sectionStart);
+                    ends.push_back(sectionEnd);
+                    labels.push_back(uniqueLevels[currentBin]);
+                    confidences.push_back(confTotal / static_cast<double>(segmentEnd - segmentStart));
+                }
+                segmentStart = segmentEnd;
             }
 
             if (starts.empty()) {
-                starts.push_back(0);
-                ends.push_back(duration);
-                labels.push_back(uniqueLevels.front());
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "Unable to derive valid energy sections.", requestId), "", 422, true);
             }
 
             std::string action = existingTrack == nullptr ? "created" : "updated";
@@ -723,7 +813,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                     {"label", labels[i]},
                     {"startMs", starts[i]},
                     {"endMs", ends[i]},
-                    {"confidence", 0.0}
+                    {"confidence", confidences[i]}
                 });
             }
 
@@ -736,7 +826,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             data["action"] = action;
             data["sectionCount"] = static_cast<int>(sections.size());
             data["sections"] = sections;
-            data["coverageMs"] = duration;
+            data["coverageMs"] = ends.back() - starts.front();
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
         }
 
