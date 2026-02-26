@@ -36,6 +36,7 @@
 
 #include <log4cpp/Category.hh>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 
 std::string xLightsFrame::FindSequence(const std::string& seq)
@@ -197,6 +198,55 @@ static std::vector<std::string> ReadParamArray(const std::map<std::string, std::
         values.push_back(it->second);
     }
     return values;
+}
+
+static std::string ToLowerCopy(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s;
+}
+
+static std::string ResolveAnalysisPluginName(const std::string& requested,
+                                             const std::list<std::string>& available) {
+    if (requested.empty()) {
+        return "";
+    }
+
+    for (const auto& p : available) {
+        if (p == requested) {
+            return p;
+        }
+    }
+
+    std::string requestedLower = ToLowerCopy(requested);
+    for (const auto& p : available) {
+        if (ToLowerCopy(p) == requestedLower) {
+            return p;
+        }
+    }
+
+    std::string requestedBase = requested;
+    size_t sep = requestedBase.find(": ");
+    if (sep != std::string::npos) {
+        requestedBase = requestedBase.substr(0, sep);
+    }
+    std::string requestedBaseLower = ToLowerCopy(requestedBase);
+
+    std::vector<std::string> baseMatches;
+    for (const auto& p : available) {
+        std::string base = p;
+        size_t psep = base.find(": ");
+        if (psep != std::string::npos) {
+            base = base.substr(0, psep);
+        }
+        if (ToLowerCopy(base) == requestedBaseLower) {
+            baseMatches.push_back(p);
+        }
+    }
+    if (baseMatches.size() == 1) {
+        return baseMatches.front();
+    }
+
+    return "";
 }
 
 static bool ParseXlDoAutomationBody(const std::string& body,
@@ -432,15 +482,9 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "mediaFile must match the sequence's loaded media in this phase." , requestId), "", 422, true);
             }
 
-            bool pluginExists = false;
             auto plugins = CurrentSeqXmlFile->GetMedia()->GetVamp()->GetAvailablePlugins(CurrentSeqXmlFile->GetMedia());
-            for (const auto& p : plugins) {
-                if (p == plugin) {
-                    pluginExists = true;
-                    break;
-                }
-            }
-            if (!pluginExists) {
+            std::string resolvedPlugin = ResolveAnalysisPluginName(plugin, plugins);
+            if (resolvedPlugin.empty()) {
                 return sendResponse(BuildV2ErrorResponse(404, cmd, "PLUGIN_NOT_FOUND", "Unknown analysis plugin: '" + plugin + "'.", requestId), "", 404, true);
             }
 
@@ -453,23 +497,21 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             int markCount = 0;
             int startMs = 0;
             int endMs = 0;
-            if (!dryRun) {
-                wxString created = VAMPPluginDialog::ProcessPluginNonUI(CurrentSeqXmlFile,
-                                                                        this,
-                                                                        wxString::FromUTF8(plugin),
-                                                                        wxString::FromUTF8(trackName),
-                                                                        CurrentSeqXmlFile->GetMedia(),
-                                                                        replaceIfExists,
-                                                                        dryRun,
-                                                                        &markCount,
-                                                                        &startMs,
-                                                                        &endMs);
-                if (created.IsEmpty()) {
-                    return sendResponse(BuildV2ErrorResponse(500, cmd, "INTERNAL_ERROR", "Failed to generate timing from audio plugin.", requestId), "", 500, true);
-                }
-                if (addToAllViews && !dryRun) {
-                    _sequenceElements.AddTimingToAllViews(trackName);
-                }
+            wxString created = VAMPPluginDialog::ProcessPluginNonUI(CurrentSeqXmlFile,
+                                                                    this,
+                                                                    wxString::FromUTF8(resolvedPlugin),
+                                                                    wxString::FromUTF8(trackName),
+                                                                    CurrentSeqXmlFile->GetMedia(),
+                                                                    replaceIfExists,
+                                                                    dryRun,
+                                                                    &markCount,
+                                                                    &startMs,
+                                                                    &endMs);
+            if (created.IsEmpty()) {
+                return sendResponse(BuildV2ErrorResponse(500, cmd, "INTERNAL_ERROR", "Failed to generate timing from audio plugin.", requestId), "", 500, true);
+            }
+            if (addToAllViews && !dryRun) {
+                _sequenceElements.AddTimingToAllViews(trackName);
             }
 
             nlohmann::json warnings = nlohmann::json::array();
@@ -479,7 +521,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             nlohmann::json data;
             data["trackName"] = trackName;
             data["action"] = action;
-            data["plugin"] = plugin;
+            data["plugin"] = resolvedPlugin;
             data["markCount"] = markCount;
             data["startMs"] = startMs;
             data["endMs"] = endMs;
