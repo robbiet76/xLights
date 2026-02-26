@@ -43,7 +43,7 @@ class VAMPPluginDialog: public wxDialog
                        const wxString &plugin, AudioManager* media);
     static wxString ProcessPluginNonUI(xLightsXmlFile* xml_file, xLightsFrame* xLightsParent,
                                        const wxString& plugin, const wxString& timingName,
-                                       AudioManager* media, bool replaceIfExists,
+                                       AudioManager* media, bool replaceIfExists, bool dryRun,
                                        int* markCount = nullptr, int* startMs = nullptr, int* endMs = nullptr);
 
 	protected:

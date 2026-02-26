@@ -188,7 +188,8 @@ static int ResolvePluginOutputIndex(Vamp::Plugin* p, const wxString& selectedNam
 static bool ProcessPluginToTiming(xLightsXmlFile* xml_file, xLightsFrame* xLightsParent,
                                   const wxString& timingName, AudioManager* media,
                                   Vamp::Plugin* p, int output, VAMPCONVERT convert,
-                                  bool showProgress, int* markCount, int* startMs, int* endMs) {
+                                  bool showProgress, bool writeTrack,
+                                  int* markCount, int* startMs, int* endMs) {
     std::vector<int> starts;
     std::vector<int> ends;
     std::vector<std::string> labels;
@@ -256,7 +257,9 @@ static bool ProcessPluginToTiming(xLightsXmlFile* xml_file, xLightsFrame* xLight
         progress = nullptr;
     }
 
-    xml_file->AddNewTimingSection(timingName.ToStdString(), xLightsParent, starts, ends, labels);
+    if (writeTrack) {
+        xml_file->AddNewTimingSection(timingName.ToStdString(), xLightsParent, starts, ends, labels);
+    }
 
     if (markCount != nullptr) {
         *markCount = static_cast<int>(starts.size());
@@ -397,7 +400,7 @@ wxString VAMPPluginDialog::ProcessPlugin(xLightsXmlFile* xml_file, xLightsFrame 
             }
         }
 
-        ProcessPluginToTiming(xml_file, xLightsParent, TimingName->GetValue(), media, p, output, convert, true, nullptr, nullptr, nullptr);
+        ProcessPluginToTiming(xml_file, xLightsParent, TimingName->GetValue(), media, p, output, convert, true, true, nullptr, nullptr, nullptr);
         return TimingName->GetValue();
     }
     return "";
@@ -405,7 +408,7 @@ wxString VAMPPluginDialog::ProcessPlugin(xLightsXmlFile* xml_file, xLightsFrame 
 
 wxString VAMPPluginDialog::ProcessPluginNonUI(xLightsXmlFile* xml_file, xLightsFrame* xLightsParent,
                                               const wxString& plugin, const wxString& timingName,
-                                              AudioManager* media, bool replaceIfExists,
+                                              AudioManager* media, bool replaceIfExists, bool dryRun,
                                               int* markCount, int* startMs, int* endMs) {
     if (xml_file == nullptr || xLightsParent == nullptr || media == nullptr || media->GetVamp() == nullptr) {
         return "";
@@ -421,7 +424,7 @@ wxString VAMPPluginDialog::ProcessPluginNonUI(xLightsXmlFile* xml_file, xLightsF
         targetTimingName = xLightsParent->GetUniqueTimingName(p->getName());
     }
 
-    if (xml_file->TimingAlreadyExists(targetTimingName.ToStdString(), xLightsParent)) {
+    if (!dryRun && xml_file->TimingAlreadyExists(targetTimingName.ToStdString(), xLightsParent)) {
         if (!replaceIfExists) {
             return "";
         }
@@ -434,6 +437,6 @@ wxString VAMPPluginDialog::ProcessPluginNonUI(xLightsXmlFile* xml_file, xLightsF
     }
 
     int output = ResolvePluginOutputIndex(p, plugin);
-    ProcessPluginToTiming(xml_file, xLightsParent, targetTimingName, media, p, output, convert, false, markCount, startMs, endMs);
+    ProcessPluginToTiming(xml_file, xLightsParent, targetTimingName, media, p, output, convert, false, !dryRun, markCount, startMs, endMs);
     return targetTimingName;
 }

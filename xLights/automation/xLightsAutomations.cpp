@@ -460,13 +460,14 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                                                                         wxString::FromUTF8(trackName),
                                                                         CurrentSeqXmlFile->GetMedia(),
                                                                         replaceIfExists,
+                                                                        dryRun,
                                                                         &markCount,
                                                                         &startMs,
                                                                         &endMs);
                 if (created.IsEmpty()) {
                     return sendResponse(BuildV2ErrorResponse(500, cmd, "INTERNAL_ERROR", "Failed to generate timing from audio plugin.", requestId), "", 500, true);
                 }
-                if (addToAllViews) {
+                if (addToAllViews && !dryRun) {
                     _sequenceElements.AddTimingToAllViews(trackName);
                 }
             }
@@ -474,7 +475,6 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             nlohmann::json warnings = nlohmann::json::array();
             if (dryRun) {
                 warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
-                warnings.push_back({ {"code", "ESTIMATE_ONLY"}, {"message", "markCount/startMs/endMs are not computed in dryRun mode."} });
             }
             nlohmann::json data;
             data["trackName"] = trackName;
