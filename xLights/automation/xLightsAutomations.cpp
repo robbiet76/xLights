@@ -104,6 +104,23 @@ static std::string BuildV2ErrorResponse(int responseCode,
     return response.dump();
 }
 
+static std::string BuildV2SuccessResponse(int responseCode,
+                                          const std::string& cmd,
+                                          const nlohmann::json& data,
+                                          const std::string& requestId = "",
+                                          const nlohmann::json& warnings = nlohmann::json::array()) {
+    nlohmann::json response;
+    response["res"] = responseCode;
+    response["apiVersion"] = 2;
+    response["cmd"] = cmd;
+    if (!requestId.empty()) {
+        response["requestId"] = requestId;
+    }
+    response["data"] = data;
+    response["warnings"] = warnings;
+    return response.dump();
+}
+
 static bool IsV2Command(const std::map<std::string, std::string>& params) {
     auto it = params.find("_API_VERSION");
     return it != params.end() && it->second == "2";
@@ -127,28 +144,24 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
         std::string requestId = requestIdIt == params.end() ? "" : requestIdIt->second;
 
         if (cmd == "system.getCapabilities") {
-            nlohmann::json response;
-            response["res"] = 200;
-            response["apiVersion"] = 2;
-            response["cmd"] = cmd;
-            if (!requestId.empty()) {
-                response["requestId"] = requestId;
-            }
-
             nlohmann::json data;
             data["apiVersions"] = { 2 };
             data["commands"] = {
                 "system.getCapabilities",
                 "timing.listAnalysisPlugins"
             };
+
+            bool vampPluginsAvailable = false;
+            if (CurrentSeqXmlFile != nullptr && CurrentSeqXmlFile->GetMedia() != nullptr) {
+                vampPluginsAvailable = CurrentSeqXmlFile->GetMedia()->GetVamp() != nullptr;
+            }
+
             data["features"] = {
-                {"vampPluginsAvailable", CurrentSeqXmlFile != nullptr && CurrentSeqXmlFile->HasAudioMedia()},
+                {"vampPluginsAvailable", vampPluginsAvailable},
                 {"lyricsSrtImportAvailable", true},
                 {"songStructureDetectionAvailable", false}
             };
-            response["data"] = data;
-            response["warnings"] = nlohmann::json::array();
-            return sendResponse(response.dump(), "", 200, true);
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
         } else if (cmd == "timing.listAnalysisPlugins") {
             if (CurrentSeqXmlFile == nullptr) {
                 return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
@@ -166,16 +179,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 list.push_back(plugin);
             }
 
-            nlohmann::json response;
-            response["res"] = 200;
-            response["apiVersion"] = 2;
-            response["cmd"] = cmd;
-            if (!requestId.empty()) {
-                response["requestId"] = requestId;
-            }
-            response["data"] = { {"plugins", list} };
-            response["warnings"] = nlohmann::json::array();
-            return sendResponse(response.dump(), "", 200, true);
+            return sendResponse(BuildV2SuccessResponse(200, cmd, { {"plugins", list} }, requestId), "", 200, true);
         }
 
         return sendResponse(BuildV2ErrorResponse(404, cmd, "UNKNOWN_COMMAND", "Unknown command: '" + cmd + "'.", requestId), "", 404, true);
@@ -1292,6 +1296,13 @@ bool xLightsFrame::ProcessHttpRequest(HttpConnection& connection, HttpRequest& r
                     if (options.contains("requestId") && options["requestId"].is_string()) {
                         paramMap["_REQUEST_ID"] = options["requestId"].get<std::string>();
                     }
+                    if (options.contains("dryRun")) {
+                        if (options["dryRun"].is_boolean()) {
+                            paramMap["_DRY_RUN"] = options["dryRun"].get<bool>() ? "true" : "false";
+                        } else if (options["dryRun"].is_number_integer()) {
+                            paramMap["_DRY_RUN"] = options["dryRun"].get<int>() != 0 ? "true" : "false";
+                        }
+                    }
                 }
 
                 if (val.contains("params") && val["params"].is_object()) {
@@ -1445,6 +1456,13 @@ std::string xLightsFrame::ProcessxlDoAutomation(const std::string& msg)
                 auto options = val["options"];
                 if (options.contains("requestId") && options["requestId"].is_string()) {
                     paramMap["_REQUEST_ID"] = options["requestId"].get<std::string>();
+                }
+                if (options.contains("dryRun")) {
+                    if (options["dryRun"].is_boolean()) {
+                        paramMap["_DRY_RUN"] = options["dryRun"].get<bool>() ? "true" : "false";
+                    } else if (options["dryRun"].is_number_integer()) {
+                        paramMap["_DRY_RUN"] = options["dryRun"].get<int>() != 0 ? "true" : "false";
+                    }
                 }
             }
 
