@@ -21,6 +21,7 @@
 #include <wx/choice.h>
 #include <wx/slider.h>
 #include <wx/progdlg.h>
+#include <limits>
 
 #include "vamp-hostsdk/PluginLoader.h"
 #include "UtilFunctions.h"
@@ -165,13 +166,117 @@ void processFeatures( Vamp::Plugin::FeatureList &feature, std::vector<int> &star
     }
 }
 
+static int ResolvePluginOutputIndex(Vamp::Plugin* p, const wxString& selectedName) {
+    int output = 0;
+    Plugin::OutputList outputs = p->getOutputDescriptors();
+    if (outputs.size() > 1) {
+        for (int x = 0; x < outputs.size(); x++) {
+            wxString pname = wxString::FromUTF8(p->getName().c_str());
+            wxString outputName = wxString::FromUTF8(outputs[x].name.c_str());
+            if (outputName != pname) {
+                pname = wxString::Format(wxT("%s: %s"), pname.c_str(), outputName.c_str());
+            }
+            if (selectedName == pname) {
+                output = x;
+                break;
+            }
+        }
+    }
+    return output;
+}
+
+static bool ProcessPluginToTiming(xLightsXmlFile* xml_file, xLightsFrame* xLightsParent,
+                                  const wxString& timingName, AudioManager* media,
+                                  Vamp::Plugin* p, int output, VAMPCONVERT convert,
+                                  bool showProgress, int* markCount, int* startMs, int* endMs) {
+    std::vector<int> starts;
+    std::vector<int> ends;
+    std::vector<std::string> labels;
+
+    size_t step = p->getPreferredStepSize();
+    size_t block = p->getPreferredBlockSize();
+    if (block == 0) {
+        if (step != 0) {
+            block = step;
+        } else {
+            block = 1024;
+        }
+    }
+    if (step == 0) {
+        step = block;
+    }
+    float* pdata[2];
+    media->SetStepBlock(step, block);
+
+    int channels = media->GetChannels();
+    if (channels > p->getMaxChannelCount()) {
+        channels = 1;
+    }
+    p->initialise(channels, step, block);
+    pdata[0] = media->GetFilteredLeftDataPtr(0);
+    pdata[1] = media->GetFilteredRightDataPtr(0);
+
+    wxProgressDialog* progress = nullptr;
+    if (showProgress) {
+        progress = new wxProgressDialog("Processing Audio", "");
+    }
+
+    long totalLen = media->GetTrackSize();
+    long len = media->GetTrackSize();
+    int percent = 0;
+    long start = 0;
+    while (len) {
+        pdata[0] = media->GetFilteredLeftDataPtr(start);
+        pdata[1] = media->GetFilteredRightDataPtr(start);
+
+        Vamp::RealTime timestamp = Vamp::RealTime::frame2RealTime(start, media->GetRate());
+        Vamp::Plugin::FeatureSet features = p->process(pdata, timestamp);
+        processFeatures(features[output], starts, ends, labels, convert);
+
+        if (len > (long)step) {
+            len -= step;
+        } else {
+            len = 0;
+        }
+        start += step;
+
+        if (progress != nullptr) {
+            int newp = (int)((start * 100) / totalLen);
+            if (newp != percent) {
+                percent = newp;
+                progress->Update(percent);
+            }
+        }
+    }
+    Vamp::Plugin::FeatureSet features = p->getRemainingFeatures();
+    processFeatures(features[output], starts, ends, labels, convert);
+    if (progress != nullptr) {
+        progress->Update(100);
+        delete progress;
+        progress = nullptr;
+    }
+
+    xml_file->AddNewTimingSection(timingName.ToStdString(), xLightsParent, starts, ends, labels);
+
+    if (markCount != nullptr) {
+        *markCount = static_cast<int>(starts.size());
+    }
+    if (startMs != nullptr) {
+        *startMs = starts.empty() ? 0 : *std::min_element(starts.begin(), starts.end());
+    }
+    if (endMs != nullptr) {
+        *endMs = ends.empty() ? 0 : *std::max_element(ends.begin(), ends.end());
+    }
+    return true;
+}
+
 wxString VAMPPluginDialog::ProcessPlugin(xLightsXmlFile* xml_file, xLightsFrame *xLightsParent, const wxString &name, AudioManager* media) 
 {
     Vamp::Plugin *p = media->GetVamp()->GetPlugin(std::string(name.c_str()));
     Label1->SetLabel(p->getName());
     Label2->SetLabel(p->getDescription());
 
-    int output = 0;
+    int output = ResolvePluginOutputIndex(p, name);
     Plugin::OutputList outputs = p->getOutputDescriptors();
     if (outputs.size() > 1) {
         for (int x = 0; x < outputs.size(); x++) {
@@ -268,26 +373,6 @@ wxString VAMPPluginDialog::ProcessPlugin(xLightsXmlFile* xml_file, xLightsFrame 
             }
         }
 
-        std::vector<int> starts;
-        std::vector<int> ends;
-        std::vector<std::string> labels;
-
-        size_t step = p->getPreferredStepSize();
-        size_t block = p->getPreferredBlockSize();
-        if (block == 0) {
-            if (step != 0) {
-                block = step;
-            }  else {
-                block = 1024;
-            }
-        }
-        if (step == 0) {
-            step = block;
-        }
-        float *pdata[2];
-        std::string error;
-		media->SetStepBlock(step, block);
-
         for (int x = 0; x < params.size(); x++) {
 
             if (params[x].isQuantized &&
@@ -311,50 +396,44 @@ wxString VAMPPluginDialog::ProcessPlugin(xLightsXmlFile* xml_file, xLightsFrame 
                 p->setParameter(params[x].identifier, slider->GetValue());
             }
         }
-        int channels = media->GetChannels();
-        if (channels > p->getMaxChannelCount()) {
-            channels = 1;
-        }
-        p->initialise(channels, step, block);
-        pdata[0] =media->GetFilteredLeftDataPtr(0);
-        pdata[1] = media->GetFilteredRightDataPtr(0);
-        
-        wxProgressDialog progress("Processing Audio", "");
-        long totalLen = media->GetTrackSize();
-        long len = media->GetTrackSize();
-		int percent = 0;
-        long start = 0;
-        while (len) {
-            //int request = block;
-            //if (request > len) request = len;
 
-			pdata[0] = media->GetFilteredLeftDataPtr(start);
-			pdata[1] = media->GetFilteredRightDataPtr(start);
-
-            Vamp::RealTime timestamp = Vamp::RealTime::frame2RealTime(start, media->GetRate());
-            Vamp::Plugin::FeatureSet features = p->process(pdata, timestamp);
-            processFeatures(features[output], starts, ends, labels, convert);
-
-            if (len > (long)step) {
-                len -= step;
-            } else {
-                len = 0;
-            }
-            start += step;
-            
-            int newp = (int)((start * 100) / totalLen);
-            if (newp != percent) {
-                percent = newp;
-                progress.Update(percent);
-            }
-        }
-        Vamp::Plugin::FeatureSet features = p->getRemainingFeatures();
-        processFeatures(features[output], starts, ends, labels, convert);
-        progress.Update(100);
-
-        xml_file->AddNewTimingSection(TimingName->GetValue().ToStdString(), xLightsParent, starts, ends, labels);
+        ProcessPluginToTiming(xml_file, xLightsParent, TimingName->GetValue(), media, p, output, convert, true, nullptr, nullptr, nullptr);
         return TimingName->GetValue();
     }
     return "";
 }
 
+wxString VAMPPluginDialog::ProcessPluginNonUI(xLightsXmlFile* xml_file, xLightsFrame* xLightsParent,
+                                              const wxString& plugin, const wxString& timingName,
+                                              AudioManager* media, bool replaceIfExists,
+                                              int* markCount, int* startMs, int* endMs) {
+    if (xml_file == nullptr || xLightsParent == nullptr || media == nullptr || media->GetVamp() == nullptr) {
+        return "";
+    }
+
+    Vamp::Plugin* p = media->GetVamp()->GetPlugin(std::string(plugin.c_str()));
+    if (p == nullptr) {
+        return "";
+    }
+
+    wxString targetTimingName = timingName;
+    if (targetTimingName.IsEmpty()) {
+        targetTimingName = xLightsParent->GetUniqueTimingName(p->getName());
+    }
+
+    if (xml_file->TimingAlreadyExists(targetTimingName.ToStdString(), xLightsParent)) {
+        if (!replaceIfExists) {
+            return "";
+        }
+        xLightsParent->GetSequenceElements().DeleteElement(targetTimingName.ToStdString());
+    }
+
+    VAMPCONVERT convert = VAMPCONVERT::USELABEL;
+    if (plugin == "Polyphonic Transcription") {
+        convert = VAMPCONVERT::USEFIRSTVALUEASMIDINOTE;
+    }
+
+    int output = ResolvePluginOutputIndex(p, plugin);
+    ProcessPluginToTiming(xml_file, xLightsParent, targetTimingName, media, p, output, convert, false, markCount, startMs, endMs);
+    return targetTimingName;
+}

@@ -29,6 +29,7 @@
 #include "../../xSchedule/wxHTTPServer/wxhttpserver.h"
 #include "../sequencer/MainSequencer.h"
 #include "../ModelPreview.h"
+#include "../VAMPPluginDialog.h"
 #include <wx/uri.h>
 
 #include "LuaRunner.h"
@@ -444,14 +445,22 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             }
 
             std::string action = existingTrack == nullptr ? "created" : "updated";
+            int markCount = 0;
+            int startMs = 0;
+            int endMs = 0;
             if (!dryRun) {
-                if (existingTrack != nullptr) {
-                    _sequenceElements.DeleteElement(trackName);
+                wxString created = VAMPPluginDialog::ProcessPluginNonUI(CurrentSeqXmlFile,
+                                                                        this,
+                                                                        wxString::FromUTF8(plugin),
+                                                                        wxString::FromUTF8(trackName),
+                                                                        CurrentSeqXmlFile->GetMedia(),
+                                                                        replaceIfExists,
+                                                                        &markCount,
+                                                                        &startMs,
+                                                                        &endMs);
+                if (created.IsEmpty()) {
+                    return sendResponse(BuildV2ErrorResponse(500, cmd, "INTERNAL_ERROR", "Failed to generate timing from audio plugin.", requestId), "", 500, true);
                 }
-                std::vector<int> starts;
-                std::vector<int> ends;
-                std::vector<std::string> labels;
-                CurrentSeqXmlFile->AddNewTimingSection(trackName, this, starts, ends, labels);
                 if (addToAllViews) {
                     _sequenceElements.AddTimingToAllViews(trackName);
                 }
@@ -465,9 +474,9 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             data["trackName"] = trackName;
             data["action"] = action;
             data["plugin"] = plugin;
-            data["markCount"] = 0;
-            data["startMs"] = 0;
-            data["endMs"] = 0;
+            data["markCount"] = markCount;
+            data["startMs"] = startMs;
+            data["endMs"] = endMs;
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
         } else if (cmd == "timing.getTrackSummary") {
             if (CurrentSeqXmlFile == nullptr) {

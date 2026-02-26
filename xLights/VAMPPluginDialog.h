@@ -41,6 +41,10 @@ class VAMPPluginDialog: public wxDialog
 
     wxString ProcessPlugin(xLightsXmlFile* xml_file, xLightsFrame *xLightsParent,
                        const wxString &plugin, AudioManager* media);
+    static wxString ProcessPluginNonUI(xLightsXmlFile* xml_file, xLightsFrame* xLightsParent,
+                                       const wxString& plugin, const wxString& timingName,
+                                       AudioManager* media, bool replaceIfExists,
+                                       int* markCount = nullptr, int* startMs = nullptr, int* endMs = nullptr);
 
 	protected:
 
@@ -57,4 +61,3 @@ class VAMPPluginDialog: public wxDialog
 
 		DECLARE_EVENT_TABLE()
 };
-
