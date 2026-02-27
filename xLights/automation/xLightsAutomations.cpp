@@ -29,7 +29,7 @@
 #include "../../xSchedule/wxHTTPServer/wxhttpserver.h"
 #include "../sequencer/MainSequencer.h"
 #include "../ModelPreview.h"
-#include "../VAMPPluginDialog.h"
+#include "../utils/Curl.h"
 #include <wx/uri.h>
 
 #include "LuaRunner.h"
@@ -200,53 +200,76 @@ static std::vector<std::string> ReadParamArray(const std::map<std::string, std::
     return values;
 }
 
-static std::string ToLowerCopy(std::string s) {
-    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return s;
+static std::string ReadParamStringOrEnv(const std::map<std::string, std::string>& params,
+                                        const std::string& key,
+                                        const std::string& envKey) {
+    std::string value = ReadParamString(params, key);
+    if (!value.empty()) {
+        return value;
+    }
+    wxString envValue;
+    if (wxGetEnv(envKey, &envValue)) {
+        return envValue.ToStdString();
+    }
+    return "";
 }
 
-static std::string ResolveAnalysisPluginName(const std::string& requested,
-                                             const std::list<std::string>& available) {
-    if (requested.empty()) {
-        return "";
+static bool ParseRemoteSections(const nlohmann::json& payload,
+                                std::vector<int>& starts,
+                                std::vector<int>& ends,
+                                std::vector<std::string>& labels) {
+    starts.clear();
+    ends.clear();
+    labels.clear();
+
+    const nlohmann::json* data = &payload;
+    if (payload.contains("data") && payload["data"].is_object()) {
+        data = &payload["data"];
     }
 
-    for (const auto& p : available) {
-        if (p == requested) {
-            return p;
+    if (data->contains("sections") && (*data)["sections"].is_array()) {
+        for (const auto& section : (*data)["sections"]) {
+            if (!section.is_object()) {
+                continue;
+            }
+            if (!section.contains("startMs") || !section.contains("endMs")) {
+                continue;
+            }
+            int startMs = section["startMs"].get<int>();
+            int endMs = section["endMs"].get<int>();
+            if (endMs <= startMs) {
+                continue;
+            }
+            starts.push_back(startMs);
+            ends.push_back(endMs);
+            if (section.contains("label") && section["label"].is_string()) {
+                labels.push_back(section["label"].get<std::string>());
+            } else {
+                labels.push_back("");
+            }
         }
+        return !starts.empty();
     }
 
-    std::string requestedLower = ToLowerCopy(requested);
-    for (const auto& p : available) {
-        if (ToLowerCopy(p) == requestedLower) {
-            return p;
+    if (data->contains("starts") && (*data)["starts"].is_array() &&
+        data->contains("ends") && (*data)["ends"].is_array()) {
+        const auto& startsIn = (*data)["starts"];
+        const auto& endsIn = (*data)["ends"];
+        size_t n = std::min(startsIn.size(), endsIn.size());
+        for (size_t i = 0; i < n; i++) {
+            int startMs = startsIn[i].get<int>();
+            int endMs = endsIn[i].get<int>();
+            if (endMs <= startMs) {
+                continue;
+            }
+            starts.push_back(startMs);
+            ends.push_back(endMs);
+            labels.push_back("");
         }
+        return !starts.empty();
     }
 
-    std::string requestedBase = requested;
-    size_t sep = requestedBase.find(": ");
-    if (sep != std::string::npos) {
-        requestedBase = requestedBase.substr(0, sep);
-    }
-    std::string requestedBaseLower = ToLowerCopy(requestedBase);
-
-    std::vector<std::string> baseMatches;
-    for (const auto& p : available) {
-        std::string base = p;
-        size_t psep = base.find(": ");
-        if (psep != std::string::npos) {
-            base = base.substr(0, psep);
-        }
-        if (ToLowerCopy(base) == requestedBaseLower) {
-            baseMatches.push_back(p);
-        }
-    }
-    if (baseMatches.size() == 1) {
-        return baseMatches.front();
-    }
-
-    return "";
+    return false;
 }
 
 static bool ParseXlDoAutomationBody(const std::string& body,
@@ -425,38 +448,32 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             data["apiVersions"] = { 2 };
             data["commands"] = GetV2Commands();
 
-            bool vampPluginsAvailable = false;
-            if (CurrentSeqXmlFile != nullptr && CurrentSeqXmlFile->GetMedia() != nullptr) {
-                vampPluginsAvailable = CurrentSeqXmlFile->GetMedia()->GetVamp() != nullptr;
-            }
-
             data["features"] = {
-                {"vampPluginsAvailable", vampPluginsAvailable},
+                {"vampPluginsAvailable", false},
+                {"remoteAudioAnalysisAvailable", true},
                 {"lyricsSrtImportAvailable", true},
                 {"songStructureDetectionAvailable", false}
             };
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
         } else if (cmd == "timing.listAnalysisPlugins") {
-            if (CurrentSeqXmlFile == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
-            }
-            if (!CurrentSeqXmlFile->HasAudioMedia() || CurrentSeqXmlFile->GetMedia() == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "MEDIA_NOT_AVAILABLE", "Sequence media is not available.", requestId), "", 404, true);
-            }
-            if (CurrentSeqXmlFile->GetMedia()->GetVamp() == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(500, cmd, "INTERNAL_ERROR", "Audio analysis service is unavailable.", requestId), "", 500, true);
-            }
-
-            auto plugins = CurrentSeqXmlFile->GetMedia()->GetVamp()->GetAvailablePlugins(CurrentSeqXmlFile->GetMedia());
-            nlohmann::json list = nlohmann::json::array();
-            for (const auto& p : plugins) {
-                nlohmann::json plugin;
-                plugin["id"] = p;
-                plugin["name"] = p;
-                list.push_back(plugin);
+            std::string analysisUrl = ReadParamStringOrEnv(params, "analysisUrl", "XLIGHTS_ANALYSIS_URL");
+            nlohmann::json warnings = nlohmann::json::array();
+            if (analysisUrl.empty()) {
+                warnings.push_back({
+                    {"code", "REMOTE_URL_NOT_CONFIGURED"},
+                    {"message", "Set analysisUrl or XLIGHTS_ANALYSIS_URL to enable remote analysis."}
+                });
             }
 
-            return sendResponse(BuildV2SuccessResponse(200, cmd, { {"plugins", list} }, requestId), "", 200, true);
+            nlohmann::json data;
+            data["providers"] = nlohmann::json::array({
+                {{"id", "remote"}, {"name", "Remote Analysis Service"}, {"available", !analysisUrl.empty()}}
+            });
+            data["profiles"] = nlohmann::json::array({ "beats_v1", "bars_v1", "energy_v1", "structure_v1" });
+            if (!analysisUrl.empty()) {
+                data["analysisUrl"] = analysisUrl;
+            }
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
         } else if (cmd == "timing.createFromAudio") {
             if (CurrentSeqXmlFile == nullptr) {
                 return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
@@ -464,28 +481,20 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             if (!CurrentSeqXmlFile->HasAudioMedia() || CurrentSeqXmlFile->GetMedia() == nullptr) {
                 return sendResponse(BuildV2ErrorResponse(404, cmd, "MEDIA_NOT_AVAILABLE", "Sequence media is not available.", requestId), "", 404, true);
             }
-            if (CurrentSeqXmlFile->GetMedia()->GetVamp() == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(500, cmd, "INTERNAL_ERROR", "Audio analysis service is unavailable.", requestId), "", 500, true);
-            }
-
-            std::string plugin = ReadParamString(params, "plugin");
             std::string trackName = ReadParamString(params, "trackName");
             std::string mediaFile = ReadParamString(params, "mediaFile");
+            std::string analysisProvider = ReadParamString(params, "analysisProvider", "local");
+            std::string analysisProfile = ReadParamString(params, "analysisProfile", "beats_v1");
+            std::string analysisUrl = ReadParamStringOrEnv(params, "analysisUrl", "XLIGHTS_ANALYSIS_URL");
             bool replaceIfExists = ReadBool(ReadParamString(params, "replaceIfExists", "false"));
             bool addToAllViews = ReadBool(ReadParamString(params, "addToAllViews", "false"));
             bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
 
-            if (plugin.empty() || trackName.empty()) {
-                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "plugin and trackName are required.", requestId), "", 422, true);
+            if (trackName.empty()) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "trackName is required.", requestId), "", 422, true);
             }
             if (!mediaFile.empty() && mediaFile != "null" && mediaFile != CurrentSeqXmlFile->GetMediaFile()) {
                 return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "mediaFile must match the sequence's loaded media in this phase." , requestId), "", 422, true);
-            }
-
-            auto plugins = CurrentSeqXmlFile->GetMedia()->GetVamp()->GetAvailablePlugins(CurrentSeqXmlFile->GetMedia());
-            std::string resolvedPlugin = ResolveAnalysisPluginName(plugin, plugins);
-            if (resolvedPlugin.empty()) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "PLUGIN_NOT_FOUND", "Unknown analysis plugin: '" + plugin + "'.", requestId), "", 404, true);
             }
 
             TimingElement* existingTrack = _sequenceElements.GetTimingElement(trackName);
@@ -493,38 +502,98 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 return sendResponse(BuildV2ErrorResponse(409, cmd, "TRACK_ALREADY_EXISTS", "Timing track already exists: '" + trackName + "'.", requestId), "", 409, true);
             }
 
-            std::string action = existingTrack == nullptr ? "created" : "updated";
-            int markCount = 0;
-            int startMs = 0;
-            int endMs = 0;
-            wxString created = VAMPPluginDialog::ProcessPluginNonUI(CurrentSeqXmlFile,
-                                                                    this,
-                                                                    wxString::FromUTF8(resolvedPlugin),
-                                                                    wxString::FromUTF8(trackName),
-                                                                    CurrentSeqXmlFile->GetMedia(),
-                                                                    replaceIfExists,
-                                                                    dryRun,
-                                                                    &markCount,
-                                                                    &startMs,
-                                                                    &endMs);
-            if (created.IsEmpty()) {
-                return sendResponse(BuildV2ErrorResponse(500, cmd, "INTERNAL_ERROR", "Failed to generate timing from audio plugin.", requestId), "", 500, true);
+            if (analysisProvider != "remote") {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "UNSUPPORTED_PROVIDER", "analysisProvider must be 'remote'.", requestId), "", 422, true);
+            }
+            if (analysisUrl.empty()) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "analysisUrl (or XLIGHTS_ANALYSIS_URL) is required for analysisProvider=remote.", requestId), "", 422, true);
+            }
+
+            nlohmann::json remoteRequest;
+            remoteRequest["apiVersion"] = 2;
+            remoteRequest["cmd"] = "timing.createFromAudio";
+            remoteRequest["params"] = {
+                {"trackName", trackName},
+                {"mediaFile", CurrentSeqXmlFile->GetMediaFile()},
+                {"showFolder", CurrentDir},
+                {"analysisProfile", analysisProfile}
+            };
+            remoteRequest["options"] = {
+                {"dryRun", dryRun},
+                {"requestId", requestId},
+                {"replaceIfExists", replaceIfExists},
+                {"addToAllViews", addToAllViews}
+            };
+
+            int remoteStatus = 0;
+            std::string remoteText = Curl::HTTPSPost(analysisUrl,
+                                                     wxString::FromUTF8(remoteRequest.dump()),
+                                                     "",
+                                                     "",
+                                                     "JSON",
+                                                     300,
+                                                     {},
+                                                     &remoteStatus);
+            if (remoteText.empty()) {
+                return sendResponse(BuildV2ErrorResponse(502, cmd, "REMOTE_ANALYSIS_FAILED", "Remote analysis returned an empty response.", requestId), "", 502, true);
+            }
+
+            nlohmann::json remoteJson;
+            try {
+                remoteJson = nlohmann::json::parse(remoteText);
+            } catch (const std::exception&) {
+                return sendResponse(BuildV2ErrorResponse(502, cmd, "REMOTE_ANALYSIS_FAILED", "Remote analysis returned invalid JSON.", requestId), "", 502, true);
+            }
+
+            if (remoteJson.contains("error")) {
+                std::string message = "Remote analysis error.";
+                if (remoteJson["error"].is_object() && remoteJson["error"].contains("message")) {
+                    message = remoteJson["error"]["message"].get<std::string>();
+                }
+                int status = 502;
+                if (remoteJson.contains("res") && remoteJson["res"].is_number_integer()) {
+                    status = remoteJson["res"].get<int>();
+                } else if (remoteStatus >= 400) {
+                    status = remoteStatus;
+                }
+                return sendResponse(BuildV2ErrorResponse(status, cmd, "REMOTE_ANALYSIS_FAILED", message, requestId), "", status, true);
+            }
+
+            std::vector<int> starts;
+            std::vector<int> ends;
+            std::vector<std::string> labels;
+            if (!ParseRemoteSections(remoteJson, starts, ends, labels)) {
+                return sendResponse(BuildV2ErrorResponse(502, cmd, "REMOTE_ANALYSIS_FAILED", "Remote analysis did not return timing sections.", requestId), "", 502, true);
+            }
+
+            if (!dryRun) {
+                if (existingTrack != nullptr) {
+                    _sequenceElements.DeleteElement(trackName);
+                }
+                CurrentSeqXmlFile->AddNewTimingSection(trackName, this, starts, ends, labels);
             }
             if (addToAllViews && !dryRun) {
                 _sequenceElements.AddTimingToAllViews(trackName);
             }
 
+            std::string action = existingTrack == nullptr ? "created" : "updated";
             nlohmann::json warnings = nlohmann::json::array();
+            warnings.push_back({
+                {"code", "REMOTE_PROVIDER"},
+                {"message", "Timing marks were generated by remote analysis service."}
+            });
             if (dryRun) {
                 warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
             }
+
             nlohmann::json data;
             data["trackName"] = trackName;
             data["action"] = action;
-            data["plugin"] = resolvedPlugin;
-            data["markCount"] = markCount;
-            data["startMs"] = startMs;
-            data["endMs"] = endMs;
+            data["provider"] = "remote";
+            data["analysisProfile"] = analysisProfile;
+            data["markCount"] = static_cast<int>(starts.size());
+            data["startMs"] = starts.front();
+            data["endMs"] = ends.back();
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
         } else if (cmd == "timing.getTrackSummary") {
             if (CurrentSeqXmlFile == nullptr) {
