@@ -145,6 +145,7 @@ static const std::vector<std::string>& GetV2Commands() {
         "layout.getModels",
         "layout.getModel",
         "layout.getViews",
+        "layout.getDisplayElements",
         "media.get",
         "media.set",
         "media.getMetadata",
@@ -537,6 +538,31 @@ static nlohmann::json BuildDisplayElementOrderData(SequenceElements& sequenceEle
             {"type", GetElementTypeName(element)},
             {"orderIndex", static_cast<int>(i)}
         });
+    }
+    return elements;
+}
+
+static nlohmann::json BuildLayoutDisplayElementsData(SequenceElements& sequenceElements) {
+    nlohmann::json elements = nlohmann::json::array();
+    size_t count = sequenceElements.GetElementCount(MASTER_VIEW);
+    for (size_t i = 0; i < count; i++) {
+        Element* element = sequenceElements.GetElement(i, MASTER_VIEW);
+        if (element == nullptr) {
+            continue;
+        }
+
+        nlohmann::json entry;
+        std::string fullName = element->GetFullName();
+        entry["id"] = fullName;
+        entry["name"] = element->GetName();
+        entry["type"] = GetElementTypeName(element);
+        entry["orderIndex"] = static_cast<int>(i);
+
+        size_t slash = fullName.find('/');
+        if (slash != std::string::npos && slash > 0) {
+            entry["parentId"] = fullName.substr(0, slash);
+        }
+        elements.push_back(entry);
     }
     return elements;
 }
@@ -1224,6 +1250,13 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             }
             nlohmann::json data;
             data["views"] = views;
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+        } else if (cmd == "layout.getDisplayElements") {
+            if (auto response = requireOpenSequence()) {
+                return *response;
+            }
+            nlohmann::json data;
+            data["elements"] = BuildLayoutDisplayElementsData(_sequenceElements);
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
         } else if (cmd == "media.get") {
             if (auto response = requireOpenSequence()) {
