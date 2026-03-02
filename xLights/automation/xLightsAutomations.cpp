@@ -60,6 +60,7 @@ static bool HttpRequestFunction(HttpConnection &connection, HttpRequest &request
 static wxString MIME_JSON = "application/json";
 static wxString MIME_TEXT = "text/plain";
 
+// Automation runtime guards used during scripted save/open flows.
 namespace {
 void AutomationAssertHandler(const wxString& file,
                              int line,
@@ -95,6 +96,35 @@ private:
 };
 } // namespace
 
+// Legacy dispatch adapter helpers kept in this file for readability.
+namespace {
+std::vector<std::string> CollectLegacyViewNames(xLightsFrame* frame);
+bool RunLegacyScript(xLightsFrame* frame, const std::string& filename);
+bool AddLegacyEffect(SequenceElements& sequenceElements,
+                     const std::string& target,
+                     const std::string& effect,
+                     const std::string& settings,
+                     const std::string& palette,
+                     int layer,
+                     int startTime,
+                     int endTime);
+bool GetLegacyEffectDetails(SequenceElements& sequenceElements,
+                            const std::string& model,
+                            int layer,
+                            int id,
+                            nlohmann::json& data);
+bool SetLegacyEffectDetails(SequenceElements& sequenceElements,
+                            MainSequencer* mainSequencer,
+                            const std::string& model,
+                            int layer,
+                            int id,
+                            const std::map<std::string, std::string>& params);
+bool ImportLegacyXLightsSequence(xLightsFrame* frame,
+                                 const std::string& filename,
+                                 const std::string& mapname);
+} // namespace
+
+// Request query-string parsing for non-xlDo endpoints.
 static std::map<std::string, std::string> ParseParams(const wxString &params) {
     std::map<std::string, std::string> p;
     std::string np = params;
@@ -130,6 +160,7 @@ inline bool ReadBool(const std::string &v) {
     return v == "true" || v == "1";
 }
 
+// V2 response envelope builders.
 static std::string BuildV2ErrorResponse(int responseCode,
                                         const std::string& cmd,
                                         const std::string& code,
@@ -168,6 +199,7 @@ static bool IsV2Command(const std::map<std::string, std::string>& params) {
     return it != params.end() && it->second == "2";
 }
 
+// Canonical list of v2 commands advertised by system.getCapabilities.
 static const std::vector<std::string>& GetV2Commands() {
     // PR-2 scaffolding: extend this list as new v2 automation commands are implemented.
     static const std::vector<std::string> commands = {
@@ -211,30 +243,6 @@ static const std::vector<std::string>& GetV2Commands() {
     return commands;
 }
 
-static bool ReadScalarParam(const nlohmann::json& value, std::string& out) {
-    if (value.is_string()) {
-        out = value.get<std::string>();
-        return true;
-    }
-    if (value.is_boolean()) {
-        out = value.get<bool>() ? "true" : "false";
-        return true;
-    }
-    if (value.is_number_unsigned()) {
-        out = std::to_string(value.get<uint64_t>());
-        return true;
-    }
-    if (value.is_number_integer()) {
-        out = std::to_string(value.get<int64_t>());
-        return true;
-    }
-    if (value.is_number_float()) {
-        out = std::to_string(value.get<double>());
-        return true;
-    }
-    return false;
-}
-
 static std::string ReadParamString(const std::map<std::string, std::string>& params,
                                    const std::string& key,
                                    const std::string& defaultValue = "") {
@@ -243,322 +251,6 @@ static std::string ReadParamString(const std::map<std::string, std::string>& par
         return defaultValue;
     }
     return it->second;
-}
-
-static bool HasArrayParam(const nlohmann::json& params, const std::string& key) {
-    return params.contains(key) && params[key].is_array();
-}
-
-static std::string GetValidationErrorMessage(const std::string& message) {
-    return message.empty() ? "Validation failed." : message;
-}
-
-static bool ValidateTimingMarksParamShape(const nlohmann::json& params, std::string& errorMessage) {
-    if (!HasArrayParam(params, "marks") || params["marks"].empty()) {
-        errorMessage = "timing.insertMarks requires non-empty params.marks.";
-        return false;
-    }
-
-    int previousStart = -1;
-    int previousEnd = -1;
-    bool hasPreviousEnd = false;
-    for (size_t i = 0; i < params["marks"].size(); i++) {
-        const auto& mark = params["marks"][i];
-        if (!mark.is_object()) {
-            errorMessage = "marks entries must be objects.";
-            return false;
-        }
-        if (!mark.contains("startMs") || !mark["startMs"].is_number_integer()) {
-            errorMessage = "marks[].startMs must be an integer.";
-            return false;
-        }
-        int startMs = mark["startMs"].get<int>();
-        if (startMs < 0) {
-            errorMessage = "marks[].startMs must be >= 0.";
-            return false;
-        }
-
-        bool hasEnd = mark.contains("endMs") && !mark["endMs"].is_null();
-        int endMs = -1;
-        if (hasEnd) {
-            if (!mark["endMs"].is_number_integer()) {
-                errorMessage = "marks[].endMs must be an integer when provided.";
-                return false;
-            }
-            endMs = mark["endMs"].get<int>();
-            if (endMs <= startMs) {
-                errorMessage = "marks[].endMs must be > startMs.";
-                return false;
-            }
-        }
-        if (mark.contains("label") && !(mark["label"].is_string() || mark["label"].is_null())) {
-            errorMessage = "marks[].label must be a string when provided.";
-            return false;
-        }
-
-        if (previousStart != -1 && startMs < previousStart) {
-            errorMessage = "marks must be ordered by startMs.";
-            return false;
-        }
-        if (hasPreviousEnd && startMs < previousEnd) {
-            errorMessage = "marks must not overlap.";
-            return false;
-        }
-        previousStart = startMs;
-        if (hasEnd) {
-            previousEnd = endMs;
-            hasPreviousEnd = true;
-        } else {
-            hasPreviousEnd = false;
-        }
-    }
-
-    return true;
-}
-
-static bool ValidateDisplayOrderParams(const nlohmann::json& params, std::string& errorMessage) {
-    if (!HasArrayParam(params, "orderedIds") || params["orderedIds"].empty()) {
-        errorMessage = "sequencer.setDisplayElementOrder requires non-empty params.orderedIds.";
-        return false;
-    }
-
-    std::set<std::string> seen;
-    for (const auto& id : params["orderedIds"]) {
-        if (!id.is_string() || id.get<std::string>().empty()) {
-            errorMessage = "orderedIds must contain non-empty strings.";
-            return false;
-        }
-        if (!seen.insert(id.get<std::string>()).second) {
-            errorMessage = "orderedIds must not contain duplicates.";
-            return false;
-        }
-    }
-    return true;
-}
-
-static bool IsValidEffectSelectorValue(const nlohmann::json& value) {
-    if (value.is_string()) {
-        std::string s = value.get<std::string>();
-        return !s.empty() && s != "null";
-    }
-    if (value.is_number_integer()) {
-        return value.get<int>() > 0;
-    }
-    return false;
-}
-
-static bool ValidateEffectSelectorParams(const nlohmann::json& params, std::string& errorMessage) {
-    bool hasSelector = false;
-
-    if (params.contains("modelName")) {
-        if (!params["modelName"].is_string() || params["modelName"].get<std::string>().empty()) {
-            errorMessage = "modelName must be a non-empty string when provided.";
-            return false;
-        }
-        hasSelector = true;
-    }
-    if (params.contains("layerIndex")) {
-        if (!params["layerIndex"].is_number_integer() || params["layerIndex"].get<int>() < 0) {
-            errorMessage = "layerIndex must be >= 0 when provided.";
-            return false;
-        }
-    }
-    if (params.contains("effectId")) {
-        if (!IsValidEffectSelectorValue(params["effectId"])) {
-            errorMessage = "effectId must be a non-empty string or positive integer.";
-            return false;
-        }
-        hasSelector = true;
-    }
-    if (params.contains("effectIds")) {
-        if (!params["effectIds"].is_array() || params["effectIds"].empty()) {
-            errorMessage = "effectIds must be a non-empty array when provided.";
-            return false;
-        }
-        for (const auto& id : params["effectIds"]) {
-            if (!IsValidEffectSelectorValue(id)) {
-                errorMessage = "effectIds entries must be non-empty strings or positive integers.";
-                return false;
-            }
-        }
-        hasSelector = true;
-    }
-
-    if (!hasSelector) {
-        errorMessage = "An effect selector is required (modelName, effectId, or effectIds).";
-        return false;
-    }
-    return true;
-}
-
-static bool ValidateBatchCommandShape(const nlohmann::json& command,
-                                      const std::set<std::string>& commandSet,
-                                      std::string& errorCode,
-                                      std::string& errorMessage) {
-    if (!command.is_object()) {
-        errorCode = "BAD_REQUEST";
-        errorMessage = "commands[] entries must be objects.";
-        return false;
-    }
-    if (!command.contains("cmd") || !command["cmd"].is_string() || command["cmd"].get<std::string>().empty()) {
-        errorCode = "BAD_REQUEST";
-        errorMessage = "commands[].cmd must be a non-empty string.";
-        return false;
-    }
-
-    std::string childCmd = command["cmd"].get<std::string>();
-    if (commandSet.find(childCmd) == commandSet.end()) {
-        errorCode = "UNKNOWN_COMMAND";
-        errorMessage = "Unsupported command: '" + childCmd + "'.";
-        return false;
-    }
-
-    const nlohmann::json params = command.contains("params") ? command["params"] : nlohmann::json::object();
-    if (!params.is_object()) {
-        errorCode = "BAD_REQUEST";
-        errorMessage = "commands[].params must be an object.";
-        return false;
-    }
-
-    if (command.contains("options")) {
-        const auto& options = command["options"];
-        if (!options.is_object()) {
-            errorCode = "BAD_REQUEST";
-            errorMessage = "commands[].options must be an object.";
-            return false;
-        }
-        if (options.contains("requestId") && !options["requestId"].is_string()) {
-            errorCode = "BAD_REQUEST";
-            errorMessage = "commands[].options.requestId must be a string.";
-            return false;
-        }
-        if (options.contains("dryRun") && !options["dryRun"].is_boolean() && !options["dryRun"].is_number_integer()) {
-            errorCode = "BAD_REQUEST";
-            errorMessage = "commands[].options.dryRun must be a boolean or integer.";
-            return false;
-        }
-    }
-
-    if (childCmd == "system.validateCommands") {
-        errorCode = "VALIDATION_ERROR";
-        errorMessage = "Nested system.validateCommands is not allowed.";
-        return false;
-    }
-
-    if (childCmd == "sequence.open") {
-        if (!params.contains("file") || !params["file"].is_string() || params["file"].get<std::string>().empty()) {
-            errorCode = "VALIDATION_ERROR";
-            errorMessage = "sequence.open requires params.file.";
-            return false;
-        }
-    } else if (childCmd == "sequence.create") {
-        if (!params.contains("frameMs") || !params["frameMs"].is_number_integer() || params["frameMs"].get<int>() <= 0) {
-            errorCode = "VALIDATION_ERROR";
-            errorMessage = "sequence.create requires params.frameMs > 0.";
-            return false;
-        }
-        bool hasMediaFile = params.contains("mediaFile") && !params["mediaFile"].is_null() &&
-                            params["mediaFile"].is_string() && !params["mediaFile"].get<std::string>().empty();
-        if (!hasMediaFile) {
-            if (!params.contains("durationMs") || !params["durationMs"].is_number_integer() || params["durationMs"].get<int>() <= 0) {
-                errorCode = "VALIDATION_ERROR";
-                errorMessage = "sequence.create requires params.durationMs > 0 when mediaFile is absent.";
-                return false;
-            }
-        }
-    } else if (childCmd == "layout.getModel") {
-        if (!params.contains("name") || !params["name"].is_string() || params["name"].get<std::string>().empty()) {
-            errorCode = "VALIDATION_ERROR";
-            errorMessage = "layout.getModel requires params.name.";
-            return false;
-        }
-    } else if (childCmd == "media.set") {
-        if (!params.contains("mediaFile") || !params["mediaFile"].is_string() || params["mediaFile"].get<std::string>().empty()) {
-            errorCode = "VALIDATION_ERROR";
-            errorMessage = "media.set requires params.mediaFile.";
-            return false;
-        }
-    } else if (childCmd == "timing.createTrack") {
-        if (!params.contains("trackName") || !params["trackName"].is_string() || params["trackName"].get<std::string>().empty()) {
-            errorCode = "VALIDATION_ERROR";
-            errorMessage = "timing.createTrack requires params.trackName.";
-            return false;
-        }
-    } else if (childCmd == "timing.renameTrack") {
-        if (!params.contains("trackName") || !params["trackName"].is_string() ||
-            !params.contains("newTrackName") || !params["newTrackName"].is_string() ||
-            params["trackName"].get<std::string>().empty() || params["newTrackName"].get<std::string>().empty()) {
-            errorCode = "VALIDATION_ERROR";
-            errorMessage = "timing.renameTrack requires params.trackName and params.newTrackName.";
-            return false;
-        }
-    } else if (childCmd == "timing.deleteTrack" || childCmd == "timing.getMarks" ||
-               childCmd == "timing.insertMarks" || childCmd == "timing.replaceMarks" ||
-               childCmd == "timing.deleteMarks" || childCmd == "timing.getTrackSummary") {
-        if (!params.contains("trackName") || !params["trackName"].is_string() || params["trackName"].get<std::string>().empty()) {
-            errorCode = "VALIDATION_ERROR";
-            errorMessage = childCmd + " requires params.trackName.";
-            return false;
-        }
-        if (childCmd == "timing.insertMarks" || childCmd == "timing.replaceMarks") {
-            if (!ValidateTimingMarksParamShape(params, errorMessage)) {
-                errorCode = "VALIDATION_ERROR";
-                return false;
-            }
-        }
-    } else if (childCmd == "sequencer.setDisplayElementOrder") {
-        if (!ValidateDisplayOrderParams(params, errorMessage)) {
-            errorCode = "VALIDATION_ERROR";
-            return false;
-        }
-    } else if (childCmd == "effects.create") {
-        if (!params.contains("modelName") || !params["modelName"].is_string() || params["modelName"].get<std::string>().empty() ||
-            !params.contains("layerIndex") || !params["layerIndex"].is_number_integer() || params["layerIndex"].get<int>() < 0 ||
-            !params.contains("effectName") || !params["effectName"].is_string() || params["effectName"].get<std::string>().empty() ||
-            !params.contains("startMs") || !params["startMs"].is_number_integer() ||
-            !params.contains("endMs") || !params["endMs"].is_number_integer() ||
-            params["endMs"].get<int>() <= params["startMs"].get<int>()) {
-            errorCode = "VALIDATION_ERROR";
-            errorMessage = "effects.create requires modelName, layerIndex>=0, effectName, and endMs>startMs.";
-            return false;
-        }
-    } else if (childCmd == "effects.alignToTiming") {
-        if (!ValidateEffectSelectorParams(params, errorMessage)) {
-            errorCode = "VALIDATION_ERROR";
-            return false;
-        }
-        if (!params.contains("timingTrackName") || !params["timingTrackName"].is_string() || params["timingTrackName"].get<std::string>().empty()) {
-            errorCode = "VALIDATION_ERROR";
-            errorMessage = "effects.alignToTiming requires timingTrackName.";
-            return false;
-        }
-    } else if (childCmd == "effects.shift") {
-        if (!ValidateEffectSelectorParams(params, errorMessage)) {
-            errorCode = "VALIDATION_ERROR";
-            return false;
-        }
-        if (!params.contains("deltaMs") || !params["deltaMs"].is_number_integer() || params["deltaMs"].get<int>() == 0) {
-            errorCode = "VALIDATION_ERROR";
-            errorMessage = "effects.shift requires deltaMs != 0.";
-            return false;
-        }
-    } else if (childCmd == "effects.update" || childCmd == "effects.delete") {
-        if (!ValidateEffectSelectorParams(params, errorMessage)) {
-            errorCode = "VALIDATION_ERROR";
-            return false;
-        }
-    } else if (childCmd == "effects.clone") {
-        if (!params.contains("sourceModelName") || !params["sourceModelName"].is_string() || params["sourceModelName"].get<std::string>().empty() ||
-            !params.contains("sourceLayerIndex") || !params["sourceLayerIndex"].is_number_integer() || params["sourceLayerIndex"].get<int>() < 0 ||
-            !HasArrayParam(params, "targetModels") || params["targetModels"].empty() ||
-            !params.contains("targetLayerIndex") || !params["targetLayerIndex"].is_number_integer() || params["targetLayerIndex"].get<int>() < 0) {
-            errorCode = "VALIDATION_ERROR";
-            errorMessage = "effects.clone requires sourceModelName/sourceLayerIndex/targetModels/targetLayerIndex.";
-            return false;
-        }
-    }
-
-    return true;
 }
 
 static int ReadParamInt(const std::map<std::string, std::string>& params,
@@ -873,182 +565,22 @@ static bool ParseRemoteSections(const nlohmann::json& payload,
     return false;
 }
 
-static bool ParseXlDoAutomationBody(const std::string& body,
-                                    std::vector<std::string>& paths,
-                                    std::map<std::string, std::string>& paramMap,
-                                    std::string& errorBody,
-                                    int& errorStatus) {
-    nlohmann::json val;
-    try {
-        val = nlohmann::json::parse(body);
-    } catch (const std::exception&) {
-        errorStatus = 400;
-        errorBody = BuildV2ErrorResponse(400, "", "BAD_REQUEST", "Malformed JSON request body.");
-        return false;
-    }
+// Legacy API groups: baseline sequence lifecycle, export/package, read/query, render/transfer,
+// app/system control, playback/output control, layout mutation, and sequencer mutation.
+#include "api/LegacySequenceCoreApi.inl"
+#include "api/LegacyExportPackagingApi.inl"
+#include "api/LegacyReadQueryApi.inl"
+#include "api/LegacyRenderTransferApi.inl"
+#include "api/LegacySystemControlApi.inl"
+#include "api/LegacyPlaybackApi.inl"
+#include "api/LegacyLayoutMutationApi.inl"
+#include "api/LegacySequencerMutationApi.inl"
 
-    if (!val.is_object()) {
-        errorStatus = 400;
-        errorBody = BuildV2ErrorResponse(400, "", "BAD_REQUEST", "Request body must be a JSON object.");
-        return false;
-    }
+// V2 request parsing and validation infrastructure.
+#include "api/V2ValidationApi.inl"
+#include "api/V2RequestParsingApi.inl"
 
-    try {
-        if (val.contains("apiVersion")) {
-            if (!val["apiVersion"].is_number_integer()) {
-                errorStatus = 400;
-                errorBody = BuildV2ErrorResponse(400, "", "BAD_REQUEST", "apiVersion must be an integer.");
-                return false;
-            }
-            int apiVersion = val["apiVersion"].get<int>();
-            if (apiVersion != 2) {
-                errorStatus = 400;
-                errorBody = BuildV2ErrorResponse(400, "", "UNSUPPORTED_API_VERSION", "Only apiVersion=2 is supported.");
-                return false;
-            }
-
-            if (!val.contains("cmd") || !val["cmd"].is_string() || val["cmd"].get<std::string>().empty()) {
-                errorStatus = 400;
-                errorBody = BuildV2ErrorResponse(400, "", "BAD_REQUEST", "Missing cmd.");
-                return false;
-            }
-
-            paths.push_back(val["cmd"].get<std::string>());
-            paramMap["_API_VERSION"] = "2";
-
-            if (val.contains("options")) {
-                if (!val["options"].is_object()) {
-                    errorStatus = 400;
-                    errorBody = BuildV2ErrorResponse(400, paths[0], "BAD_REQUEST", "options must be an object.");
-                    return false;
-                }
-
-                auto options = val["options"];
-                if (options.contains("requestId")) {
-                    if (!options["requestId"].is_string()) {
-                        errorStatus = 400;
-                        errorBody = BuildV2ErrorResponse(400, paths[0], "BAD_REQUEST", "options.requestId must be a string.");
-                        return false;
-                    }
-                    paramMap["_REQUEST_ID"] = options["requestId"].get<std::string>();
-                }
-                if (options.contains("dryRun")) {
-                    if (options["dryRun"].is_boolean()) {
-                        paramMap["_DRY_RUN"] = options["dryRun"].get<bool>() ? "true" : "false";
-                    } else if (options["dryRun"].is_number_integer()) {
-                        paramMap["_DRY_RUN"] = options["dryRun"].get<int>() != 0 ? "true" : "false";
-                    } else {
-                        errorStatus = 400;
-                        errorBody = BuildV2ErrorResponse(400, paths[0], "BAD_REQUEST", "options.dryRun must be a boolean or integer.");
-                        return false;
-                    }
-                }
-            }
-
-            if (val.contains("params")) {
-                if (!val["params"].is_object()) {
-                    errorStatus = 400;
-                    errorBody = BuildV2ErrorResponse(400, paths[0], "BAD_REQUEST", "params must be an object.");
-                    return false;
-                }
-
-                for (auto [name, value] : val["params"].items()) {
-                    if (name == "commands" && value.is_array()) {
-                        paramMap[name] = value.dump();
-                        continue;
-                    }
-
-                    if (value.is_array()) {
-                        for (size_t i = 0; i < value.size(); i++) {
-                            if (value[i].is_object()) {
-                                for (auto [childName, childValue] : value[i].items()) {
-                                    std::string scalar;
-                                    if (!ReadScalarParam(childValue, scalar)) {
-                                        errorStatus = 400;
-                                        errorBody = BuildV2ErrorResponse(400, paths[0], "BAD_REQUEST", "params object-array values must be string, number, or boolean.");
-                                        return false;
-                                    }
-                                    paramMap[name + "_" + std::to_string(i) + "_" + childName] = scalar;
-                                }
-                                continue;
-                            }
-                            std::string scalar;
-                            if (!ReadScalarParam(value[i], scalar)) {
-                                errorStatus = 400;
-                                errorBody = BuildV2ErrorResponse(400, paths[0], "BAD_REQUEST", "params values must be string, number, or boolean.");
-                                return false;
-                            }
-                            paramMap[name + "_" + std::to_string(i)] = scalar;
-                        }
-                        continue;
-                    }
-
-                    if (value.is_object()) {
-                        paramMap[name] = value.dump();
-                        continue;
-                    }
-
-                    std::string scalar;
-                    if (!ReadScalarParam(value, scalar)) {
-                        errorStatus = 400;
-                        errorBody = BuildV2ErrorResponse(400, paths[0], "BAD_REQUEST", "params values must be string, number, or boolean.");
-                        return false;
-                    }
-                    paramMap[name] = scalar;
-                }
-            }
-
-            paramMap["_METHOD"] = "POST";
-            return true;
-        }
-
-        if (!val.contains("cmd")) {
-            errorStatus = 503;
-            errorBody = "{\"res\":503,\"msg\":\"Missing cmd.\"}";
-            return false;
-        }
-        if (!val["cmd"].is_string() || val["cmd"].get<std::string>().empty()) {
-            errorStatus = 400;
-            errorBody = "{\"res\":400,\"msg\":\"cmd must be a non-empty string.\"}";
-            return false;
-        }
-
-        paths.push_back(val["cmd"].get<std::string>());
-        for (auto [name, value] : val.items()) {
-            if (name == "cmd") {
-                continue;
-            }
-
-            if (value.is_array()) {
-                for (size_t x = 0; x < value.size(); x++) {
-                    std::string scalar;
-                    if (!ReadScalarParam(value[x], scalar)) {
-                        errorStatus = 400;
-                        errorBody = "{\"res\":400,\"msg\":\"Array params must contain string, number, or boolean values.\"}";
-                        return false;
-                    }
-                    paramMap[name + "_" + std::to_string(x)] = scalar;
-                }
-            } else {
-                std::string scalar;
-                if (!ReadScalarParam(value, scalar)) {
-                    errorStatus = 400;
-                    errorBody = "{\"res\":400,\"msg\":\"Params must be string, number, boolean, or arrays of those values.\"}";
-                    return false;
-                }
-                paramMap[name] = scalar;
-            }
-        }
-    } catch (const std::exception&) {
-        errorStatus = 400;
-        errorBody = BuildV2ErrorResponse(400, "", "BAD_REQUEST", "Request contains values that are out of supported range.");
-        return false;
-    }
-
-    paramMap["_METHOD"] = paramMap.empty() ? "GET" : "POST";
-    return true;
-}
-
+// V2 API groups: capability, sequence lifecycle, layout, media, timing, sequencer, effects, audio analysis.
 #include "api/SystemV2Api.inl"
 #include "api/SequenceV2Api.inl"
 #include "api/LayoutV2Api.inl"
@@ -1057,10 +589,6 @@ static bool ParseXlDoAutomationBody(const std::string& body,
 #include "api/SequencerV2Api.inl"
 #include "api/EffectsV2Api.inl"
 #include "api/TimingAnalysisV2Api.inl"
-#include "api/LegacySequenceCoreApi.inl"
-#include "api/LegacyExportPackagingApi.inl"
-#include "api/LegacyReadQueryApi.inl"
-#include "api/LegacyRenderTransferApi.inl"
 
 bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                                      std::map<std::string, std::string> &params,
@@ -1074,6 +602,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
     }
 
     std::string cmd = paths[0];
+    // V2 dispatcher: strict command contracts and structured response envelopes.
     if (IsV2Command(params)) {
         auto requestIdIt = params.find("_REQUEST_ID");
         std::string requestId = requestIdIt == params.end() ? "" : requestIdIt->second;
@@ -1170,8 +699,11 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
         return sendResponse(BuildV2ErrorResponse(404, cmd, "UNKNOWN_COMMAND", "Unknown command: '" + cmd + "'.", requestId), "", 404, true);
     }
 
+    // Legacy dispatcher: grouped by historical xlDo API domain.
+    // Group 1: Core sequence lifecycle and save/open compatibility.
     if (auto handled = automation::api::HandleLegacySequenceCoreCommand(this, _sequenceElements, _promptBatchRenderIssues, _renderMode, xlightsFilename, cmd, paths, params, sendResponse)) {
         return *handled;
+    // Group 2: Export, packaging, and video preview operations.
     } else if (auto handled = automation::api::HandleLegacyExportPackagingCommand(
                    AllModels,
                    _outputModelManager,
@@ -1189,24 +721,18 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                    params,
                    sendResponse)) {
         return *handled;
+    // Group 3: Read/query endpoints for models, views, controllers, and effect IDs.
     } else if (auto handled = automation::api::HandleLegacyReadQueryCommand(
                    AllModels,
                    _outputManager,
                    _sequenceElements,
                    CurrentSeqXmlFile,
-                   [&]() -> std::vector<std::string> {
-                       std::vector<std::string> names;
-                       auto allViews = GetViewsManager()->GetViews();
-                       names.reserve(allViews.size());
-                       for (auto* view : allViews) {
-                           names.emplace_back(view->GetName());
-                       }
-                       return names;
-                   },
+                   [&]() { return CollectLegacyViewNames(this); },
                    cmd,
                    params,
                    sendResponse)) {
         return *handled;
+    // Group 4: Render and transfer workflows (batch render, controller/FPP upload, sequence checks).
     } else if (auto handled = automation::api::HandleLegacyRenderTransferCommand(
                    this,
                    _outputManager,
@@ -1242,402 +768,100 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                    params,
                    sendResponse)) {
         return *handled;
-    } else if (cmd == "saveLayout") {
-        if (!layoutPanel->SaveEffects()) {
-            return sendResponse("Failed to save layout.", "msg", 503, false);
-        }
-
-        if (!SaveNetworksFile()) {
-            return sendResponse("Failed to controller tab.", "msg", 503, false);
-        }
-
-        return sendResponse("Layout and controller tab saved.", "msg", 200, false);
-
-    } else if (cmd == "changeShowFolder") {
-        auto shw = params["folder"];
-        if (!wxDir::Exists(shw)) {
-            return sendResponse("Folder does not exist.", "msg", 503, false);
-        }
-
-        auto force = ReadBool(params["force"]);
-        if (CurrentSeqXmlFile != nullptr && mSavedChangeCount != _sequenceElements.GetChangeCount()) {
-            if (force) {
-                mSavedChangeCount = _sequenceElements.GetChangeCount();
-            } else {
-                return sendResponse("Sequence has unsaved changes.", "msg", 503, false);
-            }
-        }
-
-        if (UnsavedRgbEffectsChanges) {
-            if (force) {
-                UnsavedRgbEffectsChanges = false;
-            } else {
-                return sendResponse("Layout has unsaved changes.", "msg", 503, false);
-            }
-        }
-
-        if (UnsavedNetworkChanges) {
-            if (force) {
-                UnsavedNetworkChanges = false;
-            } else {
-                return sendResponse("Controller has unsaved changes.", "msg", 503, false);
-            }
-        }
-
-        displayElementsPanel->SetSequenceElementsModelsViews(nullptr, nullptr, nullptr, nullptr, nullptr);
-        layoutPanel->ClearUndo();
-        SetDir(shw, true);
-
-        return sendResponse("Show folder changed to " + shw + ".", "msg", 200, false);
-    } else if (cmd == "openController") {
-        auto ip = params["ip"];
-        ::wxLaunchDefaultBrowser(ip);
-
-        return sendResponse("Controller opened", "msg", 200, false);
-
-    } else if (cmd == "openControllerProxy") {
-        auto ip = params["ip"];
-        auto controller = _outputManager.GetControllerWithIP(ip);
-
-        if (controller == nullptr) {
-            return "{\"res\":504,\"msg\":\"Controller not found.\"}";
-        }
-
-        auto proxy = controller->GetFPPProxy();
-
-        if (proxy.empty()) {
-            return "{\"res\":504,\"msg\":\"Controller has no proxy.\"}";
-        }
-
-        ::wxLaunchDefaultBrowser(proxy);
-
-        return "{\"res\":200,\"msg\":\"Proxy opened.\"}";
-
-    } else if (cmd == "closexLights") {
-        auto force = ReadBool(params["force"]);
-        if (CurrentSeqXmlFile != nullptr && mSavedChangeCount != _sequenceElements.GetChangeCount()) {
-            if (force) {
-                mSavedChangeCount = _sequenceElements.GetChangeCount();
-            } else {
-                return sendResponse("Sequence has unsaved changes.", "msg", 503, false);
-            }
-        }
-
-        if (UnsavedRgbEffectsChanges) {
-            if (force) {
-                UnsavedRgbEffectsChanges = false;
-            } else {
-                return sendResponse("Layout has unsaved changes.", "msg", 503, false);
-            }
-        }
-
-        if (UnsavedNetworkChanges) {
-            if (force) {
-                UnsavedNetworkChanges = false;
-            } else {
-                return sendResponse("Controller has unsaved changes.", "msg", 503, false);
-            }
-        }
-
-        // Click on the File quit menu item
-        wxCommandEvent evt(wxEVT_COMMAND_MENU_SELECTED, wxID_EXIT);
-        wxPostEvent(this, evt);
-
-        return sendResponse("xLights closed.", "msg", 200, false);
-    } else if (cmd == "lightsOn") {
-        EnableOutputs(true);
-        return sendResponse("Lights on.", "msg", 200, false);
-    } else if (cmd == "lightsOff") {
-        DisableOutputs();
-        return sendResponse("Lights off.", "msg", 200, false);
-    } else if (cmd == "playJukebox") {
-        int button = wxAtoi(params["button"]);
-        if (CurrentSeqXmlFile != nullptr) {
-            jukeboxPanel->PlayItem(button);
-            return sendResponse("Played button " + std::to_string(button), "msg", 200, false);
-        } else {
-            return sendResponse("Sequence not open.", "msg", 503, false);
-        }
-     } else if (cmd == "jukeboxButtonTooltips" || cmd == "getJukeboxButtonTooltips") {
-        if (CurrentSeqXmlFile != nullptr) {
-            return sendResponse(jukeboxPanel->GetTooltipsJSON(), "tooltips", 200, true);
-        } else {
-            return sendResponse("Sequence not open.", "msg", 503, false);
-        }
-    } else if (cmd == "jukeboxButtonEffectPresent" || cmd == "getJukeboxButtonEffectPresent") {
-        if (CurrentSeqXmlFile != nullptr) {
-            return sendResponse(jukeboxPanel->GetEffectPresentJSON(), "effects", 200, true);
-        } else {
-            return sendResponse("Sequence not open.", "msg", 503, false);
-        }
-    } else if (cmd == "e131Tag" || cmd == "getE131Tag") {
-        return sendResponse(E131Output::GetTag(), "tag", 200, false);
-    } else if (cmd == "addEthernetController") {
-        auto c = new ControllerEthernet(&_outputManager);
-        //c->SetProtocol(params["protocol"]);
-        c->SetIP(params["ip"]);
-        c->SetId(1);
-        c->EnsureUniqueId();
-        c->SetName(params["name"]);
-        auto const vendors = ControllerCaps::GetVendors(c->GetType());
-        if (std::find(vendors.begin(), vendors.end(), params["vendor"]) != vendors.end()) {
-            c->SetVendor(params["vendor"]);
-            auto models = ControllerCaps::GetModels(c->GetType(), params["vendor"]);
-            if (std::find(models.begin(), models.end(), params["model"]) != models.end()) {
-                c->SetModel(params["model"]);
-                auto variants = ControllerCaps::GetVariants(c->GetType(), params["vendor"], params["model"]);
-                if (std::find(variants.begin(), variants.end(), params["variant"]) != variants.end()) {
-                    c->SetVariant(params["variant"]);
-                }
-            }
-        }
-        
-        _outputManager.AddController(c);
-        _outputModelManager.AddASAPWork(OutputModelManager::WORK_NETWORK_CHANGE, "Automation:ADDETHERNET");
-        _outputModelManager.AddASAPWork(OutputModelManager::WORK_NETWORK_CHANNELSCHANGE, "Automation:ADDETHERNET");
-        _outputModelManager.AddASAPWork(OutputModelManager::WORK_UPDATE_NETWORK_LIST, "Automation:ADDETHERNET", nullptr, c);
-        _outputModelManager.AddLayoutTabWork(OutputModelManager::WORK_CALCULATE_START_CHANNELS, "Automation:ADDETHERNET");
-        return sendResponse("Added Ethernet Controller", "msg", 200, false);
-    
-    } else if (cmd == "runScript") {
-        auto filename = params["filename"];
-        if (filename.empty() || filename == "null" || !FileExists(filename)) {
-            return sendResponse("Invalid Script Path.", "msg", 503, false);
-        }
-
-        LuaRunner runner(this);
-        auto const worked = runner.Run_Script(filename, [](std::string const& m) {});
-        if (worked) {
-            std::string response = "{\"msg\":\"Script Was Successful.\"}";
-            return sendResponse(response, "", 200, true);
-        }
-        return sendResponse("Script Failed", "msg", 503, true);
-    } else if (cmd == "cloneModelEffects") {
-        if (CurrentSeqXmlFile == nullptr) {
-            return sendResponse("Sequence not open.", "msg", 503, false);
-        }
-        auto target = params["target"];
-        auto source = params["source"];
-        auto erase = false;
-
-        if (!params["eraseModel"].empty()) {
-            erase = ReadBool(params["eraseModel"]);
-        }
-        auto const worked = CloneXLightsEffects(target, source, _sequenceElements, erase);
-        mainSequencer->PanelEffectGrid->Refresh();
-        std::string response = wxString::Format("{\"msg\":\"Model Effects Cloned.\",\"worked\":\"%s\"}", JSONSafe(toStr(worked)));
-        return sendResponse(response, "", 200, true);
-    } else if (cmd == "addEffect") {
-        if (CurrentSeqXmlFile == nullptr) {
-            return sendResponse("Sequence not open.", "msg", 503, false);
-        }
-        auto target = params["target"];
-        auto effect = params["effect"];
-        auto settings = params["settings"];
-        auto palette = params["palette"];
-        Element* to = _sequenceElements.GetElement(target);
-        int startTime = 0;
-        int endTime = CurrentSeqXmlFile->GetSequenceDurationMS();
-        int layer = 0;
-
-        if (!params["layer"].empty()) {
-            layer = std::stoi(params["layer"]);
-        }
-        if (!params["startTime"].empty()) {
-            startTime = std::stoi(params["startTime"]);
-        }
-        if (!params["endTime"].empty()) {
-            endTime = std::stoi(params["endTime"]);
-        }
-
-        if (to == nullptr) {
-            return sendResponse("target element doesn't exists.", "msg", 503, false);
-        }
-        _sequenceElements.get_undo_mgr().CreateUndoStep();
-        while (to->GetEffectLayerCount() < layer + 1) {
-            to->AddEffectLayer();
-        }
-        auto valid = to->GetEffectLayer(layer)->AddEffect(0, effect, settings, palette,
-                                                          startTime, endTime, 0, false);
-        mainSequencer->PanelEffectGrid->Refresh();
-        std::string response = wxString::Format("{\"msg\":\"Added Effects.\",\"worked\":\"%s\"}", JSONSafe(toStr(valid != nullptr)));
-        return sendResponse(response, "", 200, true);
-    } else if (cmd == "deleteAllAliases") {
-        std::string models;
-        bool deleted = false;
-        for (auto m = (&AllModels)->begin(); m != (&AllModels)->end(); ++m) {
-            bool ret = m->second->DeleteAllAliases();
-            if (ret) {
-                models += (deleted ? ", " : "") + JSONSafe(m->first);
-                deleted = deleted || ret;
-            }
-        }
-        if (deleted) {
-            MarkEffectsFileDirty();
-            return sendResponse("\"" + models + "\"", "models", 200, true);
-        } else {
-        	return sendResponse("No aliases found to delete.", "msg", 503, false);
-		}
-    } else if (cmd == "makeMaster") {
-        if (CurrentSeqXmlFile == nullptr) {
-            return sendResponse("No sequence open.", "msg", 503, false);
-        }
-        if (params["view"].empty()) {
-            return sendResponse("No template view selected.", "msg", 504, false);
-        }
-        auto view = params["view"];
-
-        displayElementsPanel->SelectView(view);
-
-        // Click on the Make Master item
-        displayElementsPanel->DoMakeMaster();
-        std::string response = "{\"msg\":\"Master view updated.\"}";
-        return sendResponse(response, "", 200, true);
-    } else if (cmd == "cleanupFileLocations") {
-
-        bool res = CleanupRGBEffectsFileLocations();
-
-        if (CurrentSeqXmlFile != nullptr) {
-            res = res && CleanupSequenceFileLocations();
-        }
-
-        if (res) {
-            std::string response = "{\"msg\":\"Cleanup file locations.\",\"worked\":\"true\"}";
-            return sendResponse(response, "", 200, true);
-        }
-        else
-        {
-            return sendResponse("Cleanup file locations failed.", "msg", 503, false);
-        }
-
-    } else if (cmd == "getEffectSettings") {
-        if (CurrentSeqXmlFile == nullptr) {
-            return sendResponse("Sequence not open.", "msg", 503, false);
-        }
-        int id = 0;
-        int layer = 0;
-
-        if (!params["id"].empty()) {
-            id = std::stoi(params["id"]);
-        }
-        if (!params["layer"].empty()) {
-            layer = std::stoi(params["layer"]);
-        }
-        auto const& model = params["model"];
-        Element* ele = _sequenceElements.GetElement(model);
-        if (ele == nullptr) {
-            return sendResponse("target element doesn't exists.", "msg", 503, false);
-        }
-        auto* lay = ele->GetEffectLayer(layer);
-        if (lay == nullptr) {
-            return sendResponse("target layer doesn't exists.", "msg", 503, false);
-        }
-        auto* eff = lay->GetEffectFromID(id);
-        if (eff != nullptr) {
-
-            std::string json = "{\"name\":\"" + eff->GetEffectName() + "\"" +
-                                ",\"settings\":" + eff->GetSettingsAsJSON() +
-                               ",\"palette\":" + eff->GetPaletteAsJSON() +
-                               ",\"startTime\":" + std::to_string(eff->GetStartTimeMS()) +
-                               ",\"endTime\":" + std::to_string(eff->GetEndTimeMS()) +
-                                ",\"selected\":" + std::to_string(eff->GetSelected()) + "}";
-            return sendResponse(json, "", 200, true);
-        }        
-        return sendResponse("target effect doesn't exists.", "msg", 503, false);
-    } else if (cmd == "setEffectSettings") {
-        if (CurrentSeqXmlFile == nullptr) {
-            return sendResponse("Sequence not open.", "msg", 503, false);
-        }
-        int id = 0;
-        int layer = 0;
-
-        if (!params["id"].empty()) {
-            id = std::stoi(params["id"]);
-        }
-        if (!params["layer"].empty()) {
-            layer = std::stoi(params["layer"]);
-        }
-        auto const& model = params["model"];
-        Element* ele = _sequenceElements.GetElement(model);
-        if (ele == nullptr) {
-            return sendResponse("target element doesn't exists.", "msg", 503, false);
-        }
-        auto* lay = ele->GetEffectLayer(layer);
-        if (lay == nullptr) {
-            return sendResponse("target layer doesn't exists.", "msg", 503, false);
-        }
-        auto* eff = lay->GetEffectFromID(id);
-        if (eff != nullptr) {
-
-            if (!params["name"].empty()) {
-                eff->SetEffectName(params["name"]);
-            }
-            if (!params["startTime"].empty()) {
-                eff->SetStartTimeMS(std::stoi(params["startTime"]));
-            }
-            if (!params["endTime"].empty()) {
-                eff->SetEndTimeMS(std::stoi(params["endTime"]));
-            }
-            if (!params["settings"].empty()) {
-                eff->SetSettings(params["settings"], true , true);
-            }
-            if (!params["palette"].empty()) {
-                eff->SetColourOnlyPalette(params["palette"], true);
-            }
-            mainSequencer->PanelEffectGrid->Refresh();
-            mainSequencer->SelectEffect(eff);
-            std::string response = wxString::Format("{\"msg\":\"Set Effect Settings.\",\"worked\":\"%s\"}", JSONSafe(toStr(eff != nullptr)));
-            return sendResponse(response, "", 200, true);
-        }
-        return sendResponse("target effect doesn't exists.", "msg", 503, false);
-    } else if (cmd == "importXLightsSequence") {
-        if (CurrentSeqXmlFile == nullptr) {
-            return sendResponse("Sequence not open.", "msg", 503, false);
-        }
-        auto filename = params["filename"];
-        if (filename == "" || filename == "null"|| !wxFile::Exists(filename)) {
-            return sendResponse("Inport File not valid.", "msg", 503, false);
-        }
-        auto mapname = params["mapfile"];
-        if (mapname == "" || mapname == "null" || !wxFile::Exists(mapname)) {
-            return sendResponse("Mapping File no valid.", "msg", 503, false);
-        }
-        ImportXLights(wxFileName(filename), mapname);
-
-        wxCommandEvent eventRowHeaderChanged(EVT_ROW_HEADINGS_CHANGED);
-        wxPostEvent(this, eventRowHeaderChanged);
-        mainSequencer->PanelEffectGrid->Refresh();
-        
-        std::string response = "{\"msg\":\"Imported XLights Sequence.\",\"worked\":\"true\"}";
-        return sendResponse(response, "", 200, true);
-    } else if (cmd == "getShowFolder") {
-        return sendResponse(JSONSafe(showDirectory), "folder", 200, false);
-    } else if (cmd == "setModelProperty") {
-        auto model = params["model"];
-        auto m = AllModels.GetModel(model);
-        if (nullptr == m) {
-            return sendResponse("Unknown model.", "msg", 503, false);
-        }
-        auto propKey = params["key"];
-        auto propData = params["data"];
-        if (propKey.empty() || propData.empty()) {
-            return sendResponse("Key or Data was empty.", "msg", 503, false);
-        }
-        layoutPanel->SelectModel(model);
-        wxPropertyGridEvent event2;
-        event2.SetPropertyGrid(layoutPanel->GetPropertyEditor());
-        wxStringProperty wsp("Model", propKey, propData);
-        event2.SetProperty(&wsp);
-        wxVariant value(propData);
-        event2.SetPropertyValue(value);
-        layoutPanel->OnPropertyGridChange(event2);
-        _outputModelManager.AddASAPWork(OutputModelManager::WORK_RGBEFFECTS_CHANGE, "Automation:setModelProperty");
-        _outputModelManager.AddASAPWork(OutputModelManager::WORK_MODELS_CHANGE_REQUIRING_RERENDER, "Automation:setModelProperty");
-        _outputModelManager.AddASAPWork(OutputModelManager::WORK_RELOAD_PROPERTYGRID, "Automation:setModelProperty");
-        std::string response = wxString::Format("{\"msg\":\"Set Model Property.\",\"worked\":\"%s\"}", JSONSafe(toStr(m != nullptr)));
-        return sendResponse(response, "", 200, true);
-    } else if (cmd == "getFseqDirectory") {
-        return sendResponse(JSONSafe(GetFseqDirectory()), "folder", 200, false);
+    // Group 5: Application/system control (show folder, save layout, close app, controller browser links).
+    } else if (auto handled = automation::api::HandleLegacySystemControlCommand(
+                   _sequenceElements,
+                   CurrentSeqXmlFile,
+                   mSavedChangeCount,
+                   UnsavedRgbEffectsChanges,
+                   UnsavedNetworkChanges,
+                   showDirectory,
+                   _outputManager,
+                   [&]() { return layoutPanel->SaveEffects(); },
+                   [&]() { return SaveNetworksFile(); },
+                   [&]() {
+                       displayElementsPanel->SetSequenceElementsModelsViews(nullptr, nullptr, nullptr, nullptr, nullptr);
+                       layoutPanel->ClearUndo();
+                   },
+                   [&](const std::string& folder) { SetDir(folder, true); },
+                   [&]() {
+                       wxCommandEvent evt(wxEVT_COMMAND_MENU_SELECTED, wxID_EXIT);
+                       wxPostEvent(this, evt);
+                   },
+                   [&](const std::string& url) { ::wxLaunchDefaultBrowser(url); },
+                   [&]() { return GetFseqDirectory(); },
+                   cmd,
+                   params,
+                   sendResponse)) {
+        return *handled;
+    // Group 6: Playback and output control (lights, jukebox, e131 tag).
+    } else if (auto handled = automation::api::HandleLegacyPlaybackCommand(
+                   CurrentSeqXmlFile,
+                   [&]() { EnableOutputs(true); },
+                   [&]() { DisableOutputs(); },
+                   [&](int button) { jukeboxPanel->PlayItem(button); },
+                   [&]() { return jukeboxPanel->GetTooltipsJSON(); },
+                   [&]() { return jukeboxPanel->GetEffectPresentJSON(); },
+                   [&]() { return E131Output::GetTag(); },
+                   cmd,
+                   params,
+                   sendResponse)) {
+        return *handled;
+    // Group 7: Layout/controller mutation helpers.
+    } else if (auto handled = automation::api::HandleLegacyLayoutMutationCommand(
+                   AllModels,
+                   _outputManager,
+                   _outputModelManager,
+                   CurrentSeqXmlFile,
+                   [&]() { MarkEffectsFileDirty(); },
+                   [&](const std::string& view) {
+                       displayElementsPanel->SelectView(view);
+                       displayElementsPanel->DoMakeMaster();
+                   },
+                   [&](const std::string& model, const std::string& propKey, const std::string& propData) {
+                       layoutPanel->SelectModel(model);
+                       wxPropertyGridEvent event2;
+                       event2.SetPropertyGrid(layoutPanel->GetPropertyEditor());
+                       wxStringProperty wsp("Model", propKey, propData);
+                       event2.SetProperty(&wsp);
+                       wxVariant value(propData);
+                       event2.SetPropertyValue(value);
+                       layoutPanel->OnPropertyGridChange(event2);
+                       _outputModelManager.AddASAPWork(OutputModelManager::WORK_RGBEFFECTS_CHANGE, "Automation:setModelProperty");
+                       _outputModelManager.AddASAPWork(OutputModelManager::WORK_MODELS_CHANGE_REQUIRING_RERENDER, "Automation:setModelProperty");
+                       _outputModelManager.AddASAPWork(OutputModelManager::WORK_RELOAD_PROPERTYGRID, "Automation:setModelProperty");
+                       return true;
+                   },
+                   cmd,
+                   params,
+                   sendResponse)) {
+        return *handled;
+    // Group 8: Sequencer/effect mutation and import helpers.
+    } else if (auto handled = automation::api::HandleLegacySequencerMutationCommand(
+                   CurrentSeqXmlFile,
+                   [&](const std::string& filename) { return RunLegacyScript(this, filename); },
+                   [&](const std::string& target, const std::string& source, bool erase) {
+                       return CloneXLightsEffects(target, source, _sequenceElements, erase);
+                   },
+                   [&](const std::string& target, const std::string& effect, const std::string& settings, const std::string& palette, int layer, int startTime, int endTime) {
+                       return AddLegacyEffect(_sequenceElements, target, effect, settings, palette, layer, startTime, endTime);
+                   },
+                   [&]() { return CleanupRGBEffectsFileLocations(); },
+                   [&]() { return CleanupSequenceFileLocations(); },
+                   [&](const std::string& model, int layer, int id, nlohmann::json& data) {
+                       return GetLegacyEffectDetails(_sequenceElements, model, layer, id, data);
+                   },
+                   [&](const std::string& model, int layer, int id, const std::map<std::string, std::string>& p) {
+                       return SetLegacyEffectDetails(_sequenceElements, mainSequencer, model, layer, id, p);
+                   },
+                   [&](const std::string& filename, const std::string& mapname) {
+                       return ImportLegacyXLightsSequence(this, filename, mapname);
+                   },
+                   [&]() { mainSequencer->PanelEffectGrid->Refresh(); },
+                    cmd,
+                    params,
+                    sendResponse)) {
+        return *handled;
     }
     return false;
 }
@@ -1792,6 +1016,125 @@ std::string xLightsFrame::ProcessxlDoAutomation(const std::string& msg)
     }
     return result;
 }
+
+// ---- Bottom helper implementations (legacy dispatcher adapters) ----
+namespace {
+std::vector<std::string> CollectLegacyViewNames(xLightsFrame* frame) {
+    std::vector<std::string> names;
+    auto allViews = frame->GetViewsManager()->GetViews();
+    names.reserve(allViews.size());
+    for (auto* view : allViews) {
+        names.emplace_back(view->GetName());
+    }
+    return names;
+}
+
+bool RunLegacyScript(xLightsFrame* frame, const std::string& filename) {
+    LuaRunner runner(frame);
+    return runner.Run_Script(filename, [](std::string const&) {});
+}
+
+bool AddLegacyEffect(SequenceElements& sequenceElements,
+                     const std::string& target,
+                     const std::string& effect,
+                     const std::string& settings,
+                     const std::string& palette,
+                     int layer,
+                     int startTime,
+                     int endTime) {
+    Element* to = sequenceElements.GetElement(target);
+    if (to == nullptr) {
+        return false;
+    }
+    sequenceElements.get_undo_mgr().CreateUndoStep();
+    while (to->GetEffectLayerCount() < layer + 1) {
+        to->AddEffectLayer();
+    }
+    auto valid = to->GetEffectLayer(layer)->AddEffect(0, effect, settings, palette, startTime, endTime, 0, false);
+    return valid != nullptr;
+}
+
+bool GetLegacyEffectDetails(SequenceElements& sequenceElements,
+                            const std::string& model,
+                            int layer,
+                            int id,
+                            nlohmann::json& data) {
+    Element* ele = sequenceElements.GetElement(model);
+    if (ele == nullptr) {
+        return false;
+    }
+    auto* lay = ele->GetEffectLayer(layer);
+    if (lay == nullptr) {
+        return false;
+    }
+    auto* eff = lay->GetEffectFromID(id);
+    if (eff == nullptr) {
+        return false;
+    }
+    data["name"] = eff->GetEffectName();
+    auto settings = nlohmann::json::parse(eff->GetSettingsAsJSON(), nullptr, false);
+    data["settings"] = settings.is_discarded() ? nlohmann::json::object() : settings;
+    auto palette = nlohmann::json::parse(eff->GetPaletteAsJSON(), nullptr, false);
+    data["palette"] = palette.is_discarded() ? nlohmann::json::object() : palette;
+    data["startTime"] = eff->GetStartTimeMS();
+    data["endTime"] = eff->GetEndTimeMS();
+    data["selected"] = eff->GetSelected();
+    return true;
+}
+
+bool SetLegacyEffectDetails(SequenceElements& sequenceElements,
+                            MainSequencer* mainSequencer,
+                            const std::string& model,
+                            int layer,
+                            int id,
+                            const std::map<std::string, std::string>& params) {
+    Element* ele = sequenceElements.GetElement(model);
+    if (ele == nullptr) {
+        return false;
+    }
+    auto* lay = ele->GetEffectLayer(layer);
+    if (lay == nullptr) {
+        return false;
+    }
+    auto* eff = lay->GetEffectFromID(id);
+    if (eff == nullptr) {
+        return false;
+    }
+    auto it = params.find("name");
+    if (it != params.end() && !it->second.empty()) {
+        eff->SetEffectName(it->second);
+    }
+    it = params.find("startTime");
+    if (it != params.end() && !it->second.empty()) {
+        eff->SetStartTimeMS(std::stoi(it->second));
+    }
+    it = params.find("endTime");
+    if (it != params.end() && !it->second.empty()) {
+        eff->SetEndTimeMS(std::stoi(it->second));
+    }
+    it = params.find("settings");
+    if (it != params.end() && !it->second.empty()) {
+        eff->SetSettings(it->second, true, true);
+    }
+    it = params.find("palette");
+    if (it != params.end() && !it->second.empty()) {
+        eff->SetColourOnlyPalette(it->second, true);
+    }
+    if (mainSequencer != nullptr) {
+        mainSequencer->SelectEffect(eff);
+    }
+    return true;
+}
+
+bool ImportLegacyXLightsSequence(xLightsFrame* frame,
+                                 const std::string& filename,
+                                 const std::string& mapname) {
+    frame->ImportXLights(wxFileName(filename), mapname);
+    wxCommandEvent eventRowHeaderChanged(EVT_ROW_HEADINGS_CHANGED);
+    wxPostEvent(frame, eventRowHeaderChanged);
+    return true;
+}
+} // namespace
 
 /*
  TODO backlog (legacy xlDo command names that remain unimplemented in this file):
