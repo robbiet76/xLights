@@ -1059,6 +1059,7 @@ static bool ParseXlDoAutomationBody(const std::string& body,
 #include "api/TimingAnalysisV2Api.inl"
 #include "api/LegacySequenceCoreApi.inl"
 #include "api/LegacyExportPackagingApi.inl"
+#include "api/LegacyReadQueryApi.inl"
 
 bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                                      std::map<std::string, std::string> &params,
@@ -1183,6 +1184,24 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                    [&]() { return PackageSequence(false); },
                    [&]() { return PackageDebugFiles(false); },
                    [&](const wxString& filename) { return ExportVideoPreview(filename); },
+                   cmd,
+                   params,
+                   sendResponse)) {
+        return *handled;
+    } else if (auto handled = automation::api::HandleLegacyReadQueryCommand(
+                   AllModels,
+                   _outputManager,
+                   _sequenceElements,
+                   CurrentSeqXmlFile,
+                   [&]() -> std::vector<std::string> {
+                       std::vector<std::string> names;
+                       auto allViews = GetViewsManager()->GetViews();
+                       names.reserve(allViews.size());
+                       for (auto* view : allViews) {
+                           names.emplace_back(view->GetName());
+                       }
+                       return names;
+                   },
                    cmd,
                    params,
                    sendResponse)) {
@@ -1670,29 +1689,6 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
         mainSequencer->PanelEffectGrid->Refresh();
         std::string response = wxString::Format("{\"msg\":\"Added Effects.\",\"worked\":\"%s\"}", JSONSafe(toStr(valid != nullptr)));
         return sendResponse(response, "", 200, true);
-    } else if (cmd == "getModels") {
-        std::string models;
-        bool includeModels {true};
-        bool includeGroups {true};
-        auto sModels = params["models"];
-        auto sGroups = params["groups"];
-        includeModels = sModels != "false";
-        includeGroups = sGroups != "false";
-        for (auto m = (&AllModels)->begin(); m != (&AllModels)->end(); ++m) {
-            if (m->second->GetDisplayAs() == "ModelGroup" && !includeGroups) {
-                continue;
-            }
-            if (m->second->GetDisplayAs() != "ModelGroup" && !includeModels) {
-                continue;
-            }
-            models += "\"" + JSONSafe(m->first) + "\",";
-        }
-        if (!models.empty()) {
-            models.pop_back();//remove last comma
-        }
-        models = "[" + models + "]";
-        return sendResponse(models, "models", 200, true);
-        
     } else if (cmd == "deleteAllAliases") {
         std::string models;
         bool deleted = false;
@@ -1709,21 +1705,6 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
         } else {
         	return sendResponse("No aliases found to delete.", "msg", 503, false);
 		}
-    } else if (cmd == "getViews") {
-        std::string views; 
-        if (CurrentSeqXmlFile == nullptr) {
-            return sendResponse("No sequence open.", "msg", 503, false);
-        }
-        auto AllViews = GetViewsManager()->GetViews();
-        for (auto it = AllViews.begin(); it != AllViews.end(); ++it) {
-            views += "\"" + JSONSafe((*it)->GetName()) + "\",";            
-        }
-        if (!views.empty()) {
-            views.pop_back(); // remove last comma
-        }
-        views = "[" + views + "]";
-        return sendResponse(views, "views", 200, true);
-
     } else if (cmd == "makeMaster") {
         if (CurrentSeqXmlFile == nullptr) {
             return sendResponse("No sequence open.", "msg", 503, false);
@@ -1739,80 +1720,6 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
         displayElementsPanel->DoMakeMaster();
         std::string response = "{\"msg\":\"Master view updated.\"}";
         return sendResponse(response, "", 200, true);
-    } else if (cmd == "getModel") {
-        auto model = params["model"];
-        auto m = AllModels.GetModel(model);
-        if (nullptr == m) {
-            return sendResponse("Unknown model.", "msg", 503, false);
-        }
-        auto json = m->GetAttributesAsJSON();
-        return sendResponse(json, "model", 200, true);
-        
-    } else if (cmd == "getControllers") {
-        std::string controllers;
-        for (const auto& it : _outputManager.GetControllers()) {
-            std::string json = it->GetJSONData() + ",";
-            controllers += json;
-        }
-        if (!controllers.empty()) {
-            controllers.pop_back();//remove last comma
-        }
-        controllers = "[" + controllers + "]";
-        return sendResponse(controllers, "controllers", 200, true);
-    } else if (cmd == "getControllerIPs") {
-        std::string ipAddresses;
-        for (const auto& it : _outputManager.GetControllers()) {
-            if (!it->GetIP().empty()) {
-                ipAddresses += "\"" + JSONSafe(it->GetIP()) + "\",";
-            }
-        }
-        if (!ipAddresses.empty()) {
-            ipAddresses.pop_back();//remove last comma
-        }
-        ipAddresses = "[" + ipAddresses + "]";
-        return sendResponse(ipAddresses, "controllers", 200, true);
-    } else if (cmd == "getControllerPortMap") {
-        auto ip = params["ip"];
-        auto name = params["name"];
-        Controller* controller {nullptr};
-        if (!name.empty()) {
-            controller = _outputManager.GetController(name);
-        }
-        if (!ip.empty()) {
-            controller = _outputManager.GetControllerWithIP(ip);
-        }
-        if (controller == nullptr) {
-            return "{\"res\":504,\"msg\":\"Controller not found.\"}";
-        }
-        UDController cud(controller, &_outputManager, &AllModels, false);
-        auto json = cud.ExportAsJSON();
-        return sendResponse(json, "controllerportmap", 200, true);
-    } else if (cmd == "getEffectIDs") {
-        if (CurrentSeqXmlFile == nullptr) {
-            return sendResponse("Sequence not open.", "msg", 503, false);
-        }
-        auto model = params["model"];
-        Element* ele = _sequenceElements.GetElement(model);
-        if (ele == nullptr) {
-            return sendResponse("target element doesn't exists.", "msg", 503, false);
-        }
-        std::string layers = "[";
-        for (int i = 0; i < ele->GetEffectLayerCount(); ++i) {
-            std::string ids;
-            auto effects = ele->GetEffectLayer(i)->GetAllEffects();
-            for (auto* eff : effects) {
-                ids += "\"" + std::to_string(eff->GetID()) + "\",";
-            }
-            if (!ids.empty()) {
-                ids.pop_back(); // remove last comma
-            }
-            ids.insert(0, "[");
-            ids.append("],");
-            layers.append(ids);
-        }
-        layers.pop_back(); // remove last comma
-        layers += "]";
-        return sendResponse(layers, "effects", 200, true);
     } else if (cmd == "cleanupFileLocations") {
 
         bool res = CleanupRGBEffectsFileLocations();
