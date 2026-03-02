@@ -134,6 +134,17 @@ static const std::vector<std::string>& GetV2Commands() {
     // PR-2 scaffolding: extend this list as new v2 automation commands are implemented.
     static const std::vector<std::string> commands = {
         "system.getCapabilities",
+        "sequence.getOpen",
+        "sequence.open",
+        "sequence.create",
+        "sequence.save",
+        "sequence.close",
+        "layout.getModels",
+        "layout.getModel",
+        "layout.getViews",
+        "media.get",
+        "media.set",
+        "media.getMetadata",
         "timing.listAnalysisPlugins",
         "timing.createFromAudio",
         "timing.getTrackSummary",
@@ -212,6 +223,33 @@ static std::string ReadParamStringOrEnv(const std::map<std::string, std::string>
         return envValue.ToStdString();
     }
     return "";
+}
+
+static nlohmann::json BuildV2SequenceData(const xLightsXmlFile* sequence) {
+    nlohmann::json data;
+    data["name"] = sequence->GetName().ToStdString();
+    data["path"] = sequence->GetFullPath().ToStdString();
+    data["durationMs"] = sequence->GetSequenceDurationMS();
+    data["frameMs"] = sequence->GetFrameMS();
+    data["mediaFile"] = sequence->GetMediaFile().ToStdString();
+    return data;
+}
+
+static nlohmann::json BuildV2ModelData(Model* model, const ModelManager& modelManager) {
+    nlohmann::json data;
+    data["name"] = model->GetName();
+    data["type"] = model->GetDisplayAs();
+    data["startChannel"] = static_cast<int>(model->GetFirstChannel()) + 1;
+    data["endChannel"] = static_cast<int>(model->GetLastChannel()) + 1;
+    data["layoutGroup"] = model->GetLayoutGroup();
+
+    auto groups = modelManager.GetGroupsContainingModel(model);
+    nlohmann::json groupNames = nlohmann::json::array();
+    for (const auto& group : groups) {
+        groupNames.push_back(group);
+    }
+    data["groupNames"] = groupNames;
+    return data;
 }
 
 static bool ParseRemoteSections(const nlohmann::json& payload,
@@ -454,6 +492,314 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 {"lyricsSrtImportAvailable", true},
                 {"songStructureDetectionAvailable", false}
             };
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+        } else if (cmd == "sequence.getOpen") {
+            nlohmann::json data;
+            if (CurrentSeqXmlFile == nullptr) {
+                data["isOpen"] = false;
+                data["sequence"] = nullptr;
+            } else {
+                data["isOpen"] = true;
+                data["sequence"] = BuildV2SequenceData(CurrentSeqXmlFile);
+            }
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+        } else if (cmd == "sequence.open") {
+            std::string file = ReadParamString(params, "file");
+            bool force = ReadBool(ReadParamString(params, "force", "false"));
+            bool promptIssues = ReadBool(ReadParamString(params, "promptIssues", "false"));
+            bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
+
+            if (file.empty() || file == "null") {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "file is required.", requestId), "", 422, true);
+            }
+            std::string seq = FindSequence(file);
+            if (seq.empty()) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_FOUND", "Sequence not found.", requestId), "", 404, true);
+            }
+
+            if (CurrentSeqXmlFile != nullptr && !force) {
+                return sendResponse(BuildV2ErrorResponse(409, cmd, "SEQUENCE_ALREADY_OPEN", "A sequence is already open.", requestId), "", 409, true);
+            }
+
+            if (dryRun) {
+                nlohmann::json warnings = nlohmann::json::array();
+                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
+                nlohmann::json data;
+                data["file"] = seq;
+                data["validated"] = true;
+                return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
+            }
+
+            if (CurrentSeqXmlFile != nullptr) {
+                if (mSavedChangeCount != _sequenceElements.GetChangeCount()) {
+                    if (force) {
+                        mSavedChangeCount = _sequenceElements.GetChangeCount();
+                    } else {
+                        return sendResponse(BuildV2ErrorResponse(409, cmd, "UNSAVED_CHANGES", "Current sequence has unsaved changes.", requestId), "", 409, true);
+                    }
+                }
+                AskCloseSequence();
+            }
+
+            auto oldPrompt = _promptBatchRenderIssues;
+            auto oldRenderMode = _renderMode;
+            if (!promptIssues) {
+                _renderMode = true;
+            }
+            _promptBatchRenderIssues = promptIssues;
+            OpenSequence(seq, nullptr);
+            _promptBatchRenderIssues = oldPrompt;
+            _renderMode = oldRenderMode;
+
+            if (CurrentSeqXmlFile == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(503, cmd, "OPEN_FAILED", "Failed to open sequence.", requestId), "", 503, true);
+            }
+            return sendResponse(BuildV2SuccessResponse(200, cmd, BuildV2SequenceData(CurrentSeqXmlFile), requestId), "", 200, true);
+        } else if (cmd == "sequence.create") {
+            std::string mediaFile = ReadParamString(params, "mediaFile");
+            int durationMs = ReadParamInt(params, "durationMs", 0);
+            int frameMs = ReadParamInt(params, "frameMs", 0);
+            std::string view = ReadParamString(params, "view");
+            bool force = ReadBool(ReadParamString(params, "force", "false"));
+            bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
+
+            if (frameMs <= 0) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "frameMs must be > 0.", requestId), "", 422, true);
+            }
+            if ((mediaFile.empty() || mediaFile == "null") && durationMs <= 0) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "durationMs must be > 0 when mediaFile is not provided.", requestId), "", 422, true);
+            }
+            if (!mediaFile.empty() && mediaFile != "null") {
+                wxFileName mediaPath(wxString::FromUTF8(mediaFile));
+                if (!mediaPath.FileExists() || !mediaPath.IsFileReadable()) {
+                    return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "mediaFile must exist and be readable.", requestId), "", 422, true);
+                }
+            }
+            if (CurrentSeqXmlFile != nullptr && !force) {
+                return sendResponse(BuildV2ErrorResponse(409, cmd, "SEQUENCE_ALREADY_OPEN", "A sequence is already open.", requestId), "", 409, true);
+            }
+
+            if (dryRun) {
+                nlohmann::json warnings = nlohmann::json::array();
+                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
+                nlohmann::json data;
+                data["validated"] = true;
+                data["frameMs"] = frameMs;
+                if (!mediaFile.empty() && mediaFile != "null") {
+                    data["mediaFile"] = mediaFile;
+                } else {
+                    data["durationMs"] = durationMs;
+                }
+                return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
+            }
+
+            if (CurrentSeqXmlFile != nullptr) {
+                if (mSavedChangeCount != _sequenceElements.GetChangeCount()) {
+                    if (force) {
+                        mSavedChangeCount = _sequenceElements.GetChangeCount();
+                    } else {
+                        return sendResponse(BuildV2ErrorResponse(409, cmd, "UNSAVED_CHANGES", "Current sequence has unsaved changes.", requestId), "", 409, true);
+                    }
+                }
+                AskCloseSequence();
+            }
+
+            if (mediaFile == "null") {
+                mediaFile.clear();
+            }
+            if (view == "null") {
+                view.clear();
+            }
+            int durationSecs = durationMs > 0 ? durationMs / 1000 : 0;
+            NewSequence(mediaFile, durationSecs * 1000, frameMs, view);
+            EnableSequenceControls(true);
+
+            if (CurrentSeqXmlFile == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(503, cmd, "CREATE_FAILED", "Failed to create sequence.", requestId), "", 503, true);
+            }
+            return sendResponse(BuildV2SuccessResponse(200, cmd, BuildV2SequenceData(CurrentSeqXmlFile), requestId), "", 200, true);
+        } else if (cmd == "sequence.save") {
+            if (CurrentSeqXmlFile == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            }
+            std::string file = ReadParamString(params, "file");
+            bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
+
+            if (file == "null") {
+                file.clear();
+            }
+
+            if (dryRun) {
+                nlohmann::json warnings = nlohmann::json::array();
+                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
+                nlohmann::json data;
+                data["saved"] = true;
+                if (!file.empty()) {
+                    data["file"] = file;
+                } else if (!xlightsFilename.IsEmpty()) {
+                    data["file"] = xlightsFilename.ToStdString();
+                } else {
+                    data["file"] = CurrentSeqXmlFile->GetFullPath().ToStdString();
+                }
+                return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
+            }
+
+            if (!file.empty()) {
+                SaveAsSequence(file);
+            } else {
+                if (xlightsFilename.IsEmpty()) {
+                    return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "Saving unnamed sequence requires file.", requestId), "", 422, true);
+                }
+                SaveSequence();
+            }
+
+            nlohmann::json data;
+            data["saved"] = true;
+            if (!file.empty()) {
+                data["file"] = file;
+            } else if (!xlightsFilename.IsEmpty()) {
+                data["file"] = xlightsFilename.ToStdString();
+            } else {
+                data["file"] = CurrentSeqXmlFile->GetFullPath().ToStdString();
+            }
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+        } else if (cmd == "sequence.close") {
+            bool force = ReadBool(ReadParamString(params, "force", "false"));
+            bool quiet = ReadBool(ReadParamString(params, "quiet", "false"));
+            bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
+
+            if (CurrentSeqXmlFile == nullptr) {
+                if (quiet) {
+                    nlohmann::json data;
+                    data["closed"] = true;
+                    return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+                }
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            }
+
+            if (mSavedChangeCount != _sequenceElements.GetChangeCount() && !force) {
+                return sendResponse(BuildV2ErrorResponse(409, cmd, "UNSAVED_CHANGES", "Sequence has unsaved changes.", requestId), "", 409, true);
+            }
+
+            if (dryRun) {
+                nlohmann::json warnings = nlohmann::json::array();
+                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
+                nlohmann::json data;
+                data["closed"] = true;
+                return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
+            }
+
+            if (mSavedChangeCount != _sequenceElements.GetChangeCount() && force) {
+                mSavedChangeCount = _sequenceElements.GetChangeCount();
+            }
+            AskCloseSequence();
+
+            nlohmann::json data;
+            data["closed"] = true;
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+        } else if (cmd == "layout.getModels") {
+            nlohmann::json models = nlohmann::json::array();
+            for (auto it = (&AllModels)->begin(); it != (&AllModels)->end(); ++it) {
+                models.push_back(BuildV2ModelData(it->second, AllModels));
+            }
+            nlohmann::json data;
+            data["models"] = models;
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+        } else if (cmd == "layout.getModel") {
+            std::string name = ReadParamString(params, "name");
+            if (name.empty() || name == "null") {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "name is required.", requestId), "", 422, true);
+            }
+            Model* model = AllModels.GetModel(name);
+            if (model == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "MODEL_NOT_FOUND", "Model not found.", requestId), "", 404, true);
+            }
+            nlohmann::json data;
+            data["model"] = BuildV2ModelData(model, AllModels);
+            data["attributes"] = nlohmann::json::parse(model->GetAttributesAsJSON(), nullptr, false);
+            if (data["attributes"].is_discarded()) {
+                data["attributes"] = nlohmann::json::object();
+            }
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+        } else if (cmd == "layout.getViews") {
+            if (CurrentSeqXmlFile == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            }
+            nlohmann::json views = nlohmann::json::array();
+            auto allViews = GetViewsManager()->GetViews();
+            for (auto* view : allViews) {
+                nlohmann::json modelNames = nlohmann::json::array();
+                auto models = view->GetModels();
+                for (const auto& modelName : models) {
+                    modelNames.push_back(modelName);
+                }
+                views.push_back({
+                    {"name", view->GetName()},
+                    {"models", modelNames}
+                });
+            }
+            nlohmann::json data;
+            data["views"] = views;
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+        } else if (cmd == "media.get") {
+            if (CurrentSeqXmlFile == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            }
+            std::string mediaFile = CurrentSeqXmlFile->GetMediaFile().ToStdString();
+            nlohmann::json data;
+            data["mediaFile"] = mediaFile.empty() ? nlohmann::json(nullptr) : nlohmann::json(mediaFile);
+            data["hasMedia"] = !mediaFile.empty();
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+        } else if (cmd == "media.set") {
+            if (CurrentSeqXmlFile == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            }
+            std::string mediaFile = ReadParamString(params, "mediaFile");
+            bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
+            if (mediaFile.empty() || mediaFile == "null") {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "mediaFile is required.", requestId), "", 422, true);
+            }
+            wxFileName mediaPath(wxString::FromUTF8(mediaFile));
+            if (!mediaPath.FileExists() || !mediaPath.IsFileReadable()) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "mediaFile must exist and be readable.", requestId), "", 422, true);
+            }
+
+            std::string currentMedia = CurrentSeqXmlFile->GetMediaFile().ToStdString();
+            bool updated = currentMedia != mediaFile;
+            if (!dryRun) {
+                CurrentSeqXmlFile->SetMediaFile(GetShowDirectory(), wxString::FromUTF8(mediaFile), true);
+            }
+
+            nlohmann::json warnings = nlohmann::json::array();
+            if (dryRun) {
+                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
+            }
+            nlohmann::json data;
+            data["mediaFile"] = mediaFile;
+            data["updated"] = updated;
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
+        } else if (cmd == "media.getMetadata") {
+            if (CurrentSeqXmlFile == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            }
+            std::string mediaFile = ReadParamString(params, "mediaFile");
+            if (!mediaFile.empty() && mediaFile != "null" && mediaFile != CurrentSeqXmlFile->GetMediaFile().ToStdString()) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "mediaFile must match the sequence's loaded media in this phase.", requestId), "", 422, true);
+            }
+            if (!CurrentSeqXmlFile->HasAudioMedia() || CurrentSeqXmlFile->GetMedia() == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "MEDIA_NOT_AVAILABLE", "Sequence media is not available.", requestId), "", 404, true);
+            }
+
+            auto* media = CurrentSeqXmlFile->GetMedia();
+            long sampleRate = media->GetRate();
+            long sampleCount = media->GetTrackSize();
+            int channels = media->GetChannels();
+            int durationMs = sampleRate > 0 ? static_cast<int>((sampleCount * 1000L) / sampleRate) : 0;
+
+            nlohmann::json data;
+            data["durationMs"] = durationMs;
+            data["sampleRate"] = sampleRate;
+            data["channels"] = channels;
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
         } else if (cmd == "timing.listAnalysisPlugins") {
             std::string analysisUrl = ReadParamStringOrEnv(params, "analysisUrl", "XLIGHTS_ANALYSIS_URL");
