@@ -1058,6 +1058,7 @@ static bool ParseXlDoAutomationBody(const std::string& body,
 #include "api/EffectsV2Api.inl"
 #include "api/TimingAnalysisV2Api.inl"
 #include "api/LegacySequenceCoreApi.inl"
+#include "api/LegacyExportPackagingApi.inl"
 
 bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                                      std::map<std::string, std::string> &params,
@@ -1168,6 +1169,23 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
     }
 
     if (auto handled = automation::api::HandleLegacySequenceCoreCommand(this, _sequenceElements, _promptBatchRenderIssues, _renderMode, xlightsFilename, cmd, paths, params, sendResponse)) {
+        return *handled;
+    } else if (auto handled = automation::api::HandleLegacyExportPackagingCommand(
+                   AllModels,
+                   _outputModelManager,
+                   _lowDefinitionRender,
+                   CurrentDir,
+                   CurrentSeqXmlFile,
+                   [&](const wxString& filename) { ExportModels(filename); },
+                   [&](const std::string& model, const std::string& filename, const std::string& format, bool doRender) {
+                       return DoExportModel(0, 0, model, filename, format, doRender);
+                   },
+                   [&]() { return PackageSequence(false); },
+                   [&]() { return PackageDebugFiles(false); },
+                   [&](const wxString& filename) { return ExportVideoPreview(filename); },
+                   cmd,
+                   params,
+                   sendResponse)) {
         return *handled;
     } else if (cmd == "saveLayout") {
         if (!layoutPanel->SaveEffects()) {
@@ -1503,126 +1521,6 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
 
         return "{\"res\":200,\"msg\":\"Proxy opened.\"}";
 
-    } else if (cmd == "exportModelsCSV") {
-        auto filename = params["filename"];
-        if (filename == "" || filename == "null") {
-            wxFileName f;
-            f.AssignTempFileName("Models_");
-            filename = f.GetFullPath();
-        }
-
-        ExportModels(filename);
-
-        std::string response = wxString::Format("{\"msg\":\"Models Exported.\",\"output\":\"%s\"}", JSONSafe(filename));
-        return sendResponse(response, "", 200, true);
-    } else if (cmd == "exportModel") {
-        if (CurrentSeqXmlFile == nullptr) {
-            return sendResponse("Sequence not open.", "msg", 503, false);
-        }
-
-        auto model = params["model"];
-        if (AllModels.GetModel(model) == nullptr) {
-            return sendResponse("Unknown model.", "msg", 503, false);
-        }
-
-        auto filename = params["filename"];
-        auto format = params["format"];
-
-        if (format == "lsp") {
-            format = "LSP";
-        } else if (format == "lorclipboard") {
-            format = "Lcb";
-        } else if (format == "lorclipboards5") {
-            format = "LcbS5";
-        } else if (format == "vixenroutine") {
-            format = "Vir";
-        } else if (format == "hls") {
-            format = "HLS";
-        } else if (format == "eseq") {
-            format = "FPP";
-        } else if (format == "eseqcompressed") {
-            format = "FPPCompressed";
-        } else if (format == "avicompressed" || format == "mp4compressed") {
-            format = "Com";
-        } else if (format == "aviuncompressed" || format == "mp4uncompressed") {
-            format = "Unc";
-        } else if (format == "minleon") {
-            format = "Min";
-        } else if (format == "gif") {
-            format = "GIF";
-        } else {
-            return sendResponse("Unknown format.", "msg", 503, false);
-        }
-
-        if (DoExportModel(0, 0, model, filename, format, false)) {
-            return sendResponse("Model exported.", "msg", 200, false);
-        } else {
-            return sendResponse("Failed to export.", "msg", 503, false);
-        }
-    } else if (cmd == "exportModelWithRender") {
-        if (CurrentSeqXmlFile == nullptr) {
-            return sendResponse("Sequence not open.", "msg", 503, false);
-        }
-
-        auto ld = _lowDefinitionRender;
-        auto highdef = params["highdef"];
-        auto model = params["model"];
-
-        if (AllModels.GetModel(model) == nullptr) {
-            return sendResponse("Unknown model.", "msg", 503, false);
-        }
-
-        if (highdef == "true" && _lowDefinitionRender) {
-            // override definition
-            _lowDefinitionRender = false;
-            _outputModelManager.AddImmediateWork(OutputModelManager::WORK_RELOAD_ALLMODELS, "Automation::exportModelWithRender");
-            _outputModelManager.AddImmediateWork(OutputModelManager::WORK_MODELS_CHANGE_REQUIRING_RERENDER, "Automation::exportModelWithRender");
-        }
-
-        auto filename = params["filename"];
-        auto format = params["format"];
-
-        if (format == "lsp") {
-            format = "LSP";
-        } else if (format == "lorclipboard") {
-            format = "Lcb";
-        } else if (format == "lorclipboards5") {
-            format = "LcbS5";
-        } else if (format == "vixenroutine") {
-            format = "Vir";
-        } else if (format == "hls") {
-            format = "HLS";
-        } else if (format == "eseq") {
-            format = "FPP";
-        } else if (format == "eseqcompressed") {
-            format = "FPPCompressed";
-        } else if (format == "avicompressed" || format == "mp4compressed") {
-            format = "Com";
-        } else if (format == "aviuncompressed" || format == "mp4uncompressed") {
-            format = "Unc";
-        } else if (format == "minleon") {
-            format = "Min";
-        } else if (format == "gif") {
-            format = "GIF";
-        } else {
-            return sendResponse("Unknown format.", "msg", 503, false);
-        }
-
-        if (DoExportModel(0, 0, model, filename, format, true)) {
-            if (ld != _lowDefinitionRender) {
-                _lowDefinitionRender = ld;
-                _outputModelManager.AddImmediateWork(OutputModelManager::WORK_RELOAD_ALLMODELS, "Automation::exportModelWithRender");  // Restore the models back to prior
-                _outputModelManager.AddImmediateWork(OutputModelManager::WORK_MODELS_CHANGE_REQUIRING_RERENDER, "Automation::exportModelWithRender");
-            }
-            return sendResponse("Model exported.", "msg", 200, false);
-        } else {
-            if (ld != _lowDefinitionRender) {
-                _lowDefinitionRender = ld;
-                _outputModelManager.AddImmediateWork(OutputModelManager::WORK_RELOAD_MODEL_FROM_XML, "Automation::exportModelWithRender");
-                _outputModelManager.AddImmediateWork(OutputModelManager::WORK_MODELS_CHANGE_REQUIRING_RERENDER, "Automation::exportModelWithRender");
-            }
-            return sendResponse("Failed to export.", "msg", 503, false);
-        }
     } else if (cmd == "closexLights") {
         auto force = ReadBool(params["force"]);
         if (CurrentSeqXmlFile != nullptr && mSavedChangeCount != _sequenceElements.GetChangeCount()) {
@@ -1709,33 +1607,6 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
         _outputModelManager.AddLayoutTabWork(OutputModelManager::WORK_CALCULATE_START_CHANNELS, "Automation:ADDETHERNET");
         return sendResponse("Added Ethernet Controller", "msg", 200, false);
     
-    } else if (cmd == "packageSequence") {
-        if (CurrentSeqXmlFile == nullptr) {
-            return sendResponse("Sequence not open.", "msg", 503, false);
-        }
-        auto const filename = PackageSequence(false);
-        std::string response = wxString::Format("{\"msg\":\"Sequence Packaged.\",\"output\":\"%s\"}", JSONSafe(filename));
-        return sendResponse(response, "", 200, true);
-    } else if (cmd == "packageLogFiles") {
-        auto const filename = PackageDebugFiles(false);
-        std::string response = wxString::Format("{\"msg\":\"Log Files Packaged.\",\"output\":\"%s\"}", JSONSafe(filename));
-        return sendResponse(response, "", 200, true);
-
-    } else if (cmd == "exportVideoPreview") {
-        if (CurrentSeqXmlFile == nullptr) {
-            return sendResponse("Sequence not open.", "msg", 503, false);
-        }
-
-        auto filename = params["filename"];
-        if (filename == "" || filename == "null") {
-            filename = CurrentDir + wxFileName::GetPathSeparator() + CurrentSeqXmlFile->GetName() + ".mp4";
-        }
-        auto const worked = ExportVideoPreview(filename);
-        if (worked) {
-            std::string response = wxString::Format("{\"msg\":\"Export Video Preview.\",\"output\":\"%s\"}", JSONSafe(filename));
-            return sendResponse(response, "", 200, true);
-        }        
-        return sendResponse("Export Video Preview Failed", "msg", 503, true);
     } else if (cmd == "runScript") {
         auto filename = params["filename"];
         if (filename.empty() || filename == "null" || !FileExists(filename)) {
