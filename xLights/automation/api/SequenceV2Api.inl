@@ -40,15 +40,15 @@ static std::optional<bool> HandleSequenceV2Command(
         bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
 
         if (file.empty() || file == "null") {
-            return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "file is required.", requestId), "", 422, true);
+            return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "file is required.", requestId, {{"param", "file"}}), "", 422, true);
         }
         std::string seq = frame->FindSequence(file);
         if (seq.empty()) {
-            return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_FOUND", "Sequence not found.", requestId), "", 404, true);
+            return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_FOUND", "Sequence not found.", requestId, {{"file", file}}), "", 404, true);
         }
 
         if (frame->CurrentSeqXmlFile != nullptr && !force) {
-            return sendResponse(BuildV2ErrorResponse(409, cmd, "SEQUENCE_ALREADY_OPEN", "A sequence is already open.", requestId), "", 409, true);
+            return sendResponse(BuildV2ErrorResponse(409, cmd, "SEQUENCE_ALREADY_OPEN", "A sequence is already open.", requestId, {{"force", false}}), "", 409, true);
         }
 
         if (dryRun) {
@@ -64,7 +64,7 @@ static std::optional<bool> HandleSequenceV2Command(
                 if (force) {
                     frame->mSavedChangeCount = sequenceElements.GetChangeCount();
                 } else {
-                    return sendResponse(BuildV2ErrorResponse(409, cmd, "UNSAVED_CHANGES", "Current sequence has unsaved changes.", requestId), "", 409, true);
+                    return sendResponse(BuildV2ErrorResponse(409, cmd, "UNSAVED_CHANGES", "Current sequence has unsaved changes.", requestId, {{"force", false}}), "", 409, true);
                 }
             }
             frame->AskCloseSequence();
@@ -81,7 +81,8 @@ static std::optional<bool> HandleSequenceV2Command(
         frame->_renderMode = oldRenderMode;
 
         if (frame->CurrentSeqXmlFile == nullptr) {
-            return sendResponse(BuildV2ErrorResponse(503, cmd, "OPEN_FAILED", "Failed to open sequence.", requestId), "", 503, true);
+            return sendResponse(BuildV2ErrorResponse(503, cmd, "OPEN_FAILED", "Failed to open sequence.", requestId,
+                                                    {{"file", seq}, {"promptIssues", promptIssues}, {"nonInteractive", !promptIssues}}), "", 503, true);
         }
         return sendResponse(BuildV2SuccessResponse(200, cmd, BuildV2SequenceData(frame->CurrentSeqXmlFile), requestId), "", 200, true);
     }
@@ -152,7 +153,7 @@ static std::optional<bool> HandleSequenceV2Command(
 
     if (cmd == "sequence.save") {
         if (frame->CurrentSeqXmlFile == nullptr) {
-            return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId, {{"operation", "save"}}), "", 404, true);
         }
         std::string file = ReadParamString(params, "file");
         bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
@@ -176,7 +177,8 @@ static std::optional<bool> HandleSequenceV2Command(
         }
 
         if (file.empty() && frame->xlightsFilename.IsEmpty()) {
-            return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "Saving unnamed sequence requires file.", requestId), "", 422, true);
+            return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "Saving unnamed sequence requires file.", requestId,
+                                                    {{"param", "file"}, {"hasSequenceName", false}}), "", 422, true);
         }
 
         auto oldRenderMode = frame->_renderMode;

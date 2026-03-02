@@ -177,11 +177,44 @@ inline bool ReadBool(const std::string &v) {
 }
 
 // V2 response envelope builders.
+static std::string InferV2ErrorClass(const std::string& code) {
+    if (code == "VALIDATION_ERROR" || code == "BAD_REQUEST" || code == "UNSUPPORTED_API_VERSION" ||
+        code == "UNKNOWN_COMMAND" || code == "UNSUPPORTED_PROVIDER") {
+        return "client_input";
+    }
+    if (code == "SEQUENCE_NOT_FOUND" || code == "SEQUENCE_NOT_OPEN" || code == "TRACK_NOT_FOUND" ||
+        code == "EFFECT_NOT_FOUND" || code == "DISPLAY_ELEMENT_NOT_FOUND" || code == "JOB_NOT_FOUND") {
+        return "resource_state";
+    }
+    if (code == "REVISION_CONFLICT" || code == "TRACK_ALREADY_EXISTS" || code == "SEQUENCE_ALREADY_OPEN" ||
+        code == "UNSAVED_CHANGES" || code == "TRANSACTION_APPLY_FAILED" || code == "TRANSACTION_SEQUENCE_CHANGED") {
+        return "conflict";
+    }
+    if (code == "REMOTE_ANALYSIS_FAILED" || code == "MEDIA_NOT_AVAILABLE" || code == "OPEN_FAILED" || code == "CREATE_FAILED") {
+        return "operation_failure";
+    }
+    if (code == "INTERNAL_ERROR") {
+        return "internal";
+    }
+    return "unknown";
+}
+
+static bool InferV2ErrorRetryable(const std::string& code) {
+    if (code == "INTERNAL_ERROR" || code == "REMOTE_ANALYSIS_FAILED" || code == "OPEN_FAILED") {
+        return true;
+    }
+    if (code == "TRANSACTION_APPLY_FAILED" || code == "REVISION_CONFLICT" || code == "UNSAVED_CHANGES") {
+        return true;
+    }
+    return false;
+}
+
 static std::string BuildV2ErrorResponse(int responseCode,
                                         const std::string& cmd,
                                         const std::string& code,
                                         const std::string& message,
-                                        const std::string& requestId = "") {
+                                        const std::string& requestId = "",
+                                        const nlohmann::json& details = nlohmann::json()) {
     nlohmann::json response;
     response["res"] = responseCode;
     response["apiVersion"] = 2;
@@ -189,7 +222,15 @@ static std::string BuildV2ErrorResponse(int responseCode,
     if (!requestId.empty()) {
         response["requestId"] = requestId;
     }
-    response["error"] = { {"code", code}, {"message", message} };
+    response["error"] = {
+        {"code", code},
+        {"message", message},
+        {"class", InferV2ErrorClass(code)},
+        {"retryable", InferV2ErrorRetryable(code)}
+    };
+    if (!details.is_null() && !details.empty()) {
+        response["error"]["details"] = details;
+    }
     return response.dump();
 }
 

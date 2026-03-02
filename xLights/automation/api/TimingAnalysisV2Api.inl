@@ -38,7 +38,8 @@ static std::optional<bool> HandleTimingAnalysisV2Command(
             return *response;
         }
         if (!frame->CurrentSeqXmlFile->HasAudioMedia() || frame->CurrentSeqXmlFile->GetMedia() == nullptr) {
-            return sendResponse(BuildV2ErrorResponse(404, cmd, "MEDIA_NOT_AVAILABLE", "Sequence media is not available.", requestId), "", 404, true);
+            return sendResponse(BuildV2ErrorResponse(404, cmd, "MEDIA_NOT_AVAILABLE", "Sequence media is not available.", requestId,
+                                                    {{"analysisProvider", "remote"}}), "", 404, true);
         }
         std::string trackName = ReadParamString(params, "trackName");
         std::string mediaFile = ReadParamString(params, "mediaFile");
@@ -63,10 +64,12 @@ static std::optional<bool> HandleTimingAnalysisV2Command(
         }
 
         if (analysisProvider != "remote") {
-            return sendResponse(BuildV2ErrorResponse(422, cmd, "UNSUPPORTED_PROVIDER", "analysisProvider must be 'remote'.", requestId), "", 422, true);
+            return sendResponse(BuildV2ErrorResponse(422, cmd, "UNSUPPORTED_PROVIDER", "analysisProvider must be 'remote'.", requestId,
+                                                    {{"analysisProvider", analysisProvider}}), "", 422, true);
         }
         if (analysisUrl.empty()) {
-            return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "analysisUrl (or XLIGHTS_ANALYSIS_URL) is required for analysisProvider=remote.", requestId), "", 422, true);
+            return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "analysisUrl (or XLIGHTS_ANALYSIS_URL) is required for analysisProvider=remote.", requestId,
+                                                    {{"analysisProvider", "remote"}}), "", 422, true);
         }
 
         nlohmann::json remoteRequest;
@@ -95,14 +98,16 @@ static std::optional<bool> HandleTimingAnalysisV2Command(
                                                  {},
                                                  &remoteStatus);
         if (remoteText.empty()) {
-            return sendResponse(BuildV2ErrorResponse(502, cmd, "REMOTE_ANALYSIS_FAILED", "Remote analysis returned an empty response.", requestId), "", 502, true);
+            return sendResponse(BuildV2ErrorResponse(502, cmd, "REMOTE_ANALYSIS_FAILED", "Remote analysis returned an empty response.", requestId,
+                                                    {{"analysisUrl", analysisUrl}, {"httpStatus", remoteStatus}}), "", 502, true);
         }
 
         nlohmann::json remoteJson;
         try {
             remoteJson = nlohmann::json::parse(remoteText);
         } catch (const std::exception&) {
-            return sendResponse(BuildV2ErrorResponse(502, cmd, "REMOTE_ANALYSIS_FAILED", "Remote analysis returned invalid JSON.", requestId), "", 502, true);
+            return sendResponse(BuildV2ErrorResponse(502, cmd, "REMOTE_ANALYSIS_FAILED", "Remote analysis returned invalid JSON.", requestId,
+                                                    {{"analysisUrl", analysisUrl}, {"httpStatus", remoteStatus}}), "", 502, true);
         }
 
         if (remoteJson.contains("error")) {
@@ -116,14 +121,16 @@ static std::optional<bool> HandleTimingAnalysisV2Command(
             } else if (remoteStatus >= 400) {
                 status = remoteStatus;
             }
-            return sendResponse(BuildV2ErrorResponse(status, cmd, "REMOTE_ANALYSIS_FAILED", message, requestId), "", status, true);
+            return sendResponse(BuildV2ErrorResponse(status, cmd, "REMOTE_ANALYSIS_FAILED", message, requestId,
+                                                    {{"analysisUrl", analysisUrl}, {"httpStatus", remoteStatus}}), "", status, true);
         }
 
         std::vector<int> starts;
         std::vector<int> ends;
         std::vector<std::string> labels;
         if (!ParseRemoteSections(remoteJson, starts, ends, labels)) {
-            return sendResponse(BuildV2ErrorResponse(502, cmd, "REMOTE_ANALYSIS_FAILED", "Remote analysis did not return timing sections.", requestId), "", 502, true);
+            return sendResponse(BuildV2ErrorResponse(502, cmd, "REMOTE_ANALYSIS_FAILED", "Remote analysis did not return timing sections.", requestId,
+                                                    {{"analysisUrl", analysisUrl}, {"httpStatus", remoteStatus}}), "", 502, true);
         }
 
         if (!dryRun) {
