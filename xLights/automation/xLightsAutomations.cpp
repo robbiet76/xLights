@@ -1054,6 +1054,7 @@ static bool ParseXlDoAutomationBody(const std::string& body,
 #include "api/LayoutV2Api.inl"
 #include "api/MediaV2Api.inl"
 #include "api/TimingV2Api.inl"
+#include "api/SequencerV2Api.inl"
 
 bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                                      std::map<std::string, std::string> &params,
@@ -1138,6 +1139,9 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 collectFromElement(_sequenceElements.GetElement(i, MASTER_VIEW));
             }
         };
+        auto refreshEffectGrid = [&]() {
+            RefreshEffectGridIfPresent(mainSequencer);
+        };
 
         if (auto handled = automation::api::HandleSystemV2Command(cmd, params, requestId, sendResponse)) {
             return *handled;
@@ -1149,97 +1153,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             return *handled;
         } else if (auto handled = automation::api::HandleTimingV2Command(this, _sequenceElements, requireOpenSequence, normalizeRangeOrError, cmd, params, requestId, sendResponse)) {
             return *handled;
-        } else if (cmd == "sequencer.getDisplayElementOrder") {
-            if (auto response = requireOpenSequence()) {
-                return *response;
-            }
-            nlohmann::json data;
-            data["elements"] = BuildDisplayElementOrderData(_sequenceElements);
-            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
-        } else if (cmd == "sequencer.setDisplayElementOrder") {
-            if (auto response = requireOpenSequence()) {
-                return *response;
-            }
-            bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
-            std::vector<std::string> orderedIds = ReadParamArray(params, "orderedIds");
-            if (orderedIds.empty()) {
-                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "orderedIds is required.", requestId), "", 422, true);
-            }
-
-            size_t elementCount = _sequenceElements.GetElementCount(MASTER_VIEW);
-            if (orderedIds.size() != elementCount) {
-                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "orderedIds must include all display elements.", requestId), "", 422, true);
-            }
-
-            std::vector<std::string> currentOrder;
-            currentOrder.reserve(elementCount);
-            std::map<std::string, int> indexById;
-            for (size_t i = 0; i < elementCount; i++) {
-                Element* element = _sequenceElements.GetElement(i, MASTER_VIEW);
-                if (element == nullptr) {
-                    continue;
-                }
-                currentOrder.push_back(element->GetName());
-                indexById[element->GetName()] = static_cast<int>(i);
-            }
-
-            std::set<std::string> seenIds;
-            for (const auto& id : orderedIds) {
-                if (indexById.find(id) == indexById.end()) {
-                    return sendResponse(BuildV2ErrorResponse(404, cmd, "DISPLAY_ELEMENT_NOT_FOUND", "Display element not found: '" + id + "'.", requestId), "", 404, true);
-                }
-                if (!seenIds.insert(id).second) {
-                    return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "orderedIds contains duplicates.", requestId), "", 422, true);
-                }
-            }
-
-            if (!dryRun) {
-                for (size_t targetIndex = 0; targetIndex < orderedIds.size(); targetIndex++) {
-                    const std::string& desiredId = orderedIds[targetIndex];
-                    int foundIndex = -1;
-                    for (size_t i = targetIndex; i < currentOrder.size(); i++) {
-                        if (currentOrder[i] == desiredId) {
-                            foundIndex = static_cast<int>(i);
-                            break;
-                        }
-                    }
-                    if (foundIndex == -1) {
-                        return sendResponse(BuildV2ErrorResponse(500, cmd, "INTERNAL_ERROR", "Unable to apply display element ordering.", requestId), "", 500, true);
-                    }
-                    if (foundIndex != static_cast<int>(targetIndex)) {
-                        _sequenceElements.MoveSequenceElement(foundIndex, static_cast<int>(targetIndex), MASTER_VIEW);
-                        std::string moved = currentOrder[foundIndex];
-                        currentOrder.erase(currentOrder.begin() + foundIndex);
-                        currentOrder.insert(currentOrder.begin() + static_cast<int>(targetIndex), moved);
-                    }
-                }
-                _sequenceElements.PopulateRowInformation();
-                _sequenceElements.PopulateVisibleRowInformation();
-                RefreshEffectGridIfPresent(mainSequencer);
-            }
-
-            nlohmann::json warnings = BuildDryRunWarnings(dryRun);
-
-            nlohmann::json data;
-            data["updated"] = true;
-            data["elementCount"] = static_cast<int>(elementCount);
-            if (dryRun) {
-                nlohmann::json projected = nlohmann::json::array();
-                for (size_t i = 0; i < orderedIds.size(); i++) {
-                    const std::string& id = orderedIds[i];
-                    Element* element = _sequenceElements.GetElement(id);
-                    projected.push_back({
-                        {"id", id},
-                        {"name", id},
-                        {"type", GetElementTypeName(element)},
-                        {"orderIndex", static_cast<int>(i)}
-                    });
-                }
-                data["elements"] = projected;
-            } else {
-                data["elements"] = BuildDisplayElementOrderData(_sequenceElements);
-            }
-            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
+        } else if (auto handled = automation::api::HandleSequencerV2Command(_sequenceElements, requireOpenSequence, refreshEffectGrid, cmd, params, requestId, sendResponse)) {
+            return *handled;
         } else if (cmd == "effects.list") {
             if (auto response = requireOpenSequence()) {
                 return *response;
