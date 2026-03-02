@@ -38,6 +38,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <set>
 
 std::string xLightsFrame::FindSequence(const std::string& seq)
 {
@@ -149,6 +150,10 @@ static const std::vector<std::string>& GetV2Commands() {
         "timing.createTrack",
         "timing.renameTrack",
         "timing.deleteTrack",
+        "timing.getMarks",
+        "timing.insertMarks",
+        "timing.replaceMarks",
+        "timing.deleteMarks",
         "timing.listAnalysisPlugins",
         "timing.createFromAudio",
         "timing.getTrackSummary",
@@ -213,6 +218,93 @@ static std::vector<std::string> ReadParamArray(const std::map<std::string, std::
         values.push_back(it->second);
     }
     return values;
+}
+
+struct TimingMarkPayload {
+    int startMs = 0;
+    int endMs = 0;
+    std::string label;
+};
+
+static bool ParseTimingMarkArray(const std::map<std::string, std::string>& params,
+                                 const std::string& key,
+                                 std::vector<TimingMarkPayload>& marks,
+                                 std::string& errorMessage) {
+    marks.clear();
+    errorMessage.clear();
+
+    bool foundAny = false;
+    for (int i = 0;; i++) {
+        std::string prefix = key + "_" + std::to_string(i) + "_";
+        auto itStart = params.find(prefix + "startMs");
+        auto itEnd = params.find(prefix + "endMs");
+        auto itLabel = params.find(prefix + "label");
+
+        if (itStart == params.end() && itEnd == params.end() && itLabel == params.end()) {
+            break;
+        }
+
+        foundAny = true;
+        if (itStart == params.end()) {
+            errorMessage = "Each mark requires startMs.";
+            return false;
+        }
+
+        TimingMarkPayload mark;
+        mark.startMs = wxAtoi(itStart->second);
+        mark.endMs = (itEnd == params.end() || itEnd->second.empty() || itEnd->second == "null") ? -1 : wxAtoi(itEnd->second);
+        mark.label = (itLabel == params.end() || itLabel->second == "null") ? "" : itLabel->second;
+
+        if (mark.startMs < 0) {
+            errorMessage = "mark.startMs must be >= 0.";
+            return false;
+        }
+        if (mark.endMs != -1 && mark.endMs <= mark.startMs) {
+            errorMessage = "mark.endMs must be greater than startMs.";
+            return false;
+        }
+        marks.push_back(mark);
+    }
+
+    if (!foundAny) {
+        errorMessage = "marks array is required.";
+        return false;
+    }
+    return true;
+}
+
+static void NormalizeTimingMarks(std::vector<TimingMarkPayload>& marks, int fallbackEndMs, int frameMs) {
+    int safeFrameMs = std::max(1, frameMs);
+    for (size_t i = 0; i < marks.size(); i++) {
+        if (marks[i].endMs != -1) {
+            continue;
+        }
+        int derivedEnd = fallbackEndMs;
+        if (i + 1 < marks.size() && marks[i + 1].startMs > marks[i].startMs) {
+            derivedEnd = marks[i + 1].startMs;
+        } else {
+            derivedEnd = std::min(fallbackEndMs, marks[i].startMs + safeFrameMs);
+        }
+        marks[i].endMs = std::max(marks[i].startMs + 1, derivedEnd);
+    }
+}
+
+static bool ValidateOrderedNonOverlapping(const std::vector<TimingMarkPayload>& marks, std::string& errorMessage) {
+    if (marks.empty()) {
+        errorMessage = "marks array must contain at least one mark.";
+        return false;
+    }
+    for (size_t i = 1; i < marks.size(); i++) {
+        if (marks[i].startMs < marks[i - 1].startMs) {
+            errorMessage = "marks must be ordered by startMs.";
+            return false;
+        }
+        if (marks[i].startMs < marks[i - 1].endMs) {
+            errorMessage = "marks must not overlap.";
+            return false;
+        }
+    }
+    return true;
 }
 
 static std::string ReadParamStringOrEnv(const std::map<std::string, std::string>& params,
@@ -396,6 +488,18 @@ static bool ParseXlDoAutomationBody(const std::string& body,
                 for (auto [name, value] : val["params"].items()) {
                     if (value.is_array()) {
                         for (size_t i = 0; i < value.size(); i++) {
+                            if (value[i].is_object()) {
+                                for (auto [childName, childValue] : value[i].items()) {
+                                    std::string scalar;
+                                    if (!ReadScalarParam(childValue, scalar)) {
+                                        errorStatus = 400;
+                                        errorBody = BuildV2ErrorResponse(400, paths[0], "BAD_REQUEST", "params object-array values must be string, number, or boolean.");
+                                        return false;
+                                    }
+                                    paramMap[name + "_" + std::to_string(i) + "_" + childName] = scalar;
+                                }
+                                continue;
+                            }
                             std::string scalar;
                             if (!ReadScalarParam(value[i], scalar)) {
                                 errorStatus = 400;
@@ -936,6 +1040,240 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             }
             nlohmann::json data;
             data["deleted"] = true;
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
+        } else if (cmd == "timing.getMarks") {
+            if (CurrentSeqXmlFile == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            }
+            std::string trackName = ReadParamString(params, "trackName");
+            if (trackName.empty() || trackName == "null") {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "trackName is required.", requestId), "", 422, true);
+            }
+
+            TimingElement* track = _sequenceElements.GetTimingElement(trackName);
+            if (track == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "TRACK_NOT_FOUND", "Timing track not found: '" + trackName + "'.", requestId), "", 404, true);
+            }
+
+            int startMs = ReadParamInt(params, "startMs", -1);
+            int endMs = ReadParamInt(params, "endMs", -1);
+            if (startMs < 0) {
+                startMs = 0;
+            }
+            if (endMs < 0) {
+                endMs = CurrentSeqXmlFile->GetSequenceDurationMS();
+            }
+            if (endMs < startMs) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "endMs must be >= startMs.", requestId), "", 422, true);
+            }
+
+            nlohmann::json marks = nlohmann::json::array();
+            auto* layer0 = track->GetEffectLayer(0);
+            if (layer0 != nullptr) {
+                auto effects = layer0->GetAllEffects();
+                for (auto* effect : effects) {
+                    if (effect->GetEndTimeMS() <= startMs || effect->GetStartTimeMS() >= endMs) {
+                        continue;
+                    }
+                    marks.push_back({
+                        {"startMs", effect->GetStartTimeMS()},
+                        {"endMs", effect->GetEndTimeMS()},
+                        {"label", effect->GetEffectName()}
+                    });
+                }
+            }
+
+            nlohmann::json data;
+            data["trackName"] = trackName;
+            data["marks"] = marks;
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+        } else if (cmd == "timing.insertMarks") {
+            if (CurrentSeqXmlFile == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            }
+            std::string trackName = ReadParamString(params, "trackName");
+            bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
+            if (trackName.empty() || trackName == "null") {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "trackName is required.", requestId), "", 422, true);
+            }
+
+            TimingElement* track = _sequenceElements.GetTimingElement(trackName);
+            if (track == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "TRACK_NOT_FOUND", "Timing track not found: '" + trackName + "'.", requestId), "", 404, true);
+            }
+
+            std::vector<TimingMarkPayload> marks;
+            std::string marksError;
+            if (!ParseTimingMarkArray(params, "marks", marks, marksError)) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", marksError, requestId), "", 422, true);
+            }
+            NormalizeTimingMarks(marks, CurrentSeqXmlFile->GetSequenceDurationMS(), CurrentSeqXmlFile->GetFrameMS());
+            if (!ValidateOrderedNonOverlapping(marks, marksError)) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", marksError, requestId), "", 422, true);
+            }
+            int sequenceEndMs = CurrentSeqXmlFile->GetSequenceDurationMS();
+            for (const auto& mark : marks) {
+                if (mark.startMs >= sequenceEndMs || mark.endMs > sequenceEndMs) {
+                    return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "marks must be within sequence duration.", requestId), "", 422, true);
+                }
+            }
+
+            auto* layer0 = track->GetEffectLayer(0);
+            if (layer0 == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(500, cmd, "INTERNAL_ERROR", "Timing track has no primary layer.", requestId), "", 500, true);
+            }
+
+            auto existing = layer0->GetAllEffects();
+            for (const auto& mark : marks) {
+                for (auto* effect : existing) {
+                    if (mark.startMs < effect->GetEndTimeMS() && mark.endMs > effect->GetStartTimeMS()) {
+                        return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "Inserted marks overlap existing marks.", requestId), "", 422, true);
+                    }
+                }
+            }
+
+            if (!dryRun) {
+                for (const auto& mark : marks) {
+                    layer0->AddEffect(0, mark.label, "", "", mark.startMs, mark.endMs, EFFECT_NOT_SELECTED, false);
+                }
+            }
+
+            nlohmann::json warnings = nlohmann::json::array();
+            if (dryRun) {
+                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
+            }
+            nlohmann::json data;
+            data["trackName"] = trackName;
+            data["insertedCount"] = static_cast<int>(marks.size());
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
+        } else if (cmd == "timing.replaceMarks") {
+            if (CurrentSeqXmlFile == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            }
+            std::string trackName = ReadParamString(params, "trackName");
+            bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
+            if (trackName.empty() || trackName == "null") {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "trackName is required.", requestId), "", 422, true);
+            }
+
+            TimingElement* track = _sequenceElements.GetTimingElement(trackName);
+            if (track == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "TRACK_NOT_FOUND", "Timing track not found: '" + trackName + "'.", requestId), "", 404, true);
+            }
+
+            std::vector<TimingMarkPayload> marks;
+            std::string marksError;
+            if (!ParseTimingMarkArray(params, "marks", marks, marksError)) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", marksError, requestId), "", 422, true);
+            }
+            NormalizeTimingMarks(marks, CurrentSeqXmlFile->GetSequenceDurationMS(), CurrentSeqXmlFile->GetFrameMS());
+            if (!ValidateOrderedNonOverlapping(marks, marksError)) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", marksError, requestId), "", 422, true);
+            }
+            int sequenceEndMs = CurrentSeqXmlFile->GetSequenceDurationMS();
+            for (const auto& mark : marks) {
+                if (mark.startMs >= sequenceEndMs || mark.endMs > sequenceEndMs) {
+                    return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "marks must be within sequence duration.", requestId), "", 422, true);
+                }
+            }
+
+            auto* layer0 = track->GetEffectLayer(0);
+            if (layer0 == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(500, cmd, "INTERNAL_ERROR", "Timing track has no primary layer.", requestId), "", 500, true);
+            }
+
+            if (!dryRun) {
+                while (layer0->GetEffectCount() > 0) {
+                    layer0->DeleteEffectByIndex(layer0->GetEffectCount() - 1);
+                }
+                for (const auto& mark : marks) {
+                    layer0->AddEffect(0, mark.label, "", "", mark.startMs, mark.endMs, EFFECT_NOT_SELECTED, false);
+                }
+            }
+
+            nlohmann::json warnings = nlohmann::json::array();
+            if (dryRun) {
+                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
+            }
+            nlohmann::json data;
+            data["trackName"] = trackName;
+            data["replacedCount"] = static_cast<int>(marks.size());
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
+        } else if (cmd == "timing.deleteMarks") {
+            if (CurrentSeqXmlFile == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            }
+            std::string trackName = ReadParamString(params, "trackName");
+            bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
+            if (trackName.empty() || trackName == "null") {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "trackName is required.", requestId), "", 422, true);
+            }
+
+            TimingElement* track = _sequenceElements.GetTimingElement(trackName);
+            if (track == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "TRACK_NOT_FOUND", "Timing track not found: '" + trackName + "'.", requestId), "", 404, true);
+            }
+            auto* layer0 = track->GetEffectLayer(0);
+            if (layer0 == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(500, cmd, "INTERNAL_ERROR", "Timing track has no primary layer.", requestId), "", 500, true);
+            }
+
+            std::vector<std::string> markIndexesStr = ReadParamArray(params, "markIndexes");
+            int startMs = ReadParamInt(params, "startMs", -1);
+            int endMs = ReadParamInt(params, "endMs", -1);
+            bool hasIndexFilter = !markIndexesStr.empty();
+            bool hasRangeFilter = (startMs >= 0 || endMs >= 0);
+            if (!hasIndexFilter && !hasRangeFilter) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "Provide markIndexes[] or startMs/endMs filter.", requestId), "", 422, true);
+            }
+            if (startMs < 0) {
+                startMs = 0;
+            }
+            if (endMs < 0) {
+                endMs = CurrentSeqXmlFile->GetSequenceDurationMS();
+            }
+            if (endMs < startMs) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "endMs must be >= startMs.", requestId), "", 422, true);
+            }
+
+            std::set<int> indexTargets;
+            auto effects = layer0->GetAllEffects();
+            int idx = 0;
+            for (auto* effect : effects) {
+                bool match = false;
+                if (hasRangeFilter && !(effect->GetEndTimeMS() <= startMs || effect->GetStartTimeMS() >= endMs)) {
+                    match = true;
+                }
+                if (hasIndexFilter) {
+                    for (const auto& s : markIndexesStr) {
+                        if (wxAtoi(s) == idx) {
+                            match = true;
+                            break;
+                        }
+                    }
+                }
+                if (match) {
+                    indexTargets.insert(idx);
+                }
+                idx++;
+            }
+
+            int deletedCount = static_cast<int>(indexTargets.size());
+            if (!dryRun) {
+                std::vector<int> ordered(indexTargets.begin(), indexTargets.end());
+                std::sort(ordered.begin(), ordered.end(), std::greater<int>());
+                for (int removeIndex : ordered) {
+                    layer0->DeleteEffectByIndex(removeIndex);
+                }
+            }
+
+            nlohmann::json warnings = nlohmann::json::array();
+            if (dryRun) {
+                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
+            }
+            nlohmann::json data;
+            data["trackName"] = trackName;
+            data["deletedCount"] = deletedCount;
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
         } else if (cmd == "timing.listAnalysisPlugins") {
             std::string analysisUrl = ReadParamStringOrEnv(params, "analysisUrl", "XLIGHTS_ANALYSIS_URL");
