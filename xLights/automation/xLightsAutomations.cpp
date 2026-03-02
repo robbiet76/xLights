@@ -1051,6 +1051,7 @@ static bool ParseXlDoAutomationBody(const std::string& body,
 
 #include "api/SystemV2Api.inl"
 #include "api/SequenceV2Api.inl"
+#include "api/LayoutV2Api.inl"
 
 bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                                      std::map<std::string, std::string> &params,
@@ -1140,57 +1141,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             return *handled;
         } else if (auto handled = automation::api::HandleSequenceV2Command(this, _sequenceElements, cmd, params, requestId, sendResponse)) {
             return *handled;
-        } else if (cmd == "layout.getModels") {
-            nlohmann::json models = nlohmann::json::array();
-            for (auto it = (&AllModels)->begin(); it != (&AllModels)->end(); ++it) {
-                models.push_back(BuildV2ModelData(it->second, AllModels));
-            }
-            nlohmann::json data;
-            data["models"] = models;
-            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
-        } else if (cmd == "layout.getModel") {
-            std::string name = ReadParamString(params, "name");
-            if (name.empty() || name == "null") {
-                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "name is required.", requestId), "", 422, true);
-            }
-            Model* model = AllModels.GetModel(name);
-            if (model == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "MODEL_NOT_FOUND", "Model not found.", requestId), "", 404, true);
-            }
-            nlohmann::json data;
-            data["model"] = BuildV2ModelData(model, AllModels);
-            data["attributes"] = nlohmann::json::parse(model->GetAttributesAsJSON(), nullptr, false);
-            if (data["attributes"].is_discarded()) {
-                data["attributes"] = nlohmann::json::object();
-            }
-            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
-        } else if (cmd == "layout.getViews") {
-            if (auto response = requireOpenSequence()) {
-                return *response;
-            }
-            nlohmann::json views = nlohmann::json::array();
-            auto allViews = GetViewsManager()->GetViews();
-            for (auto* view : allViews) {
-                nlohmann::json modelNames = nlohmann::json::array();
-                auto models = view->GetModels();
-                for (const auto& modelName : models) {
-                    modelNames.push_back(modelName);
-                }
-                views.push_back({
-                    {"name", view->GetName()},
-                    {"models", modelNames}
-                });
-            }
-            nlohmann::json data;
-            data["views"] = views;
-            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
-        } else if (cmd == "layout.getDisplayElements") {
-            if (auto response = requireOpenSequence()) {
-                return *response;
-            }
-            nlohmann::json data;
-            data["elements"] = BuildLayoutDisplayElementsData(_sequenceElements);
-            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+        } else if (auto handled = automation::api::HandleLayoutV2Command(this, AllModels, _sequenceElements, requireOpenSequence, cmd, params, requestId, sendResponse)) {
+            return *handled;
         } else if (cmd == "media.get") {
             if (auto response = requireOpenSequence()) {
                 return *response;
