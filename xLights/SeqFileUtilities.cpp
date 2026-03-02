@@ -502,13 +502,21 @@ void xLightsFrame::OpenSequence(const wxString& passed_filename, ConvertLogDialo
             if (CurrentSeqXmlFile->GetMedia() != nullptr) {
                 aborted = AbortRender();
             }
+            if (_renderMode || _checkSequenceMode) {
+                // Automation/check flows must remain non-interactive.
+                // Keep current converted defaults and avoid modal prompts.
+                logger_base.info("Skipping converted-sequence settings dialog in non-interactive mode.");
+                if (aborted) {
+                    RenderAll();
+                }
+            } else {
+                SeqSettingsDialog setting_dlg(this, CurrentSeqXmlFile, &_sequenceElements, mediaDirectories, wxT("V3 file was converted. Please check settings!"), wxEmptyString);
+                setting_dlg.Fit();
+                int ret_code = setting_dlg.ShowModal();
 
-            SeqSettingsDialog setting_dlg(this, CurrentSeqXmlFile, &_sequenceElements, mediaDirectories, wxT("V3 file was converted. Please check settings!"), wxEmptyString);
-            setting_dlg.Fit();
-            int ret_code = setting_dlg.ShowModal();
-
-            if (ret_code == NEEDS_RENDER || aborted) {
-                RenderAll();
+                if (ret_code == NEEDS_RENDER || aborted) {
+                    RenderAll();
+                }
             }
 
             if (CurrentSeqXmlFile->GetMedia() != nullptr && CurrentSeqXmlFile->GetMedia()->GetFrameInterval() < 0) {
