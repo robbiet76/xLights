@@ -145,6 +145,10 @@ static const std::vector<std::string>& GetV2Commands() {
         "media.get",
         "media.set",
         "media.getMetadata",
+        "timing.getTracks",
+        "timing.createTrack",
+        "timing.renameTrack",
+        "timing.deleteTrack",
         "timing.listAnalysisPlugins",
         "timing.createFromAudio",
         "timing.getTrackSummary",
@@ -801,6 +805,138 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             data["sampleRate"] = sampleRate;
             data["channels"] = channels;
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+        } else if (cmd == "timing.getTracks") {
+            if (CurrentSeqXmlFile == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            }
+            bool includeCounts = ReadBool(ReadParamString(params, "includeCounts", "false"));
+
+            nlohmann::json tracks = nlohmann::json::array();
+            int trackCount = _sequenceElements.GetNumberOfTimingElements();
+            for (int i = 0; i < trackCount; i++) {
+                TimingElement* track = _sequenceElements.GetTimingElement(i);
+                if (track == nullptr) {
+                    continue;
+                }
+                nlohmann::json entry;
+                entry["name"] = track->GetName();
+                entry["type"] = track->IsFixedTiming() ? "fixed" : "variable";
+                if (includeCounts) {
+                    int markCount = 0;
+                    auto* layer0 = track->GetEffectLayer(0);
+                    if (layer0 != nullptr) {
+                        markCount = layer0->GetEffectCount();
+                    }
+                    entry["markCount"] = markCount;
+                }
+                tracks.push_back(entry);
+            }
+
+            nlohmann::json data;
+            data["tracks"] = tracks;
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+        } else if (cmd == "timing.createTrack") {
+            if (CurrentSeqXmlFile == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            }
+            std::string trackName = ReadParamString(params, "trackName");
+            std::string trackType = ReadParamString(params, "trackType", "variable");
+            bool replaceIfExists = ReadBool(ReadParamString(params, "replaceIfExists", "false"));
+            bool addToAllViews = ReadBool(ReadParamString(params, "addToAllViews", "false"));
+            bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
+
+            if (trackName.empty() || trackName == "null") {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "trackName is required.", requestId), "", 422, true);
+            }
+            if (trackType.empty() || trackType == "null") {
+                trackType = "variable";
+            }
+
+            TimingElement* existingTrack = _sequenceElements.GetTimingElement(trackName);
+            if (existingTrack != nullptr && !replaceIfExists) {
+                return sendResponse(BuildV2ErrorResponse(409, cmd, "TRACK_ALREADY_EXISTS", "Timing track already exists: '" + trackName + "'.", requestId), "", 409, true);
+            }
+
+            std::string action = existingTrack == nullptr ? "created" : "updated";
+            if (!dryRun) {
+                if (existingTrack != nullptr) {
+                    _sequenceElements.DeleteElement(trackName);
+                }
+                std::string subType = trackType == "variable" ? "" : trackType;
+                CurrentSeqXmlFile->AddNewTimingSection(trackName, this, subType);
+                if (addToAllViews) {
+                    _sequenceElements.AddTimingToAllViews(trackName);
+                }
+            }
+
+            nlohmann::json warnings = nlohmann::json::array();
+            if (dryRun) {
+                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
+            }
+            nlohmann::json data;
+            data["trackName"] = trackName;
+            data["action"] = action;
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
+        } else if (cmd == "timing.renameTrack") {
+            if (CurrentSeqXmlFile == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            }
+            std::string trackName = ReadParamString(params, "trackName");
+            std::string newTrackName = ReadParamString(params, "newTrackName");
+            bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
+
+            if (trackName.empty() || trackName == "null" || newTrackName.empty() || newTrackName == "null") {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "trackName and newTrackName are required.", requestId), "", 422, true);
+            }
+
+            TimingElement* sourceTrack = _sequenceElements.GetTimingElement(trackName);
+            if (sourceTrack == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "TRACK_NOT_FOUND", "Timing track not found: '" + trackName + "'.", requestId), "", 404, true);
+            }
+            TimingElement* destTrack = _sequenceElements.GetTimingElement(newTrackName);
+            if (destTrack != nullptr && newTrackName != trackName) {
+                return sendResponse(BuildV2ErrorResponse(409, cmd, "TRACK_ALREADY_EXISTS", "Timing track already exists: '" + newTrackName + "'.", requestId), "", 409, true);
+            }
+
+            if (!dryRun && newTrackName != trackName) {
+                _sequenceElements.RenameTimingTrack(trackName, newTrackName);
+            }
+
+            nlohmann::json warnings = nlohmann::json::array();
+            if (dryRun) {
+                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
+            }
+            nlohmann::json data;
+            data["trackName"] = trackName;
+            data["newTrackName"] = newTrackName;
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
+        } else if (cmd == "timing.deleteTrack") {
+            if (CurrentSeqXmlFile == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            }
+            std::string trackName = ReadParamString(params, "trackName");
+            bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
+
+            if (trackName.empty() || trackName == "null") {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "trackName is required.", requestId), "", 422, true);
+            }
+
+            TimingElement* track = _sequenceElements.GetTimingElement(trackName);
+            if (track == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "TRACK_NOT_FOUND", "Timing track not found: '" + trackName + "'.", requestId), "", 404, true);
+            }
+
+            if (!dryRun) {
+                _sequenceElements.DeleteElement(trackName);
+            }
+
+            nlohmann::json warnings = nlohmann::json::array();
+            if (dryRun) {
+                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
+            }
+            nlohmann::json data;
+            data["deleted"] = true;
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
         } else if (cmd == "timing.listAnalysisPlugins") {
             std::string analysisUrl = ReadParamStringOrEnv(params, "analysisUrl", "XLIGHTS_ANALYSIS_URL");
             nlohmann::json warnings = nlohmann::json::array();
