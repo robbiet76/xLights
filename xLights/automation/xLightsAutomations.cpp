@@ -625,10 +625,14 @@ static nlohmann::json BuildV2ModelData(Model* model, const ModelManager& modelMa
     data["endChannel"] = static_cast<int>(model->GetLastChannel()) + 1;
     data["layoutGroup"] = model->GetLayoutGroup();
 
-    auto groups = modelManager.GetGroupsContainingModel(model);
     nlohmann::json groupNames = nlohmann::json::array();
-    for (const auto& group : groups) {
-        groupNames.push_back(group);
+    // ModelGroup::ContainsModel asserts when queried with a ModelGroup instance.
+    // Skip reverse-membership expansion for group models to keep discovery stable.
+    if (model->GetDisplayAs() != "ModelGroup") {
+        auto groups = modelManager.GetGroupsContainingModel(model);
+        for (const auto& group : groups) {
+            groupNames.push_back(group);
+        }
     }
     data["groupNames"] = groupNames;
     return data;
