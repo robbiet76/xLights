@@ -1124,6 +1124,72 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 }
             }
 
+            // Preflight timing-track semantics across plan steps to catch deterministic
+            // dependency failures before any mutation is executed.
+            std::set<std::string> simulatedTracks;
+            if (CurrentSeqXmlFile != nullptr) {
+                int trackCount = _sequenceElements.GetNumberOfTimingElements();
+                for (int i = 0; i < trackCount; i++) {
+                    TimingElement* track = _sequenceElements.GetTimingElement(i);
+                    if (track != nullptr) {
+                        simulatedTracks.insert(track->GetName());
+                    }
+                }
+            }
+            for (size_t i = 0; i < parsedCommands.size(); i++) {
+                const auto& command = parsedCommands[i];
+                std::string childCmd = command["cmd"].get<std::string>();
+                nlohmann::json childParamsJson = command.contains("params") && command["params"].is_object() ? command["params"] : nlohmann::json::object();
+                auto readTrackName = [&](const std::string& key) -> std::string {
+                    if (!childParamsJson.contains(key) || !childParamsJson[key].is_string()) {
+                        return "";
+                    }
+                    return childParamsJson[key].get<std::string>();
+                };
+                auto ensureTrackExists = [&](const std::string& trackName, const std::string& op) -> std::optional<bool> {
+                    if (trackName.empty() || simulatedTracks.find(trackName) != simulatedTracks.end()) {
+                        return std::nullopt;
+                    }
+                    return sendResponse(
+                        BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", op + " references missing timing track '" + trackName + "'.", requestId,
+                                             {{"index", static_cast<int>(i)}, {"cmd", childCmd}}),
+                        "",
+                        422,
+                        true);
+                };
+
+                if (childCmd == "timing.createTrack") {
+                    std::string trackName = readTrackName("trackName");
+                    if (!trackName.empty()) {
+                        simulatedTracks.insert(trackName);
+                    }
+                } else if (childCmd == "timing.renameTrack") {
+                    std::string trackName = readTrackName("trackName");
+                    std::string newTrackName = readTrackName("newTrackName");
+                    if (auto response = ensureTrackExists(trackName, "timing.renameTrack")) {
+                        return *response;
+                    }
+                    if (!trackName.empty() && !newTrackName.empty()) {
+                        simulatedTracks.erase(trackName);
+                        simulatedTracks.insert(newTrackName);
+                    }
+                } else if (childCmd == "timing.deleteTrack") {
+                    std::string trackName = readTrackName("trackName");
+                    if (auto response = ensureTrackExists(trackName, "timing.deleteTrack")) {
+                        return *response;
+                    }
+                    if (!trackName.empty()) {
+                        simulatedTracks.erase(trackName);
+                    }
+                } else if (childCmd == "timing.getMarks" || childCmd == "timing.insertMarks" || childCmd == "timing.replaceMarks" ||
+                           childCmd == "timing.deleteMarks" || childCmd == "timing.getTrackSummary") {
+                    std::string trackName = readTrackName("trackName");
+                    if (auto response = ensureTrackExists(trackName, childCmd)) {
+                        return *response;
+                    }
+                }
+            }
+
             auto appendStepResult = [&](int index, const std::string& childCmd, int statusCode, bool ok, const std::string& responseBody) {
                 nlohmann::json step;
                 step["index"] = index;
