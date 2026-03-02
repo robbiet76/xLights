@@ -38,6 +38,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <optional>
 #include <set>
 
 std::string xLightsFrame::FindSequence(const std::string& seq)
@@ -857,6 +858,24 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
     if (IsV2Command(params)) {
         auto requestIdIt = params.find("_REQUEST_ID");
         std::string requestId = requestIdIt == params.end() ? "" : requestIdIt->second;
+        auto requireOpenSequence = [&]() -> std::optional<bool> {
+            if (CurrentSeqXmlFile != nullptr) {
+                return std::nullopt;
+            }
+            return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+        };
+        auto normalizeRangeOrError = [&](int& startMs, int& endMs, int defaultEndMs) -> std::optional<bool> {
+            if (startMs < 0) {
+                startMs = 0;
+            }
+            if (endMs < 0) {
+                endMs = defaultEndMs;
+            }
+            if (endMs < startMs) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "endMs must be >= startMs.", requestId), "", 422, true);
+            }
+            return std::nullopt;
+        };
         auto collectEffects = [&](const std::string& modelName,
                                   int layerIndex,
                                   int startMs,
@@ -1086,8 +1105,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             }
             return sendResponse(BuildV2SuccessResponse(200, cmd, BuildV2SequenceData(CurrentSeqXmlFile), requestId), "", 200, true);
         } else if (cmd == "sequence.save") {
-            if (CurrentSeqXmlFile == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            if (auto response = requireOpenSequence()) {
+                return *response;
             }
             std::string file = ReadParamString(params, "file");
             bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
@@ -1187,8 +1206,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             }
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
         } else if (cmd == "layout.getViews") {
-            if (CurrentSeqXmlFile == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            if (auto response = requireOpenSequence()) {
+                return *response;
             }
             nlohmann::json views = nlohmann::json::array();
             auto allViews = GetViewsManager()->GetViews();
@@ -1207,8 +1226,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             data["views"] = views;
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
         } else if (cmd == "media.get") {
-            if (CurrentSeqXmlFile == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            if (auto response = requireOpenSequence()) {
+                return *response;
             }
             std::string mediaFile = CurrentSeqXmlFile->GetMediaFile().ToStdString();
             nlohmann::json data;
@@ -1216,8 +1235,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             data["hasMedia"] = !mediaFile.empty();
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
         } else if (cmd == "media.set") {
-            if (CurrentSeqXmlFile == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            if (auto response = requireOpenSequence()) {
+                return *response;
             }
             std::string mediaFile = ReadParamString(params, "mediaFile");
             bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
@@ -1241,8 +1260,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             data["updated"] = updated;
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
         } else if (cmd == "media.getMetadata") {
-            if (CurrentSeqXmlFile == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            if (auto response = requireOpenSequence()) {
+                return *response;
             }
             std::string mediaFile = ReadParamString(params, "mediaFile");
             if (!mediaFile.empty() && mediaFile != "null" && mediaFile != CurrentSeqXmlFile->GetMediaFile().ToStdString()) {
@@ -1264,8 +1283,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             data["channels"] = channels;
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
         } else if (cmd == "timing.getTracks") {
-            if (CurrentSeqXmlFile == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            if (auto response = requireOpenSequence()) {
+                return *response;
             }
             bool includeCounts = ReadBool(ReadParamString(params, "includeCounts", "false"));
 
@@ -1294,8 +1313,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             data["tracks"] = tracks;
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
         } else if (cmd == "timing.createTrack") {
-            if (CurrentSeqXmlFile == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            if (auto response = requireOpenSequence()) {
+                return *response;
             }
             std::string trackName = ReadParamString(params, "trackName");
             std::string trackType = ReadParamString(params, "trackType", "variable");
@@ -1333,8 +1352,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             data["action"] = action;
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
         } else if (cmd == "timing.renameTrack") {
-            if (CurrentSeqXmlFile == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            if (auto response = requireOpenSequence()) {
+                return *response;
             }
             std::string trackName = ReadParamString(params, "trackName");
             std::string newTrackName = ReadParamString(params, "newTrackName");
@@ -1363,8 +1382,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             data["newTrackName"] = newTrackName;
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
         } else if (cmd == "timing.deleteTrack") {
-            if (CurrentSeqXmlFile == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            if (auto response = requireOpenSequence()) {
+                return *response;
             }
             std::string trackName = ReadParamString(params, "trackName");
             bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
@@ -1387,8 +1406,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             data["deleted"] = true;
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
         } else if (cmd == "timing.getMarks") {
-            if (CurrentSeqXmlFile == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            if (auto response = requireOpenSequence()) {
+                return *response;
             }
             std::string trackName = ReadParamString(params, "trackName");
             if (trackName.empty() || trackName == "null") {
@@ -1402,14 +1421,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
 
             int startMs = ReadParamInt(params, "startMs", -1);
             int endMs = ReadParamInt(params, "endMs", -1);
-            if (startMs < 0) {
-                startMs = 0;
-            }
-            if (endMs < 0) {
-                endMs = CurrentSeqXmlFile->GetSequenceDurationMS();
-            }
-            if (endMs < startMs) {
-                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "endMs must be >= startMs.", requestId), "", 422, true);
+            if (auto response = normalizeRangeOrError(startMs, endMs, CurrentSeqXmlFile->GetSequenceDurationMS())) {
+                return *response;
             }
 
             nlohmann::json marks = nlohmann::json::array();
@@ -1433,8 +1446,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             data["marks"] = marks;
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
         } else if (cmd == "timing.insertMarks") {
-            if (CurrentSeqXmlFile == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            if (auto response = requireOpenSequence()) {
+                return *response;
             }
             std::string trackName = ReadParamString(params, "trackName");
             bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
@@ -1489,8 +1502,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             data["insertedCount"] = static_cast<int>(marks.size());
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
         } else if (cmd == "timing.replaceMarks") {
-            if (CurrentSeqXmlFile == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            if (auto response = requireOpenSequence()) {
+                return *response;
             }
             std::string trackName = ReadParamString(params, "trackName");
             bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
@@ -1539,8 +1552,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             data["replacedCount"] = static_cast<int>(marks.size());
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
         } else if (cmd == "timing.deleteMarks") {
-            if (CurrentSeqXmlFile == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            if (auto response = requireOpenSequence()) {
+                return *response;
             }
             std::string trackName = ReadParamString(params, "trackName");
             bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
@@ -1565,14 +1578,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             if (!hasIndexFilter && !hasRangeFilter) {
                 return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "Provide markIndexes[] or startMs/endMs filter.", requestId), "", 422, true);
             }
-            if (startMs < 0) {
-                startMs = 0;
-            }
-            if (endMs < 0) {
-                endMs = CurrentSeqXmlFile->GetSequenceDurationMS();
-            }
-            if (endMs < startMs) {
-                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "endMs must be >= startMs.", requestId), "", 422, true);
+            if (auto response = normalizeRangeOrError(startMs, endMs, CurrentSeqXmlFile->GetSequenceDurationMS())) {
+                return *response;
             }
 
             std::set<int> indexTargets;
@@ -1612,15 +1619,15 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             data["deletedCount"] = deletedCount;
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
         } else if (cmd == "sequencer.getDisplayElementOrder") {
-            if (CurrentSeqXmlFile == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            if (auto response = requireOpenSequence()) {
+                return *response;
             }
             nlohmann::json data;
             data["elements"] = BuildDisplayElementOrderData(_sequenceElements);
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
         } else if (cmd == "sequencer.setDisplayElementOrder") {
-            if (CurrentSeqXmlFile == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            if (auto response = requireOpenSequence()) {
+                return *response;
             }
             bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
             std::vector<std::string> orderedIds = ReadParamArray(params, "orderedIds");
@@ -1703,18 +1710,15 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             }
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
         } else if (cmd == "effects.list") {
-            if (CurrentSeqXmlFile == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            if (auto response = requireOpenSequence()) {
+                return *response;
             }
             std::string modelName = ReadParamString(params, "modelName");
             int layerIndex = ReadParamInt(params, "layerIndex", -1);
             int startMs = ReadParamInt(params, "startMs", 0);
             int endMs = ReadParamInt(params, "endMs", CurrentSeqXmlFile->GetSequenceDurationMS());
-            if (startMs < 0) {
-                startMs = 0;
-            }
-            if (endMs < startMs) {
-                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "endMs must be >= startMs.", requestId), "", 422, true);
+            if (auto response = normalizeRangeOrError(startMs, endMs, CurrentSeqXmlFile->GetSequenceDurationMS())) {
+                return *response;
             }
 
             std::vector<EffectRef> refs;
@@ -1737,8 +1741,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             data["effects"] = effects;
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
         } else if (cmd == "effects.create") {
-            if (CurrentSeqXmlFile == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            if (auto response = requireOpenSequence()) {
+                return *response;
             }
             std::string modelName = ReadParamString(params, "modelName");
             int layerIndex = ReadParamInt(params, "layerIndex", -1);
@@ -1781,19 +1785,16 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             data["created"] = true;
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
         } else if (cmd == "effects.update" || cmd == "effects.delete" || cmd == "effects.shift" || cmd == "effects.alignToTiming") {
-            if (CurrentSeqXmlFile == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            if (auto response = requireOpenSequence()) {
+                return *response;
             }
 
             std::string modelName = ReadParamString(params, "modelName");
             int layerIndex = ReadParamInt(params, "layerIndex", -1);
             int startMs = ReadParamInt(params, "startMs", 0);
             int endMs = ReadParamInt(params, "endMs", CurrentSeqXmlFile->GetSequenceDurationMS());
-            if (startMs < 0) {
-                startMs = 0;
-            }
-            if (endMs < startMs) {
-                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "endMs must be >= startMs.", requestId), "", 422, true);
+            if (auto response = normalizeRangeOrError(startMs, endMs, CurrentSeqXmlFile->GetSequenceDurationMS())) {
+                return *response;
             }
 
             std::vector<std::string> selectorIds = ReadParamArray(params, "effectIds");
@@ -2047,8 +2048,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
             }
         } else if (cmd == "effects.clone") {
-            if (CurrentSeqXmlFile == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            if (auto response = requireOpenSequence()) {
+                return *response;
             }
             std::string sourceModelName = ReadParamString(params, "sourceModelName");
             int sourceLayerIndex = ReadParamInt(params, "sourceLayerIndex", -1);
@@ -2062,8 +2063,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             if (sourceModelName.empty() || sourceLayerIndex < 0 || targetModels.empty() || targetLayerIndex < 0) {
                 return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "sourceModelName, sourceLayerIndex, targetModels, and targetLayerIndex are required.", requestId), "", 422, true);
             }
-            if (endMs < startMs) {
-                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "endMs must be >= startMs.", requestId), "", 422, true);
+            if (auto response = normalizeRangeOrError(startMs, endMs, CurrentSeqXmlFile->GetSequenceDurationMS())) {
+                return *response;
             }
 
             std::vector<EffectRef> sourceRefs;
@@ -2138,8 +2139,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             }
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
         } else if (cmd == "timing.createFromAudio") {
-            if (CurrentSeqXmlFile == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            if (auto response = requireOpenSequence()) {
+                return *response;
             }
             if (!CurrentSeqXmlFile->HasAudioMedia() || CurrentSeqXmlFile->GetMedia() == nullptr) {
                 return sendResponse(BuildV2ErrorResponse(404, cmd, "MEDIA_NOT_AVAILABLE", "Sequence media is not available.", requestId), "", 404, true);
@@ -2259,8 +2260,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             data["endMs"] = ends.back();
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
         } else if (cmd == "timing.getTrackSummary") {
-            if (CurrentSeqXmlFile == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            if (auto response = requireOpenSequence()) {
+                return *response;
             }
 
             std::string trackName = ReadParamString(params, "trackName");
@@ -2335,8 +2336,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             };
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
         } else if (cmd == "timing.createBarsFromBeats") {
-            if (CurrentSeqXmlFile == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            if (auto response = requireOpenSequence()) {
+                return *response;
             }
 
             std::string sourceTrackName = ReadParamString(params, "sourceTrackName");
@@ -2424,8 +2425,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             data["endMs"] = ends.back();
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
         } else if (cmd == "timing.createEnergySections") {
-            if (CurrentSeqXmlFile == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            if (auto response = requireOpenSequence()) {
+                return *response;
             }
             if (!CurrentSeqXmlFile->HasAudioMedia() || CurrentSeqXmlFile->GetMedia() == nullptr) {
                 return sendResponse(BuildV2ErrorResponse(404, cmd, "MEDIA_NOT_AVAILABLE", "Sequence media is not available.", requestId), "", 404, true);
