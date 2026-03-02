@@ -154,6 +154,8 @@ static const std::vector<std::string>& GetV2Commands() {
         "timing.insertMarks",
         "timing.replaceMarks",
         "timing.deleteMarks",
+        "sequencer.getDisplayElementOrder",
+        "sequencer.setDisplayElementOrder",
         "timing.listAnalysisPlugins",
         "timing.createFromAudio",
         "timing.getTrackSummary",
@@ -305,6 +307,32 @@ static bool ValidateOrderedNonOverlapping(const std::vector<TimingMarkPayload>& 
         }
     }
     return true;
+}
+
+static nlohmann::json BuildDisplayElementOrderData(SequenceElements& sequenceElements) {
+    nlohmann::json elements = nlohmann::json::array();
+    size_t count = sequenceElements.GetElementCount(MASTER_VIEW);
+    for (size_t i = 0; i < count; i++) {
+        Element* element = sequenceElements.GetElement(i, MASTER_VIEW);
+        if (element == nullptr) {
+            continue;
+        }
+        std::string type = "model";
+        if (element->GetType() == ElementType::ELEMENT_TYPE_TIMING) {
+            type = "timing";
+        } else if (element->GetType() == ElementType::ELEMENT_TYPE_SUBMODEL) {
+            type = "submodel";
+        } else if (element->GetType() == ElementType::ELEMENT_TYPE_STRAND) {
+            type = "strand";
+        }
+        elements.push_back({
+            {"id", element->GetName()},
+            {"name", element->GetName()},
+            {"type", type},
+            {"orderIndex", static_cast<int>(i)}
+        });
+    }
+    return elements;
 }
 
 static std::string ReadParamStringOrEnv(const std::map<std::string, std::string>& params,
@@ -1274,6 +1302,112 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             nlohmann::json data;
             data["trackName"] = trackName;
             data["deletedCount"] = deletedCount;
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
+        } else if (cmd == "sequencer.getDisplayElementOrder") {
+            if (CurrentSeqXmlFile == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            }
+            nlohmann::json data;
+            data["elements"] = BuildDisplayElementOrderData(_sequenceElements);
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+        } else if (cmd == "sequencer.setDisplayElementOrder") {
+            if (CurrentSeqXmlFile == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            }
+            bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
+            std::vector<std::string> orderedIds = ReadParamArray(params, "orderedIds");
+            if (orderedIds.empty()) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "orderedIds is required.", requestId), "", 422, true);
+            }
+
+            size_t elementCount = _sequenceElements.GetElementCount(MASTER_VIEW);
+            if (orderedIds.size() != elementCount) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "orderedIds must include all display elements.", requestId), "", 422, true);
+            }
+
+            std::vector<std::string> currentOrder;
+            currentOrder.reserve(elementCount);
+            std::map<std::string, int> indexById;
+            for (size_t i = 0; i < elementCount; i++) {
+                Element* element = _sequenceElements.GetElement(i, MASTER_VIEW);
+                if (element == nullptr) {
+                    continue;
+                }
+                currentOrder.push_back(element->GetName());
+                indexById[element->GetName()] = static_cast<int>(i);
+            }
+
+            std::set<std::string> seenIds;
+            for (const auto& id : orderedIds) {
+                if (indexById.find(id) == indexById.end()) {
+                    return sendResponse(BuildV2ErrorResponse(404, cmd, "DISPLAY_ELEMENT_NOT_FOUND", "Display element not found: '" + id + "'.", requestId), "", 404, true);
+                }
+                if (!seenIds.insert(id).second) {
+                    return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "orderedIds contains duplicates.", requestId), "", 422, true);
+                }
+            }
+
+            if (!dryRun) {
+                for (size_t targetIndex = 0; targetIndex < orderedIds.size(); targetIndex++) {
+                    const std::string& desiredId = orderedIds[targetIndex];
+                    int foundIndex = -1;
+                    for (size_t i = targetIndex; i < currentOrder.size(); i++) {
+                        if (currentOrder[i] == desiredId) {
+                            foundIndex = static_cast<int>(i);
+                            break;
+                        }
+                    }
+                    if (foundIndex == -1) {
+                        return sendResponse(BuildV2ErrorResponse(500, cmd, "INTERNAL_ERROR", "Unable to apply display element ordering.", requestId), "", 500, true);
+                    }
+                    if (foundIndex != static_cast<int>(targetIndex)) {
+                        _sequenceElements.MoveSequenceElement(foundIndex, static_cast<int>(targetIndex), MASTER_VIEW);
+                        std::string moved = currentOrder[foundIndex];
+                        currentOrder.erase(currentOrder.begin() + foundIndex);
+                        currentOrder.insert(currentOrder.begin() + static_cast<int>(targetIndex), moved);
+                    }
+                }
+                _sequenceElements.PopulateRowInformation();
+                _sequenceElements.PopulateVisibleRowInformation();
+                if (mainSequencer != nullptr && mainSequencer->PanelEffectGrid != nullptr) {
+                    mainSequencer->PanelEffectGrid->Refresh();
+                }
+            }
+
+            nlohmann::json warnings = nlohmann::json::array();
+            if (dryRun) {
+                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
+            }
+
+            nlohmann::json data;
+            data["updated"] = true;
+            data["elementCount"] = static_cast<int>(elementCount);
+            if (dryRun) {
+                nlohmann::json projected = nlohmann::json::array();
+                for (size_t i = 0; i < orderedIds.size(); i++) {
+                    const std::string& id = orderedIds[i];
+                    Element* element = _sequenceElements.GetElement(id);
+                    std::string type = "model";
+                    if (element != nullptr) {
+                        if (element->GetType() == ElementType::ELEMENT_TYPE_TIMING) {
+                            type = "timing";
+                        } else if (element->GetType() == ElementType::ELEMENT_TYPE_SUBMODEL) {
+                            type = "submodel";
+                        } else if (element->GetType() == ElementType::ELEMENT_TYPE_STRAND) {
+                            type = "strand";
+                        }
+                    }
+                    projected.push_back({
+                        {"id", id},
+                        {"name", id},
+                        {"type", type},
+                        {"orderIndex", static_cast<int>(i)}
+                    });
+                }
+                data["elements"] = projected;
+            } else {
+                data["elements"] = BuildDisplayElementOrderData(_sequenceElements);
+            }
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
         } else if (cmd == "timing.listAnalysisPlugins") {
             std::string analysisUrl = ReadParamStringOrEnv(params, "analysisUrl", "XLIGHTS_ANALYSIS_URL");
