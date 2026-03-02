@@ -217,6 +217,144 @@ static std::string GetValidationErrorMessage(const std::string& message) {
     return message.empty() ? "Validation failed." : message;
 }
 
+static bool ValidateTimingMarksParamShape(const nlohmann::json& params, std::string& errorMessage) {
+    if (!HasArrayParam(params, "marks") || params["marks"].empty()) {
+        errorMessage = "timing.insertMarks requires non-empty params.marks.";
+        return false;
+    }
+
+    int previousStart = -1;
+    int previousEnd = -1;
+    bool hasPreviousEnd = false;
+    for (size_t i = 0; i < params["marks"].size(); i++) {
+        const auto& mark = params["marks"][i];
+        if (!mark.is_object()) {
+            errorMessage = "marks entries must be objects.";
+            return false;
+        }
+        if (!mark.contains("startMs") || !mark["startMs"].is_number_integer()) {
+            errorMessage = "marks[].startMs must be an integer.";
+            return false;
+        }
+        int startMs = mark["startMs"].get<int>();
+        if (startMs < 0) {
+            errorMessage = "marks[].startMs must be >= 0.";
+            return false;
+        }
+
+        bool hasEnd = mark.contains("endMs") && !mark["endMs"].is_null();
+        int endMs = -1;
+        if (hasEnd) {
+            if (!mark["endMs"].is_number_integer()) {
+                errorMessage = "marks[].endMs must be an integer when provided.";
+                return false;
+            }
+            endMs = mark["endMs"].get<int>();
+            if (endMs <= startMs) {
+                errorMessage = "marks[].endMs must be > startMs.";
+                return false;
+            }
+        }
+        if (mark.contains("label") && !(mark["label"].is_string() || mark["label"].is_null())) {
+            errorMessage = "marks[].label must be a string when provided.";
+            return false;
+        }
+
+        if (previousStart != -1 && startMs < previousStart) {
+            errorMessage = "marks must be ordered by startMs.";
+            return false;
+        }
+        if (hasPreviousEnd && startMs < previousEnd) {
+            errorMessage = "marks must not overlap.";
+            return false;
+        }
+        previousStart = startMs;
+        if (hasEnd) {
+            previousEnd = endMs;
+            hasPreviousEnd = true;
+        } else {
+            hasPreviousEnd = false;
+        }
+    }
+
+    return true;
+}
+
+static bool ValidateDisplayOrderParams(const nlohmann::json& params, std::string& errorMessage) {
+    if (!HasArrayParam(params, "orderedIds") || params["orderedIds"].empty()) {
+        errorMessage = "sequencer.setDisplayElementOrder requires non-empty params.orderedIds.";
+        return false;
+    }
+
+    std::set<std::string> seen;
+    for (const auto& id : params["orderedIds"]) {
+        if (!id.is_string() || id.get<std::string>().empty()) {
+            errorMessage = "orderedIds must contain non-empty strings.";
+            return false;
+        }
+        if (!seen.insert(id.get<std::string>()).second) {
+            errorMessage = "orderedIds must not contain duplicates.";
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool IsValidEffectSelectorValue(const nlohmann::json& value) {
+    if (value.is_string()) {
+        std::string s = value.get<std::string>();
+        return !s.empty() && s != "null";
+    }
+    if (value.is_number_integer()) {
+        return value.get<int>() > 0;
+    }
+    return false;
+}
+
+static bool ValidateEffectSelectorParams(const nlohmann::json& params, std::string& errorMessage) {
+    bool hasSelector = false;
+
+    if (params.contains("modelName")) {
+        if (!params["modelName"].is_string() || params["modelName"].get<std::string>().empty()) {
+            errorMessage = "modelName must be a non-empty string when provided.";
+            return false;
+        }
+        hasSelector = true;
+    }
+    if (params.contains("layerIndex")) {
+        if (!params["layerIndex"].is_number_integer() || params["layerIndex"].get<int>() < 0) {
+            errorMessage = "layerIndex must be >= 0 when provided.";
+            return false;
+        }
+    }
+    if (params.contains("effectId")) {
+        if (!IsValidEffectSelectorValue(params["effectId"])) {
+            errorMessage = "effectId must be a non-empty string or positive integer.";
+            return false;
+        }
+        hasSelector = true;
+    }
+    if (params.contains("effectIds")) {
+        if (!params["effectIds"].is_array() || params["effectIds"].empty()) {
+            errorMessage = "effectIds must be a non-empty array when provided.";
+            return false;
+        }
+        for (const auto& id : params["effectIds"]) {
+            if (!IsValidEffectSelectorValue(id)) {
+                errorMessage = "effectIds entries must be non-empty strings or positive integers.";
+                return false;
+            }
+        }
+        hasSelector = true;
+    }
+
+    if (!hasSelector) {
+        errorMessage = "An effect selector is required (modelName, effectId, or effectIds).";
+        return false;
+    }
+    return true;
+}
+
 static bool ValidateBatchCommandShape(const nlohmann::json& command,
                                       const std::set<std::string>& commandSet,
                                       std::string& errorCode,
@@ -326,16 +464,15 @@ static bool ValidateBatchCommandShape(const nlohmann::json& command,
             errorMessage = childCmd + " requires params.trackName.";
             return false;
         }
-        if ((childCmd == "timing.insertMarks" || childCmd == "timing.replaceMarks") &&
-            (!HasArrayParam(params, "marks") || params["marks"].empty())) {
-            errorCode = "VALIDATION_ERROR";
-            errorMessage = childCmd + " requires non-empty params.marks.";
-            return false;
+        if (childCmd == "timing.insertMarks" || childCmd == "timing.replaceMarks") {
+            if (!ValidateTimingMarksParamShape(params, errorMessage)) {
+                errorCode = "VALIDATION_ERROR";
+                return false;
+            }
         }
     } else if (childCmd == "sequencer.setDisplayElementOrder") {
-        if (!HasArrayParam(params, "orderedIds") || params["orderedIds"].empty()) {
+        if (!ValidateDisplayOrderParams(params, errorMessage)) {
             errorCode = "VALIDATION_ERROR";
-            errorMessage = "sequencer.setDisplayElementOrder requires non-empty params.orderedIds.";
             return false;
         }
     } else if (childCmd == "effects.create") {
@@ -350,24 +487,28 @@ static bool ValidateBatchCommandShape(const nlohmann::json& command,
             return false;
         }
     } else if (childCmd == "effects.alignToTiming") {
-        bool hasSelector = (params.contains("effectId") || HasArrayParam(params, "effectIds") || params.contains("modelName"));
-        if (!params.contains("timingTrackName") || !params["timingTrackName"].is_string() || params["timingTrackName"].get<std::string>().empty() || !hasSelector) {
+        if (!ValidateEffectSelectorParams(params, errorMessage)) {
             errorCode = "VALIDATION_ERROR";
-            errorMessage = "effects.alignToTiming requires timingTrackName and a selector.";
+            return false;
+        }
+        if (!params.contains("timingTrackName") || !params["timingTrackName"].is_string() || params["timingTrackName"].get<std::string>().empty()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "effects.alignToTiming requires timingTrackName.";
             return false;
         }
     } else if (childCmd == "effects.shift") {
-        bool hasSelector = (params.contains("effectId") || HasArrayParam(params, "effectIds") || params.contains("modelName"));
-        if (!params.contains("deltaMs") || !params["deltaMs"].is_number_integer() || params["deltaMs"].get<int>() == 0 || !hasSelector) {
+        if (!ValidateEffectSelectorParams(params, errorMessage)) {
             errorCode = "VALIDATION_ERROR";
-            errorMessage = "effects.shift requires deltaMs != 0 and a selector.";
+            return false;
+        }
+        if (!params.contains("deltaMs") || !params["deltaMs"].is_number_integer() || params["deltaMs"].get<int>() == 0) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "effects.shift requires deltaMs != 0.";
             return false;
         }
     } else if (childCmd == "effects.update" || childCmd == "effects.delete") {
-        bool hasSelector = (params.contains("effectId") || HasArrayParam(params, "effectIds") || params.contains("modelName"));
-        if (!hasSelector) {
+        if (!ValidateEffectSelectorParams(params, errorMessage)) {
             errorCode = "VALIDATION_ERROR";
-            errorMessage = childCmd + " requires an effect selector.";
             return false;
         }
     } else if (childCmd == "effects.clone") {
