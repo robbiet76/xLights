@@ -1057,6 +1057,7 @@ static bool ParseXlDoAutomationBody(const std::string& body,
 #include "api/SequencerV2Api.inl"
 #include "api/EffectsV2Api.inl"
 #include "api/TimingAnalysisV2Api.inl"
+#include "api/LegacySequenceCoreApi.inl"
 
 bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                                      std::map<std::string, std::string> &params,
@@ -1166,97 +1167,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
         return sendResponse(BuildV2ErrorResponse(404, cmd, "UNKNOWN_COMMAND", "Unknown command: '" + cmd + "'.", requestId), "", 404, true);
     }
 
-    if (cmd == "getVersion") {
-        return sendResponse(GetDisplayVersionString(), "version", 200, false);
-    } else if (cmd == "openSequence" || cmd == "getOpenSequence" || cmd == "loadSequence") {
-        wxString fname = "";
-        if (paths.size() > 1) {
-            fname = wxURI::Unescape(paths[1]);
-        }
-        bool force = false;
-        bool prompt = false;
-        
-        if (params["_METHOD"] == "POST" && !params["_DATA"].empty()) {
-            wxString data = params["_DATA"];
-            try {
-                nlohmann::json val = nlohmann::json::parse(data.ToStdString());
-                // wxJSONReader reader;
-                //  if (reader.Parse(data, &val) == 0)
-                {
-                    fname = val["seq"].get<std::string>();
-                    if (val.contains("promptIssues")) {
-                        prompt = ReadBool(params["promptIssues"]);
-                    }
-                    if (val.contains("force")) {
-                        force = ReadBool(params["force"]);
-                    }
-                }
-            } catch (const std::exception& e) {
-                return sendResponse(wxString::Format("Failed to parse JSON data: %s", e.what()), "msg", 503, false);
-            }
-        } else {
-            if (params["seq"] != "") {
-                fname = params["seq"];
-            }
-            prompt = ReadBool(params["promptIssues"]);
-            force = ReadBool(params["force"]);
-        }
-        if (fname.empty()) {
-            if (CurrentSeqXmlFile != nullptr) {
-                std::string response = wxString::Format("{\"seq\":\"%s\",\"fullseq\":\"%s\",\"media\":\"%s\",\"len\":%u,\"framems\":%u}",
-                                                        JSONSafe(CurrentSeqXmlFile->GetName()),
-                                                        JSONSafe(CurrentSeqXmlFile->GetFullPath()),
-                                                        JSONSafe(CurrentSeqXmlFile->GetMediaFile()),
-                                                        CurrentSeqXmlFile->GetSequenceDurationMS(),
-                                                        CurrentSeqXmlFile->GetFrameMS());
-
-                return sendResponse(response, "", 200, true);
-            } else {
-                return sendResponse("Sequence not open.", "msg", 503, false);
-            }
-        } else {
-            std::string seq = FindSequence(fname);
-            if (seq.empty()) {
-                return sendResponse("Sequence not found.", "msg", 503, false);
-            }
-            if (CurrentSeqXmlFile != nullptr && force) {
-                return sendResponse("Sequence already open.", "msg", 503, false);
-            }
-            auto oldPrompt = _promptBatchRenderIssues;
-            auto oldRenderMode = _renderMode;
-            if (!prompt) _renderMode = true;
-            _promptBatchRenderIssues = prompt; // off by default
-            OpenSequence(seq, nullptr);
-            _promptBatchRenderIssues = oldPrompt;
-            _renderMode = oldRenderMode;
-            std::string response = wxString::Format("{\"seq\":\"%s\",\"fullseq\":\"%s\",\"media\":\"%s\",\"len\":%u,\"framems\":%u}",
-                                                    JSONSafe(CurrentSeqXmlFile->GetName()),
-                                                    JSONSafe(CurrentSeqXmlFile->GetFullPath()),
-                                                    JSONSafe(CurrentSeqXmlFile->GetMediaFile()),
-                                                    CurrentSeqXmlFile->GetSequenceDurationMS(),
-                                                    CurrentSeqXmlFile->GetFrameMS());
-
-            return sendResponse(response, "", 200, true);
-        }
-    } else if (cmd == "closeSequence") {
-        if (CurrentSeqXmlFile == nullptr) {
-            if (!ReadBool(params["quiet"])) {
-                return sendResponse("Sequence not open.", "msg", 503, false);
-            }
-            return sendResponse("Sequence closed.", "msg", 200, false);
-        }
-
-        auto force = ReadBool(params["force"]);
-        if (mSavedChangeCount != _sequenceElements.GetChangeCount()) {
-            if (force) {
-                mSavedChangeCount = _sequenceElements.GetChangeCount();
-            } else {
-                return sendResponse("Sequence has unsaved changes.", "msg", 504, false);
-            }
-        }
-
-        AskCloseSequence();
-        return sendResponse("Sequence closed.", "msg", 200, false);
+    if (auto handled = automation::api::HandleLegacySequenceCoreCommand(this, _sequenceElements, _promptBatchRenderIssues, _renderMode, xlightsFilename, cmd, paths, params, sendResponse)) {
+        return *handled;
     } else if (cmd == "saveLayout") {
         if (!layoutPanel->SaveEffects()) {
             return sendResponse("Failed to save layout.", "msg", 503, false);
@@ -1268,50 +1180,6 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
 
         return sendResponse("Layout and controller tab saved.", "msg", 200, false);
 
-    } else if (cmd == "newSequence") {
-        if (CurrentSeqXmlFile != nullptr && !ReadBool(params["force"])) {
-            return sendResponse("Sequence already open.", "msg", 503, false);
-        }
-
-        auto media = params["mediaFile"];
-        if (media == "null")
-            media = "";
-        auto duration = wxAtoi(params["durationSecs"]) * 1000;
-
-        uint32_t frameMS = wxAtoi(params["frameMS"]); // this will be 0 if "null" so ok
-
-        std::string view = params["view"];
-        if (view == "null")
-            view = "";
-
-        NewSequence(media, duration, frameMS, view);
-        EnableSequenceControls(true);
-        return sendResponse("Sequence created.", "msg", 200, false);
-    } else if (cmd == "saveSequence") {
-        if (CurrentSeqXmlFile == nullptr) {
-            return sendResponse("No sequence open.", "msg", 503, false);
-        }
-        auto seq = params["seq"];
-        if ((seq == "" || seq == "null") && xlightsFilename.IsEmpty()) {
-            return sendResponse("Saving unnamed sequence needs a name to be sent.", "msg", 503, false);
-        }
-
-        {
-            auto oldRenderMode = _renderMode;
-            auto oldPromptIssues = _promptBatchRenderIssues;
-            _renderMode = true;
-            _promptBatchRenderIssues = false;
-            // Keep API save calls non-interactive in debug builds where wx asserts can open modal dialogs.
-            ScopedAutomationAssertSuppressor suppressor(true);
-            if (seq != "" && seq != "null") {
-                SaveAsSequence(seq);
-            } else {
-                SaveSequence();
-            }
-            _promptBatchRenderIssues = oldPromptIssues;
-            _renderMode = oldRenderMode;
-        }
-        return sendResponse("Sequence Saved.", "msg", 200, false);
     } else if (cmd == "renderAll") {
         if (CurrentSeqXmlFile == nullptr) {
             return sendResponse("No sequence open.", "msg", 503, false);
