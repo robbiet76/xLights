@@ -2590,7 +2590,21 @@ wxArrayString xLightsXmlFile::GetTimingList(const SequenceElements& seq_elements
 bool xLightsXmlFile::Save()
 {
     UpdateVersion();
-    return seqDocument.Save(GetFullPath());
+    wxFileOutputStream fout(GetFullPath());
+    if (!fout.IsOk()) {
+        return false;
+    }
+    wxBufferedOutputStream bout(fout, 2 * 1024 * 1024);
+    if (!bout.IsOk()) {
+        return false;
+    }
+    if (!seqDocument.Save(bout)) {
+        return false;
+    }
+    if (!fout.Close()) {
+        return false;
+    }
+    return true;
 }
 
 void xLightsXmlFile::WriteEffects(EffectLayer *layer,
@@ -2665,12 +2679,16 @@ bool xLightsXmlFile::Save(SequenceElements& seq_elements)
 {
     if (SaveToDoc(seq_elements)) {
         wxFileOutputStream fout(GetFullPath());
-        wxBufferedOutputStream *bout = new wxBufferedOutputStream(fout, 2 * 1024 * 1024);
-        if (!seqDocument.Save(*bout)) {
-            delete bout;
+        if (!fout.IsOk()) {
             return false;
         }
-        delete bout;
+        wxBufferedOutputStream bout(fout, 2 * 1024 * 1024);
+        if (!bout.IsOk()) {
+            return false;
+        }
+        if (!seqDocument.Save(bout)) {
+            return false;
+        }
         if (!fout.Close()) {
             return false;
         }

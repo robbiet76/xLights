@@ -31,6 +31,7 @@
 #include "../ModelPreview.h"
 #include "../utils/Curl.h"
 #include <wx/uri.h>
+#include <wx/debug.h>
 
 #include "LuaRunner.h"
 
@@ -58,6 +59,41 @@ static bool HttpRequestFunction(HttpConnection &connection, HttpRequest &request
 
 static wxString MIME_JSON = "application/json";
 static wxString MIME_TEXT = "text/plain";
+
+namespace {
+void AutomationAssertHandler(const wxString& file,
+                             int line,
+                             const wxString& func,
+                             const wxString& cond,
+                             const wxString& msg) {
+    static log4cpp::Category& logger_base = log4cpp::Category::getInstance(std::string("log_base"));
+    logger_base.error("Suppressed wx assert in automation flow: file=%s line=%d func=%s cond=%s msg=%s",
+                      (const char*)file.ToStdString().c_str(),
+                      line,
+                      (const char*)func.ToStdString().c_str(),
+                      (const char*)cond.ToStdString().c_str(),
+                      (const char*)msg.ToStdString().c_str());
+}
+
+class ScopedAutomationAssertSuppressor {
+public:
+    explicit ScopedAutomationAssertSuppressor(bool enabled)
+        : _enabled(enabled), _previous(nullptr) {
+        if (_enabled) {
+            _previous = wxSetAssertHandler(AutomationAssertHandler);
+        }
+    }
+    ~ScopedAutomationAssertSuppressor() {
+        if (_enabled) {
+            wxSetAssertHandler(_previous);
+        }
+    }
+
+private:
+    bool _enabled;
+    wxAssertHandler_t _previous;
+};
+} // namespace
 
 static std::map<std::string, std::string> ParseParams(const wxString &params) {
     std::map<std::string, std::string> p;
@@ -1300,13 +1336,24 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
             }
 
-            if (!file.empty()) {
-                SaveAsSequence(file);
-            } else {
-                if (xlightsFilename.IsEmpty()) {
-                    return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "Saving unnamed sequence requires file.", requestId), "", 422, true);
+            if (file.empty() && xlightsFilename.IsEmpty()) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "Saving unnamed sequence requires file.", requestId), "", 422, true);
+            }
+
+            {
+                auto oldRenderMode = _renderMode;
+                auto oldPromptIssues = _promptBatchRenderIssues;
+                _renderMode = true;
+                _promptBatchRenderIssues = false;
+                // Keep API save calls non-interactive in debug builds where wx asserts can open modal dialogs.
+                ScopedAutomationAssertSuppressor suppressor(true);
+                if (!file.empty()) {
+                    SaveAsSequence(file);
+                } else {
+                    SaveSequence();
                 }
-                SaveSequence();
+                _promptBatchRenderIssues = oldPromptIssues;
+                _renderMode = oldRenderMode;
             }
 
             nlohmann::json data;
@@ -2931,14 +2978,24 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             return sendResponse("No sequence open.", "msg", 503, false);
         }
         auto seq = params["seq"];
+        if ((seq == "" || seq == "null") && xlightsFilename.IsEmpty()) {
+            return sendResponse("Saving unnamed sequence needs a name to be sent.", "msg", 503, false);
+        }
 
-        if (seq != "" && seq != "null") {
-            SaveAsSequence(seq);
-        } else {
-            if (xlightsFilename.IsEmpty()) {
-                return sendResponse("Saving unnamed sequence needs a name to be sent.", "msg", 503, false);
+        {
+            auto oldRenderMode = _renderMode;
+            auto oldPromptIssues = _promptBatchRenderIssues;
+            _renderMode = true;
+            _promptBatchRenderIssues = false;
+            // Keep API save calls non-interactive in debug builds where wx asserts can open modal dialogs.
+            ScopedAutomationAssertSuppressor suppressor(true);
+            if (seq != "" && seq != "null") {
+                SaveAsSequence(seq);
+            } else {
+                SaveSequence();
             }
-            SaveSequence();
+            _promptBatchRenderIssues = oldPromptIssues;
+            _renderMode = oldRenderMode;
         }
         return sendResponse("Sequence Saved.", "msg", 200, false);
     } else if (cmd == "renderAll") {

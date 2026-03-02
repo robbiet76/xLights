@@ -1441,8 +1441,14 @@ void xLightsFrame::SaveSequence()
     logger_base.info("Saving XSQ file.");
     CurrentSeqXmlFile->AddJukebox(jukeboxPanel->Save());
     if (!CurrentSeqXmlFile->Save(_sequenceElements)) {
-        wxMessageDialog msgDlg(this, "Error Saving Sequence to " + CurrentSeqXmlFile->GetFullPath(),
-                               "Error Saving Sequence", wxOK | wxCENTRE);
+        wxString saveError = "Error Saving Sequence to " + CurrentSeqXmlFile->GetFullPath();
+        if (_renderMode || _checkSequenceMode) {
+            logger_base.error("%s", (const char*)saveError.ToStdString().c_str());
+            SetStatusText(saveError);
+            EnableSequenceControls(true);
+            return;
+        }
+        wxMessageDialog msgDlg(this, saveError, "Error Saving Sequence", wxOK | wxCENTRE);
         msgDlg.ShowModal();
     }
     logger_base.info("XSQ file done.");
