@@ -20,7 +20,8 @@ static std::optional<bool> HandleSystemV2Command(
             {"songStructureDetectionAvailable", false},
             {"effectDefinitionIntrospectionAvailable", true},
             {"transactionsAvailable", true},
-            {"asyncJobsAvailable", true}
+            {"asyncJobsAvailable", true},
+            {"executePlanAvailable", true}
         };
         return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
     }

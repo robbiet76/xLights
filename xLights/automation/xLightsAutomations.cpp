@@ -510,6 +510,7 @@ static const std::vector<std::string>& GetV2Commands() {
     static const std::vector<std::string> commands = {
         "system.getCapabilities",
         "system.validateCommands",
+        "system.executePlan",
         "sequence.getOpen",
         "sequence.getRevision",
         "sequence.open",
@@ -918,6 +919,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
     std::string cmd = paths[0];
     // V2 dispatcher: strict command contracts and structured response envelopes.
     if (IsV2Command(params)) {
+        // Keep automation fully non-interactive in debug builds where wx asserts open modal dialogs.
+        ScopedAutomationAssertSuppressor suppressor(true);
         auto requestIdIt = params.find("_REQUEST_ID");
         std::string requestId = requestIdIt == params.end() ? "" : requestIdIt->second;
         PurgeExpiredTransactions();
@@ -950,6 +953,89 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "endMs must be >= startMs.", requestId), "", 422, true);
             }
             return std::nullopt;
+        };
+        auto parsePlanParams = [&](const nlohmann::json& planParams, std::map<std::string, std::string>& outParams) -> bool {
+            outParams.clear();
+            for (auto [name, value] : planParams.items()) {
+                if (value.is_array()) {
+                    for (size_t i = 0; i < value.size(); i++) {
+                        if (value[i].is_object()) {
+                            for (auto [childName, childValue] : value[i].items()) {
+                                std::string scalar;
+                                if (!ReadScalarParam(childValue, scalar)) {
+                                    return false;
+                                }
+                                outParams[name + "_" + std::to_string(i) + "_" + childName] = scalar;
+                            }
+                            continue;
+                        }
+                        std::string scalar;
+                        if (!ReadScalarParam(value[i], scalar)) {
+                            return false;
+                        }
+                        outParams[name + "_" + std::to_string(i)] = scalar;
+                    }
+                    continue;
+                }
+                if (value.is_object()) {
+                    outParams[name] = value.dump();
+                    continue;
+                }
+                std::string scalar;
+                if (!ReadScalarParam(value, scalar)) {
+                    return false;
+                }
+                outParams[name] = scalar;
+            }
+            return true;
+        };
+        auto runPlanCommand = [&](const std::string& childCmd,
+                                  const nlohmann::json& childParamsJson,
+                                  const nlohmann::json& childOptionsJson,
+                                  std::string& responseBody,
+                                  int& statusCode) -> bool {
+            std::vector<std::string> childPaths;
+            childPaths.push_back(childCmd);
+            std::map<std::string, std::string> childParams;
+            if (!parsePlanParams(childParamsJson, childParams)) {
+                statusCode = 422;
+                responseBody = BuildV2ErrorResponse(422, childCmd, "VALIDATION_ERROR", "Unsupported params value type in executePlan command.");
+                return false;
+            }
+            childParams["_API_VERSION"] = "2";
+            if (!requestId.empty()) {
+                childParams["_REQUEST_ID"] = requestId;
+            }
+            if (childOptionsJson.is_object() && childOptionsJson.contains("dryRun")) {
+                if (childOptionsJson["dryRun"].is_boolean()) {
+                    childParams["_DRY_RUN"] = childOptionsJson["dryRun"].get<bool>() ? "true" : "false";
+                } else if (childOptionsJson["dryRun"].is_number_integer()) {
+                    childParams["_DRY_RUN"] = childOptionsJson["dryRun"].get<int>() != 0 ? "true" : "false";
+                }
+            }
+            bool callbackCalled = false;
+            bool handled = ProcessAutomation(
+                childPaths,
+                childParams,
+                [&](const std::string& msg, const std::string& jsonKey, int responseCode, bool msgIsJSON) {
+                    callbackCalled = true;
+                    statusCode = responseCode;
+                    if (msgIsJSON) {
+                        responseBody = msg;
+                    } else {
+                        nlohmann::json fallback;
+                        fallback["res"] = responseCode;
+                        fallback[jsonKey.empty() ? "msg" : jsonKey] = msg;
+                        responseBody = fallback.dump();
+                    }
+                    return true;
+                });
+            if (!handled && !callbackCalled) {
+                statusCode = 500;
+                responseBody = BuildV2ErrorResponse(500, childCmd, "INTERNAL_ERROR", "Failed to execute plan command.");
+                return false;
+            }
+            return statusCode >= 200 && statusCode < 300;
         };
         auto collectEffects = [&](const std::string& modelName,
                                   int layerIndex,
@@ -1004,6 +1090,174 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
         auto refreshEffectGrid = [&]() {
             RefreshEffectGridIfPresent(mainSequencer);
         };
+
+        if (cmd == "system.executePlan") {
+            std::string rawCommands = ReadParamString(params, "commands");
+            if (rawCommands.empty() || rawCommands == "null") {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "commands is required.", requestId), "", 422, true);
+            }
+            auto parsedCommands = nlohmann::json::parse(rawCommands, nullptr, false);
+            if (!parsedCommands.is_array() || parsedCommands.is_discarded() || parsedCommands.empty()) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "commands must be a non-empty array.", requestId), "", 422, true);
+            }
+
+            bool atomic = ReadBool(ReadParamString(params, "atomic", "true"));
+            bool planDryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
+            std::set<std::string> commandSet(GetV2Commands().begin(), GetV2Commands().end());
+            nlohmann::json stepResults = nlohmann::json::array();
+            bool hasMutatingCommands = false;
+            for (size_t i = 0; i < parsedCommands.size(); i++) {
+                const auto& command = parsedCommands[i];
+                std::string errorCode;
+                std::string errorMessage;
+                if (!ValidateBatchCommandShape(command, commandSet, errorCode, errorMessage)) {
+                    return sendResponse(
+                        BuildV2ErrorResponse(422, cmd, errorCode.empty() ? "VALIDATION_ERROR" : errorCode, GetValidationErrorMessage(errorMessage), requestId,
+                                             {{"index", static_cast<int>(i)}}),
+                        "",
+                        422,
+                        true);
+                }
+                std::string childCmd = command["cmd"].get<std::string>();
+                if (IsV2MutatingCommand(childCmd)) {
+                    hasMutatingCommands = true;
+                }
+            }
+
+            auto appendStepResult = [&](int index, const std::string& childCmd, int statusCode, bool ok, const std::string& responseBody) {
+                nlohmann::json step;
+                step["index"] = index;
+                step["cmd"] = childCmd;
+                step["status"] = statusCode;
+                step["ok"] = ok;
+                auto parsed = nlohmann::json::parse(responseBody, nullptr, false);
+                if (!parsed.is_discarded()) {
+                    step["response"] = parsed;
+                }
+                stepResults.push_back(step);
+            };
+
+            if (planDryRun || !atomic || !hasMutatingCommands) {
+                int executed = 0;
+                for (size_t i = 0; i < parsedCommands.size(); i++) {
+                    const auto& command = parsedCommands[i];
+                    std::string childCmd = command["cmd"].get<std::string>();
+                    nlohmann::json childParamsJson = command.contains("params") && command["params"].is_object() ? command["params"] : nlohmann::json::object();
+                    nlohmann::json childOptionsJson = command.contains("options") && command["options"].is_object() ? command["options"] : nlohmann::json::object();
+                    if (planDryRun) {
+                        childOptionsJson["dryRun"] = true;
+                    }
+                    std::string body;
+                    int status = 0;
+                    bool stepOk = runPlanCommand(childCmd, childParamsJson, childOptionsJson, body, status);
+                    appendStepResult(static_cast<int>(i), childCmd, status, stepOk, body);
+                    if (!stepOk) {
+                        nlohmann::json data;
+                        data["atomic"] = atomic;
+                        data["dryRun"] = planDryRun;
+                        data["executedCount"] = executed;
+                        data["results"] = stepResults;
+                        return sendResponse(BuildV2ErrorResponse(409, cmd, "EXECUTE_PLAN_FAILED", "Plan command failed.", requestId, data), "", 409, true);
+                    }
+                    executed++;
+                }
+                nlohmann::json data;
+                data["atomic"] = atomic;
+                data["dryRun"] = planDryRun;
+                data["executedCount"] = executed;
+                data["results"] = stepResults;
+                return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+            }
+
+            if (CurrentSeqXmlFile == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            }
+
+            long long now = NowEpochMs();
+            std::string transactionId = "tx-plan-" + std::to_string(now) + "-" + std::to_string(_sequenceElements.GetChangeCount());
+            PendingV2Transaction tx;
+            tx.id = transactionId;
+            tx.sequencePath = BuildCurrentSequencePath(CurrentSeqXmlFile);
+            tx.initialRevision = BuildSequenceRevisionToken(CurrentSeqXmlFile, _sequenceElements);
+            tx.createdEpochMs = now;
+            tx.expiresEpochMs = now + kV2TransactionTtlMs;
+            gPendingV2Transactions[transactionId] = tx;
+
+            int stagedOrExecuted = 0;
+            for (size_t i = 0; i < parsedCommands.size(); i++) {
+                const auto& command = parsedCommands[i];
+                std::string childCmd = command["cmd"].get<std::string>();
+                nlohmann::json childParamsJson = command.contains("params") && command["params"].is_object() ? command["params"] : nlohmann::json::object();
+                nlohmann::json childOptionsJson = command.contains("options") && command["options"].is_object() ? command["options"] : nlohmann::json::object();
+                if (IsV2MutatingCommand(childCmd)) {
+                    childParamsJson["transactionId"] = transactionId;
+                    childParamsJson.erase("expectedRevision");
+                }
+                std::string body;
+                int status = 0;
+                bool stepOk = runPlanCommand(childCmd, childParamsJson, childOptionsJson, body, status);
+                appendStepResult(static_cast<int>(i), childCmd, status, stepOk, body);
+                if (!stepOk) {
+                    gPendingV2Transactions.erase(transactionId);
+                    nlohmann::json data;
+                    data["atomic"] = true;
+                    data["executedCount"] = stagedOrExecuted;
+                    data["rolledBack"] = true;
+                    data["results"] = stepResults;
+                    return sendResponse(BuildV2ErrorResponse(409, cmd, "EXECUTE_PLAN_FAILED", "Plan command failed before commit.", requestId, data), "", 409, true);
+                }
+                stagedOrExecuted++;
+            }
+
+            std::vector<std::string> commitPaths;
+            commitPaths.push_back("transactions.commit");
+            std::map<std::string, std::string> commitParams;
+            commitParams["_API_VERSION"] = "2";
+            commitParams["transactionId"] = transactionId;
+            if (!requestId.empty()) {
+                commitParams["_REQUEST_ID"] = requestId;
+            }
+            std::string commitBody;
+            int commitStatus = 0;
+            bool commitOk = false;
+            bool callbackCalled = false;
+            bool handled = ProcessAutomation(
+                commitPaths,
+                commitParams,
+                [&](const std::string& msg, const std::string& jsonKey, int responseCode, bool msgIsJSON) {
+                    callbackCalled = true;
+                    commitStatus = responseCode;
+                    if (msgIsJSON) {
+                        commitBody = msg;
+                    } else {
+                        nlohmann::json fallback;
+                        fallback["res"] = responseCode;
+                        fallback[jsonKey.empty() ? "msg" : jsonKey] = msg;
+                        commitBody = fallback.dump();
+                    }
+                    commitOk = responseCode >= 200 && responseCode < 300;
+                    return true;
+                });
+            if (!handled && !callbackCalled) {
+                commitStatus = 500;
+                commitBody = BuildV2ErrorResponse(500, "transactions.commit", "INTERNAL_ERROR", "Failed to commit executePlan transaction.", requestId);
+            }
+            appendStepResult(static_cast<int>(parsedCommands.size()), "transactions.commit", commitStatus, commitOk, commitBody);
+            if (!commitOk) {
+                nlohmann::json data;
+                data["atomic"] = true;
+                data["executedCount"] = stagedOrExecuted;
+                data["rolledBack"] = true;
+                data["results"] = stepResults;
+                return sendResponse(BuildV2ErrorResponse(409, cmd, "EXECUTE_PLAN_COMMIT_FAILED", "Plan commit failed.", requestId, data), "", 409, true);
+            }
+
+            nlohmann::json data;
+            data["atomic"] = true;
+            data["executedCount"] = stagedOrExecuted;
+            data["results"] = stepResults;
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+        }
 
         // Transaction staging API (G2): stage mutating commands, then apply/discard as a unit.
         if (cmd == "transactions.begin") {

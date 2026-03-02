@@ -202,8 +202,19 @@ static bool ValidateBatchCommandShape(const nlohmann::json& command,
         errorMessage = "Nested system.validateCommands is not allowed.";
         return false;
     }
+    if (childCmd == "system.executePlan") {
+        errorCode = "VALIDATION_ERROR";
+        errorMessage = "Nested system.executePlan is not allowed.";
+        return false;
+    }
 
-    if (childCmd == "transactions.begin") {
+    if (childCmd == "system.executePlan") {
+        if (!params.contains("commands") || !params["commands"].is_array() || params["commands"].empty()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "system.executePlan requires params.commands.";
+            return false;
+        }
+    } else if (childCmd == "transactions.begin") {
         // no required params
     } else if (childCmd == "transactions.commit") {
         if (!params.contains("transactionId") || !params["transactionId"].is_string() || params["transactionId"].get<std::string>().empty()) {
