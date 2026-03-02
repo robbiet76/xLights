@@ -1060,6 +1060,7 @@ static bool ParseXlDoAutomationBody(const std::string& body,
 #include "api/LegacySequenceCoreApi.inl"
 #include "api/LegacyExportPackagingApi.inl"
 #include "api/LegacyReadQueryApi.inl"
+#include "api/LegacyRenderTransferApi.inl"
 
 bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                                      std::map<std::string, std::string> &params,
@@ -1206,6 +1207,41 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                    params,
                    sendResponse)) {
         return *handled;
+    } else if (auto handled = automation::api::HandleLegacyRenderTransferCommand(
+                   this,
+                   _outputManager,
+                   _outputModelManager,
+                   AllModels,
+                   _lowDefinitionRender,
+                   _promptBatchRenderIssues,
+                   _renderMode,
+                   _saveLowDefinitionRender,
+                   mRendering,
+                   CurrentDir,
+                   CurrentSeqXmlFile,
+                   [&](const std::string& seq) { return FindSequence(seq); },
+                   [&]() { RenderAll(); },
+                   [&](const wxArrayString& files, bool promptIssues) { OpenRenderAndSaveSequences(files, promptIssues); },
+                   [&]() { wxYield(); },
+                   [&]() { RecalcModels(); },
+                   [&](const std::string& controllerName) { return GetControllerCaps(controllerName); },
+                   [&](Controller* c, wxString& message) { return UploadInputToController(c, message); },
+                   [&](Controller* c, wxString& message) { return UploadOutputToController(c, message); },
+                   [&](FPP* fpp) {
+                       int pw, ph;
+                       GetLayoutPreview()->GetVirtualCanvasSize(pw, ph);
+                       std::map<std::string, std::string> virtualDisplayData;
+                       FPP::CreateVirtualDisplayMap(AllModels, AllObjects, pw, ph, virtualDisplayData);
+                       fpp->UploadDisplayMap(virtualDisplayData);
+                       fpp->SetRestartFlag(true);
+                   },
+                   [&](const std::string& xsq) { return xLightsXmlFile::GetFSEQForXSQ(xsq, GetFseqDirectory()); },
+                   [&](const std::string& xsq) { return xLightsXmlFile::GetMediaForXSQ(xsq, CurrentDir, GetMediaFolders()); },
+                   [&](const std::string& seq) { return OpenAndCheckSequence(seq); },
+                   cmd,
+                   params,
+                   sendResponse)) {
+        return *handled;
     } else if (cmd == "saveLayout") {
         if (!layoutPanel->SaveEffects()) {
             return sendResponse("Failed to save layout.", "msg", 503, false);
@@ -1217,269 +1253,6 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
 
         return sendResponse("Layout and controller tab saved.", "msg", 200, false);
 
-    } else if (cmd == "renderAll") {
-        if (CurrentSeqXmlFile == nullptr) {
-            return sendResponse("No sequence open.", "msg", 503, false);
-        }
-        auto ld = _lowDefinitionRender;
-        auto highdef = params["highdef"];
-        if (highdef == "true" && _lowDefinitionRender) {
-            // override definition
-            _lowDefinitionRender = false;
-            _outputModelManager.AddImmediateWork(OutputModelManager::WORK_RELOAD_MODEL_FROM_XML, "Automation::renderAll");
-            _outputModelManager.AddImmediateWork(OutputModelManager::WORK_MODELS_CHANGE_REQUIRING_RERENDER, "Automation::renderAll");
-        }
-        RenderAll();
-        while (mRendering) {
-            wxYield();
-        }
-        if (ld != _lowDefinitionRender) {
-            _lowDefinitionRender = ld;
-            _outputModelManager.AddImmediateWork(OutputModelManager::WORK_RELOAD_MODEL_FROM_XML, "Automation::renderAll");
-            _outputModelManager.AddImmediateWork(OutputModelManager::WORK_MODELS_CHANGE_REQUIRING_RERENDER, "Automation::renderAll");
-        }
-        return sendResponse("Rendered.", "msg", 200, false);
-    } else if (cmd == "batchRender") {
-        wxArrayString files;
-
-        auto ld = _lowDefinitionRender;
-        auto highdef = params["highdef"];
-        if (highdef == "true" && _lowDefinitionRender) {
-            // override definition
-            _lowDefinitionRender = false;
-            _outputModelManager.AddImmediateWork(OutputModelManager::WORK_RELOAD_MODEL_FROM_XML, "Automation::batchRender");
-            _outputModelManager.AddImmediateWork(OutputModelManager::WORK_MODELS_CHANGE_REQUIRING_RERENDER, "Automation::batchRender");
-        }
-
-        auto seqs = params["seqs_0"];
-        int snum = 0;
-        while (seqs != "") {
-            auto seq = FindSequence(seqs);
-            if (seq.empty()) {
-                return sendResponse("Sequence not found '" + seq + "'", "msg", 503, false);
-            }
-            files.push_back(seq);
-            snum++;
-            seqs = params["seqs_" + std::to_string(snum)];
-        }
-        auto oldPrompt = _promptBatchRenderIssues;
-        _promptBatchRenderIssues = ReadBool(params["promptIssues"]);
-
-        _renderMode = true;
-        _saveLowDefinitionRender = _lowDefinitionRender;
-        OpenRenderAndSaveSequences(files, false);
-
-        while (_renderMode) {
-            wxYield();
-        }
-
-        _promptBatchRenderIssues = oldPrompt;
-        if (ld != _lowDefinitionRender) {
-            _lowDefinitionRender = ld;
-            _outputModelManager.AddImmediateWork(OutputModelManager::WORK_RELOAD_MODEL_FROM_XML, "Automation::batchRender");
-            _outputModelManager.AddImmediateWork(OutputModelManager::WORK_MODELS_CHANGE_REQUIRING_RERENDER, "Automation::batchRender");
-        }
-        return sendResponse("Sequence batch rendered.", "msg", 200, false);
-    } else if (cmd == "uploadController") {
-        auto ip = params["ip"];
-        Controller* c = _outputManager.GetControllerWithIP(ip);
-        if (c == nullptr) {
-            return sendResponse("Controller not found '" + ip + "'", "msg", 503, false);
-        }
-
-        // ensure all start channels etc are up to date
-        RecalcModels();
-
-        bool res = true;
-        auto caps = GetControllerCaps(c->GetName());
-        if (caps != nullptr) {
-            wxString message;
-            if (caps->SupportsInputOnlyUpload()) {
-                res = res && UploadInputToController(c, message);
-            }
-            res = res && UploadOutputToController(c, message);
-        } else {
-            res = false;
-        }
-        if (res) {
-            return sendResponse("Uploaded to controller '" + ip + "'", "msg", 200, false);
-        }
-        return sendResponse("Upload to controller '" + ip + "' failed.", "msg", 503, false);
-    } else if (cmd == "uploadFPPConfig") {
-        auto ip = params["ip"];
-        auto udp = params["udp"];
-        auto models = params["models"];
-        auto map = params["displayMap"];
-
-        // discover the FPP instances
-        auto instances = FPP::GetInstances(this, &_outputManager);
-
-        FPP* fpp = nullptr;
-        for (const auto& it : instances) {
-            if (it->ipAddress == ip && it->fppType == FPP_TYPE::FPP) {
-                fpp = it;
-                break;
-            }
-        }
-        if (fpp == nullptr) {
-            return sendResponse("FPP not found '" + ip + "'.", "msg", 503, false);
-        }
-
-        if (udp == "all") {
-            std::map<int, int> udpRanges;
-            auto outputs = fpp->CreateUniverseFile(_outputManager.GetControllers(), false, &udpRanges);
-            fpp->UploadUDPOut(outputs);
-            fpp->SetRestartFlag();
-        } else if (udp == "proxy") {
-            fpp->UploadUDPOutputsForProxy(&_outputManager);
-            fpp->SetRestartFlag();
-        }
-
-        if (models == "true" || models == "all") {
-            auto memoryMaps = fpp->CreateModelMemoryMap(&AllModels, 0, std::numeric_limits<int32_t>::max());
-            fpp->UploadModels(memoryMaps);
-        } else if (udp == "local") {
-            auto c = _outputManager.GetControllers(fpp->ipAddress);
-            if (c.size() == 1) {
-                auto const& memoryMaps = fpp->CreateModelMemoryMap(&AllModels, c.front()->GetStartChannel(), c.front()->GetEndChannel());
-                fpp->UploadModels(memoryMaps);
-            }
-        }
-
-        if (map == "true") {
-            int pw, ph;
-            GetLayoutPreview()->GetVirtualCanvasSize(pw, ph);
-            std::map<std::string, std::string> virtualDisplayData;
-            FPP::CreateVirtualDisplayMap(AllModels, AllObjects, pw, ph, virtualDisplayData);
-            fpp->UploadDisplayMap(virtualDisplayData);
-            // virtual display map  requires a restart
-            fpp->SetRestartFlag(true);
-        }
-
-        //if restart flag is now set, restart and recheck range
-        fpp->Restart(true);
-
-        return sendResponse("Uploaded to FPP '" + ip + "'.", "msg", 200, false);
-    } else if (cmd == "uploadSequence") {
-        bool res = true;
-        auto ip = params["ip"];
-        auto media = ReadBool(params["media"]);
-        auto format = params["format"];
-        auto xsq = params["seq"];
-        xsq = FindSequence(xsq);
-
-        if (xsq.empty()) {
-            return sendResponse("Sequence not found.", "msg", 503, false);
-        }
-
-        auto fseq = xLightsXmlFile::GetFSEQForXSQ(xsq, GetFseqDirectory());
-        auto m2 = xLightsXmlFile::GetMediaForXSQ(xsq, CurrentDir, GetMediaFolders());
-
-        if (!FileExists(fseq)) {
-            return sendResponse("Unable to find sequence FSEQ file.", "msg", 503, false);
-        }
-
-        // discover the FPP instances
-        auto instances = FPP::GetInstances(this, &_outputManager);
-
-        FPP* fpp = nullptr;
-        for (const auto& it : instances) {
-            if (it->ipAddress == ip) {
-                fpp = it;
-                break;
-            }
-        }
-        if (fpp == nullptr) {
-            return sendResponse("Player " + ip + " not found.", "msg", 503, false);
-        }
-
-        int fseqType = 0;
-        if (format == "v1") {
-            fseqType = 0;
-        } else if (format == "v2std") {
-            fseqType = 1;
-        } else if (format == "v2zlib") {
-            fseqType = 5;
-        } else if (format == "v2uncompressedsparse") {
-            fseqType = 3;
-        } else if (format == "v2uncompressed") {
-            fseqType = 4;
-        } else if (format == "v2stdsparse") {
-            fseqType = 2;
-        } else if (format == "v2zlibsparse") {
-            fseqType = 6;
-        }
-
-        if (!media) {
-            m2 = "";
-        }
-
-        FSEQFile* seq = FSEQFile::openFSEQFile(fseq);
-        if (seq) {
-            fpp->PrepareUploadSequence(seq, fseq, m2, fseqType);
-            static const int FRAMES_TO_BUFFER = 50;
-            std::vector<std::vector<uint8_t>> frames(FRAMES_TO_BUFFER);
-            for (size_t x = 0; x < frames.size(); x++) {
-                frames[x].resize(seq->getMaxChannel() + 1);
-            }
-
-            for (size_t frame = 0; frame < seq->getNumFrames(); frame++) {
-                int lastBuffered = 0;
-                size_t startFrame = frame;
-                //Read a bunch of frames so each parallel thread has more info to work with before returning out here
-                while (lastBuffered < FRAMES_TO_BUFFER && frame < seq->getNumFrames()) {
-                    FSEQFile::FrameData* f = seq->getFrame(frame);
-                    if (f != nullptr) {
-                        if (!f->readFrame(&frames[lastBuffered][0], frames[lastBuffered].size())) {
-                            //logger_base.error("FPPConnect FSEQ file corrupt.");
-                            res = false;
-                        }
-                        delete f;
-                    }
-                    lastBuffered++;
-                    frame++;
-                }
-                frame--;
-                for (int x = 0; x < lastBuffered; x++) {
-                    fpp->AddFrameToUpload(startFrame + x, &frames[x][0]);
-                }
-            }
-            fpp->FinalizeUploadSequence();
-
-            if (fpp->fppType == FPP_TYPE::FALCONV4V5) {
-                // a falcon
-                std::string proxy = "";
-                auto c = _outputManager.GetControllers(fpp->ipAddress);
-                if (c.size() == 1)
-                    proxy = c.front()->GetFPPProxy();
-                Falcon falcon(fpp->ipAddress, proxy);
-
-                if (falcon.IsConnected()) {
-                    falcon.UploadSequence(fpp->GetTempFile(), fseq, fpp->mode == "remote" ? "" : m2, nullptr);
-                } else {
-                    res = false;
-                }
-                fpp->ClearTempFile();
-            }
-            delete seq;
-        } else {
-            return sendResponse("Failed to generate FSEQ.", "msg", 503, false);
-        }
-
-        if (!res) {
-            return sendResponse("Failed to upload.", "msg", 503, false);
-        }
-        return sendResponse("Sequence uploaded.", "msg", 200, false);
-    } else if (cmd == "checkSequence") {
-        auto seq = params["seq"];
-        seq = FindSequence(seq);
-        if (seq.empty()) {
-            return sendResponse("Sequence not found.", "msg", 503, false);
-        }
-        auto file = OpenAndCheckSequence(seq);
-
-        std::string response = wxString::Format("{\"msg\":\"Sequence checked.\",\"output\":\"%s\"}", JSONSafe(file));
-        return sendResponse(response, "", 200, true);
     } else if (cmd == "changeShowFolder") {
         auto shw = params["folder"];
         if (!wxDir::Exists(shw)) {
@@ -2019,107 +1792,32 @@ std::string xLightsFrame::ProcessxlDoAutomation(const std::string& msg)
     }
     return result;
 }
- 
+
 /*
-
-            
-
- } else if (cmd == "runDiscovery") {
-     return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-     // TODO
- } else if (cmd == "exportModel") {
-     return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-     // TODO
-     // pass in name of the file to write to ... pass back the name of the file written to
- } else if (cmd == "exportModelAsCustom") {
-     return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-     // TODO
-     // pass in name of the file to write to ... pass back the name of the file written to
-
-            } else if (cmd == "shiftAllEffects") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // TODO
-                // pass in number of MS
-            } else if (cmd == "shiftSelectedEffects") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // TODO
-            } else if (cmd == "unselectEffects") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // TODO
-            } else if (cmd == "selectEffectsOnModel") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // TODO
-            } else if (cmd == "selectAllEffectsOnAllModels") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // TODO
-
-            } else if (cmd == "turnOnOutputToLights") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // TODO
-            } else if (cmd == "turnOffOutputToLights") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // TODO
-            } else if (cmd == "playSequence") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // TODO
-            } else if (cmd == "printLayout") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // TODO
-            } else if (cmd == "printWiring") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // TODO
-            } else if (cmd == "exportLayoutImage") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // TODO
-            } else if (cmd == "exportWiringImage") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // TODO
-            } else if (cmd == "cleanupFileLocations") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // TODO
-            } else if (cmd == "hinksPixExport") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // TODO
-            } else if (cmd == "purgeDownloadCache") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // MEDIUM PRIORITY
-                // TODO
-            } else if (cmd == "purgeRenderCache") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // MEDIUM PRIORITY
-                // TODO
-            } else if (cmd == "convertSequence") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // TODO
-            } else if (cmd == "prepareAudio") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // TODO
-            } else if (cmd == "resetToDefaults") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // MEDIUM PRIORITY
-                // TODO
-            } else if (cmd == "resetWindowLayout") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // MEDIUM PRIORITY
-                // TODO
-            } else if (cmd == "setAudioVolume") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // TODO
-            } else if (cmd == "setAudioSpeed") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // TODO
-            } else if (cmd == "gotoZoom") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // TODO
-            } else if (cmd == "importSequence") {
-                return "{\"res\":504,\"msg\":\"Not implemented.\"}";
-                // TODO
-             else {
-                return wxString::Format("{\"res\":504,\"msg\":\"Unknown command: '%s'.\"}", cmd);
-            }
-        }
-    } else {
-        return "{\"res\":504,\"msg\":\"Error parsing request.\"}";
-    }
-}
+ TODO backlog (legacy xlDo command names that remain unimplemented in this file):
+ - runDiscovery
+ - exportModelAsCustom
+ - shiftAllEffects
+ - shiftSelectedEffects
+ - unselectEffects
+ - selectEffectsOnModel
+ - selectAllEffectsOnAllModels
+ - turnOnOutputToLights
+ - turnOffOutputToLights
+ - playSequence
+ - printLayout
+ - printWiring
+ - exportLayoutImage
+ - exportWiringImage
+ - hinksPixExport
+ - purgeDownloadCache
+ - purgeRenderCache
+ - convertSequence
+ - prepareAudio
+ - resetToDefaults
+ - resetWindowLayout
+ - setAudioVolume
+ - setAudioSpeed
+ - gotoZoom
+ - importSequence
 */
