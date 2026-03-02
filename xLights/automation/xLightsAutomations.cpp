@@ -135,6 +135,7 @@ static const std::vector<std::string>& GetV2Commands() {
     // PR-2 scaffolding: extend this list as new v2 automation commands are implemented.
     static const std::vector<std::string> commands = {
         "system.getCapabilities",
+        "system.validateCommands",
         "sequence.getOpen",
         "sequence.open",
         "sequence.create",
@@ -204,6 +205,181 @@ static std::string ReadParamString(const std::map<std::string, std::string>& par
         return defaultValue;
     }
     return it->second;
+}
+
+static bool HasArrayParam(const nlohmann::json& params, const std::string& key) {
+    return params.contains(key) && params[key].is_array();
+}
+
+static std::string GetValidationErrorMessage(const std::string& message) {
+    return message.empty() ? "Validation failed." : message;
+}
+
+static bool ValidateBatchCommandShape(const nlohmann::json& command,
+                                      const std::set<std::string>& commandSet,
+                                      std::string& errorCode,
+                                      std::string& errorMessage) {
+    if (!command.is_object()) {
+        errorCode = "BAD_REQUEST";
+        errorMessage = "commands[] entries must be objects.";
+        return false;
+    }
+    if (!command.contains("cmd") || !command["cmd"].is_string() || command["cmd"].get<std::string>().empty()) {
+        errorCode = "BAD_REQUEST";
+        errorMessage = "commands[].cmd must be a non-empty string.";
+        return false;
+    }
+
+    std::string childCmd = command["cmd"].get<std::string>();
+    if (commandSet.find(childCmd) == commandSet.end()) {
+        errorCode = "UNKNOWN_COMMAND";
+        errorMessage = "Unsupported command: '" + childCmd + "'.";
+        return false;
+    }
+
+    const nlohmann::json params = command.contains("params") ? command["params"] : nlohmann::json::object();
+    if (!params.is_object()) {
+        errorCode = "BAD_REQUEST";
+        errorMessage = "commands[].params must be an object.";
+        return false;
+    }
+
+    if (command.contains("options")) {
+        const auto& options = command["options"];
+        if (!options.is_object()) {
+            errorCode = "BAD_REQUEST";
+            errorMessage = "commands[].options must be an object.";
+            return false;
+        }
+        if (options.contains("requestId") && !options["requestId"].is_string()) {
+            errorCode = "BAD_REQUEST";
+            errorMessage = "commands[].options.requestId must be a string.";
+            return false;
+        }
+        if (options.contains("dryRun") && !options["dryRun"].is_boolean() && !options["dryRun"].is_number_integer()) {
+            errorCode = "BAD_REQUEST";
+            errorMessage = "commands[].options.dryRun must be a boolean or integer.";
+            return false;
+        }
+    }
+
+    if (childCmd == "system.validateCommands") {
+        errorCode = "VALIDATION_ERROR";
+        errorMessage = "Nested system.validateCommands is not allowed.";
+        return false;
+    }
+
+    if (childCmd == "sequence.open") {
+        if (!params.contains("file") || !params["file"].is_string() || params["file"].get<std::string>().empty()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "sequence.open requires params.file.";
+            return false;
+        }
+    } else if (childCmd == "sequence.create") {
+        if (!params.contains("frameMs") || !params["frameMs"].is_number_integer() || params["frameMs"].get<int>() <= 0) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "sequence.create requires params.frameMs > 0.";
+            return false;
+        }
+        bool hasMediaFile = params.contains("mediaFile") && !params["mediaFile"].is_null() &&
+                            params["mediaFile"].is_string() && !params["mediaFile"].get<std::string>().empty();
+        if (!hasMediaFile) {
+            if (!params.contains("durationMs") || !params["durationMs"].is_number_integer() || params["durationMs"].get<int>() <= 0) {
+                errorCode = "VALIDATION_ERROR";
+                errorMessage = "sequence.create requires params.durationMs > 0 when mediaFile is absent.";
+                return false;
+            }
+        }
+    } else if (childCmd == "layout.getModel") {
+        if (!params.contains("name") || !params["name"].is_string() || params["name"].get<std::string>().empty()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "layout.getModel requires params.name.";
+            return false;
+        }
+    } else if (childCmd == "media.set") {
+        if (!params.contains("mediaFile") || !params["mediaFile"].is_string() || params["mediaFile"].get<std::string>().empty()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "media.set requires params.mediaFile.";
+            return false;
+        }
+    } else if (childCmd == "timing.createTrack") {
+        if (!params.contains("trackName") || !params["trackName"].is_string() || params["trackName"].get<std::string>().empty()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "timing.createTrack requires params.trackName.";
+            return false;
+        }
+    } else if (childCmd == "timing.renameTrack") {
+        if (!params.contains("trackName") || !params["trackName"].is_string() ||
+            !params.contains("newTrackName") || !params["newTrackName"].is_string() ||
+            params["trackName"].get<std::string>().empty() || params["newTrackName"].get<std::string>().empty()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "timing.renameTrack requires params.trackName and params.newTrackName.";
+            return false;
+        }
+    } else if (childCmd == "timing.deleteTrack" || childCmd == "timing.getMarks" ||
+               childCmd == "timing.insertMarks" || childCmd == "timing.replaceMarks" ||
+               childCmd == "timing.deleteMarks" || childCmd == "timing.getTrackSummary") {
+        if (!params.contains("trackName") || !params["trackName"].is_string() || params["trackName"].get<std::string>().empty()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = childCmd + " requires params.trackName.";
+            return false;
+        }
+        if ((childCmd == "timing.insertMarks" || childCmd == "timing.replaceMarks") &&
+            (!HasArrayParam(params, "marks") || params["marks"].empty())) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = childCmd + " requires non-empty params.marks.";
+            return false;
+        }
+    } else if (childCmd == "sequencer.setDisplayElementOrder") {
+        if (!HasArrayParam(params, "orderedIds") || params["orderedIds"].empty()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "sequencer.setDisplayElementOrder requires non-empty params.orderedIds.";
+            return false;
+        }
+    } else if (childCmd == "effects.create") {
+        if (!params.contains("modelName") || !params["modelName"].is_string() || params["modelName"].get<std::string>().empty() ||
+            !params.contains("layerIndex") || !params["layerIndex"].is_number_integer() || params["layerIndex"].get<int>() < 0 ||
+            !params.contains("effectName") || !params["effectName"].is_string() || params["effectName"].get<std::string>().empty() ||
+            !params.contains("startMs") || !params["startMs"].is_number_integer() ||
+            !params.contains("endMs") || !params["endMs"].is_number_integer() ||
+            params["endMs"].get<int>() <= params["startMs"].get<int>()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "effects.create requires modelName, layerIndex>=0, effectName, and endMs>startMs.";
+            return false;
+        }
+    } else if (childCmd == "effects.alignToTiming") {
+        bool hasSelector = (params.contains("effectId") || HasArrayParam(params, "effectIds") || params.contains("modelName"));
+        if (!params.contains("timingTrackName") || !params["timingTrackName"].is_string() || params["timingTrackName"].get<std::string>().empty() || !hasSelector) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "effects.alignToTiming requires timingTrackName and a selector.";
+            return false;
+        }
+    } else if (childCmd == "effects.shift") {
+        bool hasSelector = (params.contains("effectId") || HasArrayParam(params, "effectIds") || params.contains("modelName"));
+        if (!params.contains("deltaMs") || !params["deltaMs"].is_number_integer() || params["deltaMs"].get<int>() == 0 || !hasSelector) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "effects.shift requires deltaMs != 0 and a selector.";
+            return false;
+        }
+    } else if (childCmd == "effects.update" || childCmd == "effects.delete") {
+        bool hasSelector = (params.contains("effectId") || HasArrayParam(params, "effectIds") || params.contains("modelName"));
+        if (!hasSelector) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = childCmd + " requires an effect selector.";
+            return false;
+        }
+    } else if (childCmd == "effects.clone") {
+        if (!params.contains("sourceModelName") || !params["sourceModelName"].is_string() || params["sourceModelName"].get<std::string>().empty() ||
+            !params.contains("sourceLayerIndex") || !params["sourceLayerIndex"].is_number_integer() || params["sourceLayerIndex"].get<int>() < 0 ||
+            !HasArrayParam(params, "targetModels") || params["targetModels"].empty() ||
+            !params.contains("targetLayerIndex") || !params["targetLayerIndex"].is_number_integer() || params["targetLayerIndex"].get<int>() < 0) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "effects.clone requires sourceModelName/sourceLayerIndex/targetModels/targetLayerIndex.";
+            return false;
+        }
+    }
+
+    return true;
 }
 
 static int ReadParamInt(const std::map<std::string, std::string>& params,
@@ -547,6 +723,11 @@ static bool ParseXlDoAutomationBody(const std::string& body,
                 }
 
                 for (auto [name, value] : val["params"].items()) {
+                    if (name == "commands" && value.is_array()) {
+                        paramMap[name] = value.dump();
+                        continue;
+                    }
+
                     if (value.is_array()) {
                         for (size_t i = 0; i < value.size(); i++) {
                             if (value[i].is_object()) {
@@ -716,6 +897,48 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 {"lyricsSrtImportAvailable", true},
                 {"songStructureDetectionAvailable", false}
             };
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+        } else if (cmd == "system.validateCommands") {
+            std::string rawCommands = ReadParamString(params, "commands");
+            if (rawCommands.empty() || rawCommands == "null") {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "commands is required.", requestId), "", 422, true);
+            }
+
+            auto parsedCommands = nlohmann::json::parse(rawCommands, nullptr, false);
+            if (!parsedCommands.is_array() || parsedCommands.is_discarded() || parsedCommands.empty()) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "commands must be a non-empty array.", requestId), "", 422, true);
+            }
+
+            std::set<std::string> commandSet(GetV2Commands().begin(), GetV2Commands().end());
+            nlohmann::json results = nlohmann::json::array();
+            bool valid = true;
+
+            for (size_t i = 0; i < parsedCommands.size(); i++) {
+                const auto& command = parsedCommands[i];
+                std::string errorCode;
+                std::string errorMessage;
+
+                nlohmann::json entry;
+                entry["index"] = static_cast<int>(i);
+                if (command.is_object() && command.contains("cmd") && command["cmd"].is_string()) {
+                    entry["cmd"] = command["cmd"].get<std::string>();
+                }
+
+                bool commandValid = ValidateBatchCommandShape(command, commandSet, errorCode, errorMessage);
+                entry["valid"] = commandValid;
+                if (!commandValid) {
+                    valid = false;
+                    entry["error"] = {
+                        {"code", errorCode.empty() ? "VALIDATION_ERROR" : errorCode},
+                        {"message", GetValidationErrorMessage(errorMessage)}
+                    };
+                }
+                results.push_back(entry);
+            }
+
+            nlohmann::json data;
+            data["valid"] = valid;
+            data["results"] = results;
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
         } else if (cmd == "sequence.getOpen") {
             nlohmann::json data;
