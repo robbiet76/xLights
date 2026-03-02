@@ -42,6 +42,23 @@
 const wxString xLightsXmlFile::ERASE_MODE = "<rendered: erase-mode>";
 const wxString xLightsXmlFile::CANVAS_MODE = "<rendered: canvas-mode>";
 
+namespace {
+bool ReadFilePrefix(const wxString& path, char* buffer, size_t bufferSize, int& bytesRead)
+{
+    bytesRead = 0;
+    if (buffer == nullptr || bufferSize == 0) {
+        return false;
+    }
+    wxFile file(path);
+    if (!file.IsOpened()) {
+        return false;
+    }
+    bytesRead = file.Read(buffer, bufferSize);
+    file.Close();
+    return bytesRead > 0;
+}
+} // namespace
+
 
 const std::array<std::string, (int)HEADER_INFO_TYPES::NUM_TYPES> HEADER_STRINGS = {
     "author",
@@ -88,9 +105,10 @@ xLightsXmlFile::~xLightsXmlFile()
 bool xLightsXmlFile::IsXmlSequence(wxFileName& fname)
 {
     char buf[1024];
-    wxFile file(fname.GetFullPath());
-    int i = file.Read(buf, 1024);
-    file.Close();
+    int i = 0;
+    if (!ReadFilePrefix(fname.GetFullPath(), buf, sizeof(buf), i)) {
+        return false;
+    }
     wxString bufs(buf, i);
     if (bufs.Contains("<xsequence")) {
         return true;
@@ -101,9 +119,10 @@ bool xLightsXmlFile::IsXmlSequence(wxFileName& fname)
 bool xLightsXmlFile::IsV3Sequence() const
 {
     char buf[1024];
-    wxFile file(GetFullPath());
-    int i = file.Read(buf, 1024);
-    file.Close();
+    int i = 0;
+    if (!ReadFilePrefix(GetFullPath(), buf, sizeof(buf), i)) {
+        return false;
+    }
     if ((wxString(buf, i).Contains("<xsequence")) &&
         (wxString(buf, i).Contains("<tr>"))) {
         return true;
@@ -114,9 +133,10 @@ bool xLightsXmlFile::IsV3Sequence() const
 bool xLightsXmlFile::NeedsTimesCorrected() const
 {
     char buf[1024];
-    wxFile file(GetFullPath());
-    int i = file.Read(buf, 1024);
-    file.Close();
+    int i = 0;
+    if (!ReadFilePrefix(GetFullPath(), buf, sizeof(buf), i)) {
+        return false;
+    }
     if ((wxString(buf, i).Contains("<xsequence")) &&
         (wxString(buf, i).Contains("FixedPointTiming"))) {
         return false;

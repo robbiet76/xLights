@@ -818,6 +818,8 @@ void xLightsFrame::CheckForValidModels()
 
 void xLightsFrame::LoadAudioData(xLightsXmlFile& xml_file)
 {
+    static log4cpp::Category& logger_base = log4cpp::Category::getInstance(std::string("log_base"));
+
     // abort any in progress render ... as it may be using any already open media
     if (xml_file.GetMedia() != nullptr) {
         AbortRender();
@@ -832,23 +834,27 @@ void xLightsFrame::LoadAudioData(xLightsXmlFile& xml_file)
             mediaFilename = xml_file.GetMediaFile();
             ObtainAccessToURL(mediaFilename);
             if (mediaFilename.empty() || !FileExists(mediaFilename) || !wxIsReadable(mediaFilename)) {
-                SeqSettingsDialog setting_dlg(this, &xml_file, &_sequenceElements, mediaDirectories, wxT(""), wxEmptyString);
-                setting_dlg.Fit();
-                int ret_val = setting_dlg.ShowModal();
+                if (_renderMode || _checkSequenceMode) {
+                    logger_base.warn("Skipping media settings dialog in non-interactive mode; media file missing or unreadable: '%s'", mediaFilename.c_str());
+                } else {
+                    SeqSettingsDialog setting_dlg(this, &xml_file, &_sequenceElements, mediaDirectories, wxT(""), wxEmptyString);
+                    setting_dlg.Fit();
+                    int ret_val = setting_dlg.ShowModal();
 
-                mediaFilename = xml_file.GetMediaFile();
+                    mediaFilename = xml_file.GetMediaFile();
 
-                if (xml_file.GetMedia() != nullptr) {
-                    mediaFilename = xml_file.GetMedia()->FileName();
-                    ObtainAccessToURL(mediaFilename);
-                    if (xml_file.GetMedia() != nullptr && xml_file.GetMedia()->GetFrameInterval() < 0) {
-                        xml_file.GetMedia()->SetFrameInterval(xml_file.GetFrameMS());
+                    if (xml_file.GetMedia() != nullptr) {
+                        mediaFilename = xml_file.GetMedia()->FileName();
+                        ObtainAccessToURL(mediaFilename);
+                        if (xml_file.GetMedia() != nullptr && xml_file.GetMedia()->GetFrameInterval() < 0) {
+                            xml_file.GetMedia()->SetFrameInterval(xml_file.GetFrameMS());
+                        }
+                        SetAudioControls();
                     }
-                    SetAudioControls();
-                }
 
-                if (ret_val == NEEDS_RENDER) {
-                    RenderAll();
+                    if (ret_val == NEEDS_RENDER) {
+                        RenderAll();
+                    }
                 }
             }
         }
@@ -861,14 +867,22 @@ void xLightsFrame::LoadAudioData(xLightsXmlFile& xml_file)
             wxString error;
             musicLength = mainSequencer->PanelWaveForm->OpenfileMedia(xml_file.GetMedia(), error);
             if (musicLength <= 0) {
-                DisplayWarning(wxString::Format("Media File Missing or Corrupted %s.\n\nDetails: %s", mediaFilename, error).ToStdString());
+                if ((!_renderMode && !_checkSequenceMode) || _promptBatchRenderIssues) {
+                    DisplayWarning(wxString::Format("Media File Missing or Corrupted %s.\n\nDetails: %s", mediaFilename, error).ToStdString());
+                } else {
+                    logger_base.warn("Media file missing or corrupted in non-interactive mode: '%s' details='%s'", mediaFilename.c_str(), (const char*)error.ToStdString().c_str());
+                }
             }
             else {
                 sequenceVideoPanel->SetMediaPath(mediaFilename);
             }
         }
         else if (xml_file.GetSequenceType() == "Media") {
-            DisplayWarning("Media File must be specified");
+            if ((!_renderMode && !_checkSequenceMode) || _promptBatchRenderIssues) {
+                DisplayWarning("Media File must be specified");
+            } else {
+                logger_base.warn("Media file must be specified for media sequence (non-interactive mode).");
+            }
         }
 
         if (mMediaLengthMS == 0) {
