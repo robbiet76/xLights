@@ -3706,8 +3706,9 @@ void xLightsFrame::SetRenderOnSave(bool b)
 
 void xLightsFrame::SetSaveFseqOnSave(bool b)
 {
+    bool wasSavingFseq = mSaveFseqOnSave;
     mSaveFseqOnSave = b;
-    if (!mSaveFseqOnSave) {
+    if (wasSavingFseq && !mSaveFseqOnSave) {
         mRenderOnSave = false;
         DisplayWarning("Turning off save of the FSEQ is really not recommended. This will often require you to re-render a sequence every time you load it ... all to save yourself a couple of seconds save time.", this);
     }
@@ -10819,4 +10820,3 @@ void xLightsFrame::SetPaletteSizeString(const wxString& size) {
         }
     }
 }
-
