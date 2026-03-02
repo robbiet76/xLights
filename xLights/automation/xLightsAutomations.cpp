@@ -230,6 +230,24 @@ struct PendingV2Transaction {
 static std::unordered_map<std::string, PendingV2Transaction> gPendingV2Transactions;
 static constexpr long long kV2TransactionTtlMs = 10LL * 60LL * 1000LL;
 
+struct V2JobRecord {
+    std::string id;
+    std::string type;
+    std::string status;
+    bool cancellable = false;
+    int progressPct = 0;
+    long long createdEpochMs = 0;
+    long long startedEpochMs = 0;
+    long long completedEpochMs = 0;
+    long long updatedEpochMs = 0;
+    nlohmann::json result = nlohmann::json::object();
+    nlohmann::json error = nlohmann::json::object();
+};
+
+static std::unordered_map<std::string, V2JobRecord> gV2Jobs;
+static constexpr long long kV2JobRetentionMs = 24LL * 60LL * 60LL * 1000LL;
+static long long gV2JobCounter = 0;
+
 static long long NowEpochMs() {
     using namespace std::chrono;
     return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
@@ -256,6 +274,152 @@ static void PurgeExpiredTransactions() {
             ++it;
         }
     }
+}
+
+static void PurgeExpiredJobs() {
+    long long now = NowEpochMs();
+    for (auto it = gV2Jobs.begin(); it != gV2Jobs.end();) {
+        long long anchor = it->second.completedEpochMs > 0 ? it->second.completedEpochMs : it->second.updatedEpochMs;
+        if (anchor > 0 && now - anchor > kV2JobRetentionMs) {
+            it = gV2Jobs.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+static std::string CreateV2Job(const std::string& type, bool cancellable = false) {
+    long long now = NowEpochMs();
+    V2JobRecord job;
+    job.id = "job-" + std::to_string(now) + "-" + std::to_string(++gV2JobCounter);
+    job.type = type;
+    job.status = "queued";
+    job.cancellable = cancellable;
+    job.progressPct = 0;
+    job.createdEpochMs = now;
+    job.updatedEpochMs = now;
+    gV2Jobs[job.id] = job;
+    return job.id;
+}
+
+static V2JobRecord* FindV2Job(const std::string& jobId) {
+    auto it = gV2Jobs.find(jobId);
+    if (it == gV2Jobs.end()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
+static void MarkV2JobRunning(const std::string& jobId, int progressPct = 1) {
+    V2JobRecord* job = FindV2Job(jobId);
+    if (job == nullptr) {
+        return;
+    }
+    if (progressPct < 0) {
+        progressPct = 0;
+    }
+    if (progressPct > 99) {
+        progressPct = 99;
+    }
+    long long now = NowEpochMs();
+    job->status = "running";
+    job->progressPct = progressPct;
+    if (job->startedEpochMs == 0) {
+        job->startedEpochMs = now;
+    }
+    job->updatedEpochMs = now;
+}
+
+static void MarkV2JobSucceeded(const std::string& jobId, const nlohmann::json& result) {
+    V2JobRecord* job = FindV2Job(jobId);
+    if (job == nullptr) {
+        return;
+    }
+    long long now = NowEpochMs();
+    job->status = "succeeded";
+    job->progressPct = 100;
+    job->result = result;
+    job->error = nlohmann::json::object();
+    if (job->startedEpochMs == 0) {
+        job->startedEpochMs = now;
+    }
+    job->completedEpochMs = now;
+    job->updatedEpochMs = now;
+}
+
+static void MarkV2JobFailed(const std::string& jobId, const std::string& code, const std::string& message) {
+    V2JobRecord* job = FindV2Job(jobId);
+    if (job == nullptr) {
+        return;
+    }
+    long long now = NowEpochMs();
+    job->status = "failed";
+    job->progressPct = 100;
+    job->result = nlohmann::json::object();
+    job->error = {
+        {"code", code.empty() ? "JOB_FAILED" : code},
+        {"message", message.empty() ? "Job failed." : message}
+    };
+    if (job->startedEpochMs == 0) {
+        job->startedEpochMs = now;
+    }
+    job->completedEpochMs = now;
+    job->updatedEpochMs = now;
+}
+
+static bool MarkV2JobCancelled(const std::string& jobId, std::string& reason) {
+    V2JobRecord* job = FindV2Job(jobId);
+    if (job == nullptr) {
+        reason = "not_found";
+        return false;
+    }
+    if (job->status == "succeeded" || job->status == "failed" || job->status == "cancelled") {
+        reason = "already_terminal";
+        return false;
+    }
+    if (!job->cancellable) {
+        reason = "not_cancellable";
+        return false;
+    }
+    long long now = NowEpochMs();
+    job->status = "cancelled";
+    job->progressPct = 100;
+    job->result = nlohmann::json::object();
+    job->error = {
+        {"code", "JOB_CANCELLED"},
+        {"message", "Job cancelled."}
+    };
+    job->completedEpochMs = now;
+    job->updatedEpochMs = now;
+    reason = "cancelled";
+    return true;
+}
+
+static nlohmann::json BuildV2JobData(const V2JobRecord& job) {
+    nlohmann::json data;
+    data["jobId"] = job.id;
+    data["type"] = job.type;
+    data["status"] = job.status;
+    data["progressPct"] = job.progressPct;
+    data["cancellable"] = job.cancellable;
+    data["createdEpochMs"] = job.createdEpochMs;
+    if (job.startedEpochMs > 0) {
+        data["startedEpochMs"] = job.startedEpochMs;
+    }
+    if (job.completedEpochMs > 0) {
+        data["completedEpochMs"] = job.completedEpochMs;
+    }
+    if (!job.result.is_null() && !job.result.empty()) {
+        data["result"] = job.result;
+    } else {
+        data["result"] = nullptr;
+    }
+    if (!job.error.is_null() && !job.error.empty()) {
+        data["error"] = job.error;
+    } else {
+        data["error"] = nullptr;
+    }
+    return data;
 }
 
 static bool IsV2MutatingCommand(const std::string& cmd) {
@@ -321,6 +485,8 @@ static const std::vector<std::string>& GetV2Commands() {
         "transactions.begin",
         "transactions.commit",
         "transactions.rollback",
+        "jobs.get",
+        "jobs.cancel",
         "timing.listAnalysisPlugins",
         "timing.createFromAudio",
         "timing.getTrackSummary",
@@ -669,6 +835,7 @@ static bool ParseRemoteSections(const nlohmann::json& payload,
 
 // V2 API groups: capability, sequence lifecycle, layout, media, timing, sequencer, effects, audio analysis.
 #include "api/SystemV2Api.inl"
+#include "api/JobsV2Api.inl"
 #include "api/SequenceV2Api.inl"
 #include "api/LayoutV2Api.inl"
 #include "api/MediaV2Api.inl"
@@ -694,6 +861,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
         auto requestIdIt = params.find("_REQUEST_ID");
         std::string requestId = requestIdIt == params.end() ? "" : requestIdIt->second;
         PurgeExpiredTransactions();
+        PurgeExpiredJobs();
         auto requireOpenSequence = [&]() -> std::optional<bool> {
             if (CurrentSeqXmlFile != nullptr) {
                 return std::nullopt;
@@ -929,6 +1097,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
         }
 
         if (auto handled = automation::api::HandleSystemV2Command(cmd, params, requestId, sendResponse)) {
+            return *handled;
+        } else if (auto handled = automation::api::HandleJobsV2Command(cmd, params, requestId, sendResponse)) {
             return *handled;
         } else if (auto handled = automation::api::HandleSequenceV2Command(this, _sequenceElements, cmd, params, requestId, sendResponse)) {
             return *handled;

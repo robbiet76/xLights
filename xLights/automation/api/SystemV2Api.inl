@@ -19,7 +19,8 @@ static std::optional<bool> HandleSystemV2Command(
             {"lyricsSrtImportAvailable", true},
             {"songStructureDetectionAvailable", false},
             {"effectDefinitionIntrospectionAvailable", true},
-            {"transactionsAvailable", true}
+            {"transactionsAvailable", true},
+            {"asyncJobsAvailable", true}
         };
         return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
     }

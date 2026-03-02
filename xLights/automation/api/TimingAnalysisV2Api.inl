@@ -48,6 +48,7 @@ static std::optional<bool> HandleTimingAnalysisV2Command(
         bool replaceIfExists = ReadBool(ReadParamString(params, "replaceIfExists", "false"));
         bool addToAllViews = ReadBool(ReadParamString(params, "addToAllViews", "false"));
         bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
+        bool asyncRequested = ReadBool(ReadParamString(params, "async", "false"));
 
         if (trackName.empty()) {
             return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "trackName is required.", requestId), "", 422, true);
@@ -153,6 +154,16 @@ static std::optional<bool> HandleTimingAnalysisV2Command(
         data["markCount"] = static_cast<int>(starts.size());
         data["startMs"] = starts.front();
         data["endMs"] = ends.back();
+        if (asyncRequested && !dryRun) {
+            std::string jobId = CreateV2Job(cmd, false);
+            MarkV2JobRunning(jobId, 90);
+            MarkV2JobSucceeded(jobId, data);
+            nlohmann::json asyncData;
+            asyncData["jobId"] = jobId;
+            asyncData["status"] = "succeeded";
+            asyncData["result"] = data;
+            return sendResponse(BuildV2SuccessResponse(202, cmd, asyncData, requestId, warnings), "", 202, true);
+        }
         return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
     }
 
@@ -244,6 +255,7 @@ static std::optional<bool> HandleTimingAnalysisV2Command(
         int beatsPerBar = ReadParamInt(params, "beatsPerBar", 4);
         bool replaceIfExists = ReadBool(ReadParamString(params, "replaceIfExists", "false"));
         bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
+        bool asyncRequested = ReadBool(ReadParamString(params, "async", "false"));
 
         if (sourceTrackName.empty() || trackName.empty() || beatsPerBar <= 0) {
             return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "sourceTrackName, trackName, and beatsPerBar>0 are required.", requestId), "", 422, true);
@@ -322,6 +334,16 @@ static std::optional<bool> HandleTimingAnalysisV2Command(
         data["downbeatCount"] = downbeatCount;
         data["startMs"] = starts.front();
         data["endMs"] = ends.back();
+        if (asyncRequested && !dryRun) {
+            std::string jobId = CreateV2Job(cmd, false);
+            MarkV2JobRunning(jobId, 90);
+            MarkV2JobSucceeded(jobId, data);
+            nlohmann::json asyncData;
+            asyncData["jobId"] = jobId;
+            asyncData["status"] = "succeeded";
+            asyncData["result"] = data;
+            return sendResponse(BuildV2SuccessResponse(202, cmd, asyncData, requestId, warnings), "", 202, true);
+        }
         return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
     }
 
@@ -338,6 +360,7 @@ static std::optional<bool> HandleTimingAnalysisV2Command(
         bool replaceIfExists = ReadBool(ReadParamString(params, "replaceIfExists", "false"));
         int smoothingMs = ReadParamInt(params, "smoothingMs", 0);
         bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
+        bool asyncRequested = ReadBool(ReadParamString(params, "async", "false"));
         std::vector<std::string> levels = ReadParamArray(params, "levels");
         if (levels.empty()) {
             levels = { "low", "medium", "high" };
@@ -522,6 +545,16 @@ static std::optional<bool> HandleTimingAnalysisV2Command(
             coverageMs += std::max(0, ends[i] - starts[i]);
         }
         data["coverageMs"] = coverageMs;
+        if (asyncRequested && !dryRun) {
+            std::string jobId = CreateV2Job(cmd, false);
+            MarkV2JobRunning(jobId, 90);
+            MarkV2JobSucceeded(jobId, data);
+            nlohmann::json asyncData;
+            asyncData["jobId"] = jobId;
+            asyncData["status"] = "succeeded";
+            asyncData["result"] = data;
+            return sendResponse(BuildV2SuccessResponse(202, cmd, asyncData, requestId, warnings), "", 202, true);
+        }
         return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
     }
 

@@ -217,6 +217,12 @@ static bool ValidateBatchCommandShape(const nlohmann::json& command,
             errorMessage = "transactions.rollback requires params.transactionId.";
             return false;
         }
+    } else if (childCmd == "jobs.get" || childCmd == "jobs.cancel") {
+        if (!params.contains("jobId") || !params["jobId"].is_string() || params["jobId"].get<std::string>().empty()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = childCmd + " requires params.jobId.";
+            return false;
+        }
     } else if (childCmd == "sequence.open") {
         if (!params.contains("file") || !params["file"].is_string() || params["file"].get<std::string>().empty()) {
             errorCode = "VALIDATION_ERROR";
