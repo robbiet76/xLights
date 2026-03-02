@@ -313,9 +313,16 @@ static std::optional<bool> HandleEffectsV2Command(
         if (modelName.empty() || modelName == "null" || layerIndex < 0 || effectName.empty() || effectName == "null" || startMs < 0 || endMs <= startMs) {
             return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "modelName, layerIndex>=0, effectName, and endMs>startMs are required.", requestId), "", 422, true);
         }
+        RenderableEffect* definition = frame->GetEffectManager().GetEffect(effectName);
+        if (definition == nullptr) {
+            return sendResponse(BuildV2ErrorResponse(404, cmd, "EFFECT_DEFINITION_NOT_FOUND", "Unknown effect definition: '" + effectName + "'.", requestId), "", 404, true);
+        }
         Element* element = sequenceElements.GetElement(modelName);
-        if (element == nullptr || element->GetType() == ElementType::ELEMENT_TYPE_TIMING) {
-            return sendResponse(BuildV2ErrorResponse(404, cmd, "VALIDATION_ERROR", "modelName must reference a non-timing element.", requestId), "", 404, true);
+        if (element == nullptr) {
+            return sendResponse(BuildV2ErrorResponse(404, cmd, "MODEL_NOT_FOUND", "modelName was not found in sequence elements.", requestId), "", 404, true);
+        }
+        if (element->GetType() == ElementType::ELEMENT_TYPE_TIMING) {
+            return sendResponse(BuildV2ErrorResponse(422, cmd, "INVALID_TARGET_ELEMENT", "modelName must reference a non-timing element.", requestId), "", 422, true);
         }
         if (endMs > frame->CurrentSeqXmlFile->GetSequenceDurationMS()) {
             return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "endMs must be within sequence duration.", requestId), "", 422, true);

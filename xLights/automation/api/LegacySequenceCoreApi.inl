@@ -188,18 +188,60 @@ static std::optional<bool> HandleLegacySequenceCoreCommand(
             return sendResponse("Saving unnamed sequence needs a name to be sent.", "msg", 503, false);
         }
 
+        wxFileName targetSeqFile;
+        if (seq != "" && seq != "null") {
+            targetSeqFile.Assign(wxString::FromUTF8(seq));
+            targetSeqFile.SetExt("xsq");
+        } else {
+            targetSeqFile.Assign(frame->CurrentSeqXmlFile->GetFullPath());
+        }
+
+        wxString backupPath;
+        if (targetSeqFile.FileExists()) {
+            backupPath = targetSeqFile.GetFullPath() + ".automation-bak";
+            wxRemoveFile(backupPath);
+            wxCopyFile(targetSeqFile.GetFullPath(), backupPath, true);
+        }
+
+        wxString originalSeqPath = frame->CurrentSeqXmlFile->GetPath();
+        wxString originalSeqName = frame->CurrentSeqXmlFile->GetFullName();
+        bool saveAs = (seq != "" && seq != "null");
+        if (saveAs) {
+            frame->CurrentSeqXmlFile->SetPath(targetSeqFile.GetPath());
+            frame->CurrentSeqXmlFile->SetFullName(targetSeqFile.GetFullName());
+            wxFileName fseqName(targetSeqFile.GetFullPath());
+            fseqName.SetExt("fseq");
+            xlightsFilename = fseqName.GetFullPath();
+        }
+
         auto oldRenderMode = renderMode;
         auto oldPromptIssues = promptBatchRenderIssues;
         renderMode = true;
         promptBatchRenderIssues = false;
         ScopedAutomationAssertSuppressor suppressor(true);
-        if (seq != "" && seq != "null") {
-            frame->SaveAsSequence(seq);
-        } else {
-            frame->SaveSequence();
-        }
+        bool xmlSaveOk = frame->CurrentSeqXmlFile->Save(sequenceElements);
         promptBatchRenderIssues = oldPromptIssues;
         renderMode = oldRenderMode;
+
+        if (!xmlSaveOk) {
+            frame->CurrentSeqXmlFile->SetPath(originalSeqPath);
+            frame->CurrentSeqXmlFile->SetFullName(originalSeqName);
+        }
+
+        wxULongLong savedSize = targetSeqFile.GetSize();
+        bool savedOk = xmlSaveOk && targetSeqFile.FileExists() && savedSize != wxInvalidSize && savedSize.GetValue() > 0;
+        if (!savedOk) {
+            if (!backupPath.IsEmpty() && wxFileExists(backupPath)) {
+                wxCopyFile(backupPath, targetSeqFile.GetFullPath(), true);
+                wxRemoveFile(backupPath);
+            }
+            return sendResponse("Legacy saveSequence failed to write sequence file safely.", "msg", 503, false);
+        }
+        frame->mSavedChangeCount = sequenceElements.GetChangeCount();
+        frame->mLastAutosaveCount = frame->mSavedChangeCount;
+        if (!backupPath.IsEmpty() && wxFileExists(backupPath)) {
+            wxRemoveFile(backupPath);
+        }
         return sendResponse("Sequence Saved.", "msg", 200, false);
     }
 

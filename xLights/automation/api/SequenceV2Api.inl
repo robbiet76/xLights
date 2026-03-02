@@ -181,19 +181,60 @@ static std::optional<bool> HandleSequenceV2Command(
                                                     {{"param", "file"}, {"hasSequenceName", false}}), "", 422, true);
         }
 
+        wxFileName targetSeqFile;
+        if (!file.empty()) {
+            targetSeqFile.Assign(wxString::FromUTF8(file));
+            targetSeqFile.SetExt("xsq");
+        } else {
+            targetSeqFile.Assign(frame->CurrentSeqXmlFile->GetFullPath());
+        }
+        wxString backupPath;
+        if (targetSeqFile.FileExists()) {
+            backupPath = targetSeqFile.GetFullPath() + ".automation-bak";
+            wxRemoveFile(backupPath);
+            wxCopyFile(targetSeqFile.GetFullPath(), backupPath, true);
+        }
+
+        wxString originalSeqPath = frame->CurrentSeqXmlFile->GetPath();
+        wxString originalSeqName = frame->CurrentSeqXmlFile->GetFullName();
+        bool saveAs = !file.empty();
+        if (saveAs) {
+            frame->CurrentSeqXmlFile->SetPath(targetSeqFile.GetPath());
+            frame->CurrentSeqXmlFile->SetFullName(targetSeqFile.GetFullName());
+            wxFileName fseqName(targetSeqFile.GetFullPath());
+            fseqName.SetExt("fseq");
+            frame->xlightsFilename = fseqName.GetFullPath();
+        }
+
         auto oldRenderMode = frame->_renderMode;
         auto oldPromptIssues = frame->_promptBatchRenderIssues;
         frame->_renderMode = true;
         frame->_promptBatchRenderIssues = false;
         // Keep API save calls non-interactive in debug builds where wx asserts can open modal dialogs.
         ScopedAutomationAssertSuppressor suppressor(true);
-        if (!file.empty()) {
-            frame->SaveAsSequence(file);
-        } else {
-            frame->SaveSequence();
-        }
+        bool xmlSaveOk = frame->CurrentSeqXmlFile->Save(sequenceElements);
         frame->_promptBatchRenderIssues = oldPromptIssues;
         frame->_renderMode = oldRenderMode;
+
+        if (!xmlSaveOk) {
+            frame->CurrentSeqXmlFile->SetPath(originalSeqPath);
+            frame->CurrentSeqXmlFile->SetFullName(originalSeqName);
+        }
+
+        wxULongLong savedSize = targetSeqFile.GetSize();
+        bool savedOk = xmlSaveOk && targetSeqFile.FileExists() && savedSize != wxInvalidSize && savedSize.GetValue() > 0;
+        if (!savedOk) {
+            if (!backupPath.IsEmpty() && wxFileExists(backupPath)) {
+                wxCopyFile(backupPath, targetSeqFile.GetFullPath(), true);
+                wxRemoveFile(backupPath);
+            }
+            return sendResponse(BuildV2ErrorResponse(500, cmd, "SAVE_FAILED", "Failed to persist sequence file safely.", requestId), "", 500, true);
+        }
+        frame->mSavedChangeCount = sequenceElements.GetChangeCount();
+        frame->mLastAutosaveCount = frame->mSavedChangeCount;
+        if (!backupPath.IsEmpty() && wxFileExists(backupPath)) {
+            wxRemoveFile(backupPath);
+        }
 
         nlohmann::json data;
         data["saved"] = true;
