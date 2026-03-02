@@ -172,6 +172,11 @@ static bool ValidateBatchCommandShape(const nlohmann::json& command,
         errorMessage = "commands[].params must be an object.";
         return false;
     }
+    if (params.contains("expectedRevision") && !(params["expectedRevision"].is_string() || params["expectedRevision"].is_null())) {
+        errorCode = "VALIDATION_ERROR";
+        errorMessage = "expectedRevision must be a string when provided.";
+        return false;
+    }
 
     if (command.contains("options")) {
         const auto& options = command["options"];

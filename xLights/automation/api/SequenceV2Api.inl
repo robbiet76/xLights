@@ -22,6 +22,17 @@ static std::optional<bool> HandleSequenceV2Command(
         return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
     }
 
+    if (cmd == "sequence.getRevision") {
+        if (frame->CurrentSeqXmlFile == nullptr) {
+            return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+        }
+        nlohmann::json data;
+        data["sequencePath"] = BuildCurrentSequencePath(frame->CurrentSeqXmlFile);
+        data["revisionToken"] = BuildSequenceRevisionToken(frame->CurrentSeqXmlFile, sequenceElements);
+        data["lastModifiedEpochMs"] = BuildSequenceLastModifiedEpochMs(frame->CurrentSeqXmlFile);
+        return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+    }
+
     if (cmd == "sequence.open") {
         std::string file = ReadParamString(params, "file");
         bool force = ReadBool(ReadParamString(params, "force", "false"));

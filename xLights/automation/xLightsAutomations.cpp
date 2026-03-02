@@ -35,6 +35,8 @@
 #include "../utils/Curl.h"
 #include <wx/uri.h>
 #include <wx/debug.h>
+#include <wx/datetime.h>
+#include <wx/filename.h>
 #include <wx/checkbox.h>
 #include <wx/choice.h>
 #include <wx/filepicker.h>
@@ -265,6 +267,21 @@ static std::string BuildCurrentSequencePath(xLightsXmlFile* currentSeqXmlFile) {
     return currentSeqXmlFile->GetFullPath().ToStdString();
 }
 
+static long long BuildSequenceLastModifiedEpochMs(xLightsXmlFile* currentSeqXmlFile) {
+    if (currentSeqXmlFile == nullptr) {
+        return 0;
+    }
+    wxFileName seqFile(wxString::FromUTF8(currentSeqXmlFile->GetFullPath().ToStdString()));
+    if (!seqFile.FileExists()) {
+        return 0;
+    }
+    wxDateTime modified = seqFile.GetModificationTime();
+    if (!modified.IsValid()) {
+        return 0;
+    }
+    return static_cast<long long>(modified.GetTicks()) * 1000LL;
+}
+
 static void PurgeExpiredTransactions() {
     long long now = NowEpochMs();
     for (auto it = gPendingV2Transactions.begin(); it != gPendingV2Transactions.end();) {
@@ -424,6 +441,7 @@ static nlohmann::json BuildV2JobData(const V2JobRecord& job) {
 
 static bool IsV2MutatingCommand(const std::string& cmd) {
     static const std::set<std::string> mutating = {
+        "sequence.save",
         "media.set",
         "timing.createTrack",
         "timing.renameTrack",
@@ -452,6 +470,7 @@ static const std::vector<std::string>& GetV2Commands() {
         "system.getCapabilities",
         "system.validateCommands",
         "sequence.getOpen",
+        "sequence.getRevision",
         "sequence.open",
         "sequence.create",
         "sequence.save",
@@ -868,6 +887,17 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             }
             return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
         };
+
+        std::string expectedRevision = ReadParamString(params, "expectedRevision");
+        if (!expectedRevision.empty() && expectedRevision != "null" && IsV2MutatingCommand(cmd)) {
+            if (CurrentSeqXmlFile == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            }
+            std::string currentRevision = BuildSequenceRevisionToken(CurrentSeqXmlFile, _sequenceElements);
+            if (expectedRevision != currentRevision) {
+                return sendResponse(BuildV2ErrorResponse(409, cmd, "REVISION_CONFLICT", "expectedRevision does not match current sequence revision.", requestId), "", 409, true);
+            }
+        }
         auto normalizeRangeOrError = [&](int& startMs, int& endMs, int defaultEndMs) -> std::optional<bool> {
             if (startMs < 0) {
                 startMs = 0;
@@ -1084,6 +1114,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             staged.cmd = cmd;
             staged.params = params;
             staged.params.erase("transactionId");
+            staged.params.erase("expectedRevision");
             staged.params.erase("_REQUEST_ID");
             staged.params.erase("_DRY_RUN");
             tx.commands.push_back(staged);
