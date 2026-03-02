@@ -492,6 +492,36 @@ static bool ValidateOrderedNonOverlapping(const std::vector<TimingMarkPayload>& 
     return true;
 }
 
+static nlohmann::json BuildDryRunWarnings(bool dryRun) {
+    nlohmann::json warnings = nlohmann::json::array();
+    if (dryRun) {
+        warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
+    }
+    return warnings;
+}
+
+static std::string GetElementTypeName(const Element* element) {
+    if (element == nullptr) {
+        return "model";
+    }
+    if (element->GetType() == ElementType::ELEMENT_TYPE_TIMING) {
+        return "timing";
+    }
+    if (element->GetType() == ElementType::ELEMENT_TYPE_SUBMODEL) {
+        return "submodel";
+    }
+    if (element->GetType() == ElementType::ELEMENT_TYPE_STRAND) {
+        return "strand";
+    }
+    return "model";
+}
+
+static void RefreshEffectGridIfPresent(MainSequencer* sequencer) {
+    if (sequencer != nullptr && sequencer->PanelEffectGrid != nullptr) {
+        sequencer->PanelEffectGrid->Refresh();
+    }
+}
+
 static nlohmann::json BuildDisplayElementOrderData(SequenceElements& sequenceElements) {
     nlohmann::json elements = nlohmann::json::array();
     size_t count = sequenceElements.GetElementCount(MASTER_VIEW);
@@ -500,18 +530,10 @@ static nlohmann::json BuildDisplayElementOrderData(SequenceElements& sequenceEle
         if (element == nullptr) {
             continue;
         }
-        std::string type = "model";
-        if (element->GetType() == ElementType::ELEMENT_TYPE_TIMING) {
-            type = "timing";
-        } else if (element->GetType() == ElementType::ELEMENT_TYPE_SUBMODEL) {
-            type = "submodel";
-        } else if (element->GetType() == ElementType::ELEMENT_TYPE_STRAND) {
-            type = "strand";
-        }
         elements.push_back({
             {"id", element->GetName()},
             {"name", element->GetName()},
-            {"type", type},
+            {"type", GetElementTypeName(element)},
             {"orderIndex", static_cast<int>(i)}
         });
     }
@@ -969,8 +991,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             }
 
             if (dryRun) {
-                nlohmann::json warnings = nlohmann::json::array();
-                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
+                nlohmann::json warnings = BuildDryRunWarnings(true);
                 nlohmann::json data;
                 data["file"] = seq;
                 data["validated"] = true;
@@ -1027,8 +1048,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             }
 
             if (dryRun) {
-                nlohmann::json warnings = nlohmann::json::array();
-                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
+                nlohmann::json warnings = BuildDryRunWarnings(true);
                 nlohmann::json data;
                 data["validated"] = true;
                 data["frameMs"] = frameMs;
@@ -1077,8 +1097,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             }
 
             if (dryRun) {
-                nlohmann::json warnings = nlohmann::json::array();
-                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
+                nlohmann::json warnings = BuildDryRunWarnings(true);
                 nlohmann::json data;
                 data["saved"] = true;
                 if (!file.empty()) {
@@ -1129,8 +1148,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             }
 
             if (dryRun) {
-                nlohmann::json warnings = nlohmann::json::array();
-                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
+                nlohmann::json warnings = BuildDryRunWarnings(true);
                 nlohmann::json data;
                 data["closed"] = true;
                 return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
@@ -1217,10 +1235,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 CurrentSeqXmlFile->SetMediaFile(GetShowDirectory(), wxString::FromUTF8(mediaFile), true);
             }
 
-            nlohmann::json warnings = nlohmann::json::array();
-            if (dryRun) {
-                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
-            }
+            nlohmann::json warnings = BuildDryRunWarnings(dryRun);
             nlohmann::json data;
             data["mediaFile"] = mediaFile;
             data["updated"] = updated;
@@ -1312,10 +1327,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 }
             }
 
-            nlohmann::json warnings = nlohmann::json::array();
-            if (dryRun) {
-                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
-            }
+            nlohmann::json warnings = BuildDryRunWarnings(dryRun);
             nlohmann::json data;
             data["trackName"] = trackName;
             data["action"] = action;
@@ -1345,10 +1357,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 _sequenceElements.RenameTimingTrack(trackName, newTrackName);
             }
 
-            nlohmann::json warnings = nlohmann::json::array();
-            if (dryRun) {
-                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
-            }
+            nlohmann::json warnings = BuildDryRunWarnings(dryRun);
             nlohmann::json data;
             data["trackName"] = trackName;
             data["newTrackName"] = newTrackName;
@@ -1373,10 +1382,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 _sequenceElements.DeleteElement(trackName);
             }
 
-            nlohmann::json warnings = nlohmann::json::array();
-            if (dryRun) {
-                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
-            }
+            nlohmann::json warnings = BuildDryRunWarnings(dryRun);
             nlohmann::json data;
             data["deleted"] = true;
             return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
@@ -1477,10 +1483,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 }
             }
 
-            nlohmann::json warnings = nlohmann::json::array();
-            if (dryRun) {
-                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
-            }
+            nlohmann::json warnings = BuildDryRunWarnings(dryRun);
             nlohmann::json data;
             data["trackName"] = trackName;
             data["insertedCount"] = static_cast<int>(marks.size());
@@ -1530,10 +1533,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 }
             }
 
-            nlohmann::json warnings = nlohmann::json::array();
-            if (dryRun) {
-                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
-            }
+            nlohmann::json warnings = BuildDryRunWarnings(dryRun);
             nlohmann::json data;
             data["trackName"] = trackName;
             data["replacedCount"] = static_cast<int>(marks.size());
@@ -1606,10 +1606,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 }
             }
 
-            nlohmann::json warnings = nlohmann::json::array();
-            if (dryRun) {
-                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
-            }
+            nlohmann::json warnings = BuildDryRunWarnings(dryRun);
             nlohmann::json data;
             data["trackName"] = trackName;
             data["deletedCount"] = deletedCount;
@@ -1680,15 +1677,10 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 }
                 _sequenceElements.PopulateRowInformation();
                 _sequenceElements.PopulateVisibleRowInformation();
-                if (mainSequencer != nullptr && mainSequencer->PanelEffectGrid != nullptr) {
-                    mainSequencer->PanelEffectGrid->Refresh();
-                }
+                RefreshEffectGridIfPresent(mainSequencer);
             }
 
-            nlohmann::json warnings = nlohmann::json::array();
-            if (dryRun) {
-                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
-            }
+            nlohmann::json warnings = BuildDryRunWarnings(dryRun);
 
             nlohmann::json data;
             data["updated"] = true;
@@ -1698,20 +1690,10 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 for (size_t i = 0; i < orderedIds.size(); i++) {
                     const std::string& id = orderedIds[i];
                     Element* element = _sequenceElements.GetElement(id);
-                    std::string type = "model";
-                    if (element != nullptr) {
-                        if (element->GetType() == ElementType::ELEMENT_TYPE_TIMING) {
-                            type = "timing";
-                        } else if (element->GetType() == ElementType::ELEMENT_TYPE_SUBMODEL) {
-                            type = "submodel";
-                        } else if (element->GetType() == ElementType::ELEMENT_TYPE_STRAND) {
-                            type = "strand";
-                        }
-                    }
                     projected.push_back({
                         {"id", id},
                         {"name", id},
-                        {"type", type},
+                        {"type", GetElementTypeName(element)},
                         {"orderIndex", static_cast<int>(i)}
                     });
                 }
@@ -1790,15 +1772,10 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                     created->SetSettings(settingsJson, true, true);
                 }
                 effectHandle = modelName + ":" + std::to_string(layerIndex) + ":" + std::to_string(created->GetID());
-                if (mainSequencer != nullptr && mainSequencer->PanelEffectGrid != nullptr) {
-                    mainSequencer->PanelEffectGrid->Refresh();
-                }
+                RefreshEffectGridIfPresent(mainSequencer);
             }
 
-            nlohmann::json warnings = nlohmann::json::array();
-            if (dryRun) {
-                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
-            }
+            nlohmann::json warnings = BuildDryRunWarnings(dryRun);
             nlohmann::json data;
             data["effectId"] = effectHandle;
             data["created"] = true;
@@ -1863,10 +1840,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             }
 
             bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
-            nlohmann::json warnings = nlohmann::json::array();
-            if (dryRun) {
-                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
-            }
+            nlohmann::json warnings = BuildDryRunWarnings(dryRun);
 
             if (cmd == "effects.update") {
                 std::string effectName = ReadParamString(params, "effectName");
@@ -1897,8 +1871,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                     }
                     updatedCount++;
                 }
-                if (!dryRun && mainSequencer != nullptr && mainSequencer->PanelEffectGrid != nullptr) {
-                    mainSequencer->PanelEffectGrid->Refresh();
+                if (!dryRun) {
+                    RefreshEffectGridIfPresent(mainSequencer);
                 }
                 nlohmann::json data;
                 data["updatedCount"] = updatedCount;
@@ -1925,9 +1899,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                             deletedCount++;
                         }
                     }
-                    if (mainSequencer != nullptr && mainSequencer->PanelEffectGrid != nullptr) {
-                        mainSequencer->PanelEffectGrid->Refresh();
-                    }
+                    RefreshEffectGridIfPresent(mainSequencer);
                 } else {
                     std::set<std::string> uniqueHandles;
                     for (const auto& ref : refs) {
@@ -1977,8 +1949,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                     }
                     shiftedCount++;
                 }
-                if (!dryRun && mainSequencer != nullptr && mainSequencer->PanelEffectGrid != nullptr) {
-                    mainSequencer->PanelEffectGrid->Refresh();
+                if (!dryRun) {
+                    RefreshEffectGridIfPresent(mainSequencer);
                 }
                 nlohmann::json data;
                 data["shiftedCount"] = shiftedCount;
@@ -2067,8 +2039,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                     }
                     alignedCount++;
                 }
-                if (!dryRun && mainSequencer != nullptr && mainSequencer->PanelEffectGrid != nullptr) {
-                    mainSequencer->PanelEffectGrid->Refresh();
+                if (!dryRun) {
+                    RefreshEffectGridIfPresent(mainSequencer);
                 }
                 nlohmann::json data;
                 data["alignedCount"] = alignedCount;
@@ -2137,14 +2109,11 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             if (dryRun) {
                 createdCount = static_cast<int>(sourceRefs.size() * targetModels.size());
                 updatedCount = 0;
-            } else if (mainSequencer != nullptr && mainSequencer->PanelEffectGrid != nullptr) {
-                mainSequencer->PanelEffectGrid->Refresh();
+            } else {
+                RefreshEffectGridIfPresent(mainSequencer);
             }
 
-            nlohmann::json warnings = nlohmann::json::array();
-            if (dryRun) {
-                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
-            }
+            nlohmann::json warnings = BuildDryRunWarnings(dryRun);
             nlohmann::json data;
             data["createdCount"] = createdCount;
             data["updatedCount"] = updatedCount;
@@ -2443,10 +2412,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 CurrentSeqXmlFile->AddNewTimingSection(trackName, this, starts, ends, labels);
             }
 
-            nlohmann::json warnings = nlohmann::json::array();
-            if (dryRun) {
-                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
-            }
+            nlohmann::json warnings = BuildDryRunWarnings(dryRun);
             nlohmann::json data;
             data["trackName"] = trackName;
             data["action"] = action;
@@ -2643,10 +2609,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                 });
             }
 
-            nlohmann::json warnings = nlohmann::json::array();
-            if (dryRun) {
-                warnings.push_back({ {"code", "DRY_RUN"}, {"message", "No changes were applied."} });
-            }
+            nlohmann::json warnings = BuildDryRunWarnings(dryRun);
             nlohmann::json data;
             data["trackName"] = trackName;
             data["action"] = action;
