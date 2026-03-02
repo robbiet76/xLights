@@ -95,13 +95,23 @@ void AutomationAssertHandler(const wxString& file,
 class ScopedAutomationAssertSuppressor {
 public:
     explicit ScopedAutomationAssertSuppressor(bool enabled)
-        : _enabled(enabled), _previous(nullptr) {
+        : _enabled(enabled), _previous(nullptr), _hadTrapState(false), _previousTrapState(false) {
         if (_enabled) {
             _previous = wxSetAssertHandler(AutomationAssertHandler);
+#if wxDEBUG_LEVEL
+            _hadTrapState = true;
+            _previousTrapState = wxTrapInAssert;
+            wxTrapInAssert = false;
+#endif
         }
     }
     ~ScopedAutomationAssertSuppressor() {
         if (_enabled) {
+#if wxDEBUG_LEVEL
+            if (_hadTrapState) {
+                wxTrapInAssert = _previousTrapState;
+            }
+#endif
             wxSetAssertHandler(_previous);
         }
     }
@@ -109,6 +119,8 @@ public:
 private:
     bool _enabled;
     wxAssertHandler_t _previous;
+    bool _hadTrapState;
+    bool _previousTrapState;
 };
 } // namespace
 
