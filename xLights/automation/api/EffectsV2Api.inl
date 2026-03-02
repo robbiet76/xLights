@@ -1,5 +1,219 @@
 namespace automation::api {
 
+static void AddEffectParamIfAbsent(nlohmann::json& params,
+                                   std::set<std::string>& seenNames,
+                                   const nlohmann::json& entry) {
+    if (!entry.is_object() || !entry.contains("name") || !entry["name"].is_string()) {
+        return;
+    }
+    std::string name = entry["name"].get<std::string>();
+    if (name.empty()) {
+        return;
+    }
+    if (!seenNames.insert(name).second) {
+        return;
+    }
+    params.push_back(entry);
+}
+
+static std::string InferParamTypeFromControlName(const wxString& childName) {
+    if (childName.StartsWith("ID_SLIDER") || childName.StartsWith("ID_SPINCTRL")) {
+        return "int";
+    }
+    if (childName.StartsWith("ID_VALUECURVE")) {
+        return "curve";
+    }
+    if (childName.StartsWith("ID_TEXTCTRL")) {
+        return "string";
+    }
+    if (childName.StartsWith("ID_CHOICE") || childName.StartsWith("ID_NOTEBOOK")) {
+        return "enum";
+    }
+    if (childName.StartsWith("ID_CHECKBOX") || childName.StartsWith("ID_TOGGLEBUTTON")) {
+        return "bool";
+    }
+    if (childName.StartsWith("ID_FILEPICKER") || childName.StartsWith("ID_0FILEPICKER")) {
+        return "file";
+    }
+    if (childName.StartsWith("ID_FONTPICKER")) {
+        return "string";
+    }
+    return "string";
+}
+
+static nlohmann::json BuildBaseEffectParam(const wxString& childName) {
+    nlohmann::json param;
+    std::string name = ("E_" + childName.Mid(3)).ToStdString();
+    param["name"] = name;
+    param["type"] = InferParamTypeFromControlName(childName);
+    param["required"] = false;
+    param["description"] = "";
+    return param;
+}
+
+static void CollectEffectDefinitionParamsFromWindow(wxWindow* window,
+                                                    nlohmann::json& params,
+                                                    std::set<std::string>& seenNames) {
+    if (window == nullptr) {
+        return;
+    }
+
+    for (const auto& childAny : window->GetChildren()) {
+        wxWindow* child = childAny;
+        if (child == nullptr) {
+            continue;
+        }
+        wxString childName = child->GetName();
+
+        if (childName.StartsWith("ID_SLIDER")) {
+            auto* ctrl = dynamic_cast<wxSlider*>(child);
+            if (ctrl != nullptr) {
+                nlohmann::json param = BuildBaseEffectParam(childName);
+                param["default"] = ctrl->GetValue();
+                param["min"] = ctrl->GetMin();
+                param["max"] = ctrl->GetMax();
+                AddEffectParamIfAbsent(params, seenNames, param);
+            }
+            continue;
+        }
+
+        if (childName.StartsWith("ID_SPINCTRL")) {
+            auto* ctrl = dynamic_cast<wxSpinCtrl*>(child);
+            if (ctrl != nullptr) {
+                nlohmann::json param = BuildBaseEffectParam(childName);
+                param["default"] = ctrl->GetValue();
+                param["min"] = ctrl->GetMin();
+                param["max"] = ctrl->GetMax();
+                AddEffectParamIfAbsent(params, seenNames, param);
+            }
+            continue;
+        }
+
+        if (childName.StartsWith("ID_VALUECURVE")) {
+            auto* ctrl = dynamic_cast<ValueCurveButton*>(child);
+            if (ctrl != nullptr) {
+                nlohmann::json param = BuildBaseEffectParam(childName);
+                auto* value = ctrl->GetValue();
+                if (value != nullptr && value->IsActive()) {
+                    param["default"] = value->Serialise();
+                } else {
+                    param["default"] = nullptr;
+                }
+                AddEffectParamIfAbsent(params, seenNames, param);
+            }
+            continue;
+        }
+
+        if (childName.StartsWith("ID_TEXTCTRL")) {
+            auto* ctrl = dynamic_cast<wxTextCtrl*>(child);
+            if (ctrl != nullptr) {
+                nlohmann::json param = BuildBaseEffectParam(childName);
+                param["default"] = ctrl->GetValue().ToStdString();
+                AddEffectParamIfAbsent(params, seenNames, param);
+            }
+            continue;
+        }
+
+        if (childName.StartsWith("ID_CHOICE")) {
+            auto* ctrl = dynamic_cast<wxChoice*>(child);
+            if (ctrl != nullptr) {
+                nlohmann::json param = BuildBaseEffectParam(childName);
+                param["default"] = ctrl->GetStringSelection().ToStdString();
+                nlohmann::json enumValues = nlohmann::json::array();
+                for (unsigned int i = 0; i < ctrl->GetCount(); i++) {
+                    enumValues.push_back(ctrl->GetString(i).ToStdString());
+                }
+                param["enumValues"] = enumValues;
+                AddEffectParamIfAbsent(params, seenNames, param);
+            }
+            continue;
+        }
+
+        if (childName.StartsWith("ID_CHECKBOX")) {
+            auto* ctrl = dynamic_cast<wxCheckBox*>(child);
+            if (ctrl != nullptr) {
+                nlohmann::json param = BuildBaseEffectParam(childName);
+                param["default"] = ctrl->IsChecked();
+                AddEffectParamIfAbsent(params, seenNames, param);
+            }
+            continue;
+        }
+
+        if (childName.StartsWith("ID_TOGGLEBUTTON")) {
+            auto* ctrl = dynamic_cast<wxToggleButton*>(child);
+            if (ctrl != nullptr) {
+                nlohmann::json param = BuildBaseEffectParam(childName);
+                param["default"] = ctrl->GetValue();
+                AddEffectParamIfAbsent(params, seenNames, param);
+            }
+            continue;
+        }
+
+        if (childName.StartsWith("ID_FILEPICKER") || childName.StartsWith("ID_0FILEPICKER")) {
+            auto* ctrl = dynamic_cast<wxFilePickerCtrl*>(child);
+            if (ctrl != nullptr) {
+                nlohmann::json param = BuildBaseEffectParam(childName);
+                param["default"] = ctrl->GetFileName().GetFullPath().ToStdString();
+                AddEffectParamIfAbsent(params, seenNames, param);
+            }
+            continue;
+        }
+
+        if (childName.StartsWith("ID_FONTPICKER")) {
+            auto* ctrl = dynamic_cast<wxFontPickerCtrl*>(child);
+            if (ctrl != nullptr) {
+                nlohmann::json param = BuildBaseEffectParam(childName);
+                wxFont f = ctrl->GetSelectedFont();
+                param["default"] = f.IsOk() ? f.GetNativeFontInfoUserDesc().ToStdString() : "";
+                AddEffectParamIfAbsent(params, seenNames, param);
+            }
+            continue;
+        }
+
+        if (childName.StartsWith("ID_NOTEBOOK")) {
+            auto* ctrl = dynamic_cast<wxNotebook*>(child);
+            if (ctrl != nullptr) {
+                nlohmann::json param = BuildBaseEffectParam(childName);
+                param["default"] = ctrl->GetPageText(ctrl->GetSelection()).ToStdString();
+                nlohmann::json enumValues = nlohmann::json::array();
+                for (size_t i = 0; i < ctrl->GetPageCount(); i++) {
+                    enumValues.push_back(ctrl->GetPageText(i).ToStdString());
+                }
+                param["enumValues"] = enumValues;
+                AddEffectParamIfAbsent(params, seenNames, param);
+
+                for (size_t i = 0; i < ctrl->GetPageCount(); i++) {
+                    CollectEffectDefinitionParamsFromWindow(ctrl->GetPage(i), params, seenNames);
+                }
+            }
+            continue;
+        }
+
+        if (childName.StartsWith("ID_PANEL_")) {
+            CollectEffectDefinitionParamsFromWindow(child, params, seenNames);
+        }
+    }
+}
+
+static nlohmann::json BuildEffectDefinition(xLightsFrame* frame, RenderableEffect* effect) {
+    nlohmann::json definition;
+    definition["effectName"] = effect->Name();
+    definition["displayName"] = effect->ToolTip();
+    definition["effectId"] = effect->GetId();
+    definition["category"] = "general";
+    definition["supportsPartialTimeInterval"] = effect->CanRenderPartialTimeInterval();
+    definition["params"] = nlohmann::json::array();
+
+    std::set<std::string> seenNames;
+    wxWindow* parent = dynamic_cast<wxWindow*>(frame->GetEffectsPanel());
+    if (parent != nullptr) {
+        wxWindow* panel = dynamic_cast<wxWindow*>(effect->GetPanel(parent));
+        CollectEffectDefinitionParamsFromWindow(panel, definition["params"], seenNames);
+    }
+
+    return definition;
+}
+
 static std::optional<bool> HandleEffectsV2Command(
     xLightsFrame* frame,
     SequenceElements& sequenceElements,
@@ -15,10 +229,42 @@ static std::optional<bool> HandleEffectsV2Command(
     const std::string& cmd,
     const std::map<std::string, std::string>& params,
     const std::string& requestId,
-    const std::function<bool(const std::string& msg,
+                             const std::function<bool(const std::string& msg,
                              const std::string& jsonKey,
                              int responseCode,
                              bool msgIsJSON)>& sendResponse) {
+    if (cmd == "effects.listDefinitions") {
+        nlohmann::json effects = nlohmann::json::array();
+        const auto& effectManager = frame->GetEffectManager();
+        for (size_t i = 0; i < effectManager.size(); i++) {
+            RenderableEffect* effect = effectManager.GetEffect(static_cast<int>(i));
+            if (effect == nullptr) {
+                continue;
+            }
+            effects.push_back(BuildEffectDefinition(frame, effect));
+        }
+
+        nlohmann::json data;
+        data["effects"] = effects;
+        return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+    }
+
+    if (cmd == "effects.getDefinition") {
+        std::string effectName = ReadParamString(params, "effectName");
+        if (effectName.empty() || effectName == "null") {
+            return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "effectName is required.", requestId), "", 422, true);
+        }
+
+        RenderableEffect* effect = frame->GetEffectManager().GetEffect(effectName);
+        if (effect == nullptr) {
+            return sendResponse(BuildV2ErrorResponse(404, cmd, "EFFECT_DEFINITION_NOT_FOUND", "Unknown effect definition: '" + effectName + "'.", requestId), "", 404, true);
+        }
+
+        nlohmann::json data;
+        data["effect"] = BuildEffectDefinition(frame, effect);
+        return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+    }
+
     if (cmd == "effects.list") {
         if (auto response = requireOpenSequence()) {
             return *response;

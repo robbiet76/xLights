@@ -25,22 +25,36 @@
 #include "../ExternalHooks.h"
 #include "../xLightsApp.h"
 #include "../JukeboxPanel.h"
+#include "../EffectsPanel.h"
 #include "../outputs/E131Output.h"
 #include "../../xSchedule/wxHTTPServer/wxhttpserver.h"
 #include "../sequencer/MainSequencer.h"
 #include "../ModelPreview.h"
+#include "../ValueCurveButton.h"
+#include "../effects/EffectPanelUtils.h"
 #include "../utils/Curl.h"
 #include <wx/uri.h>
 #include <wx/debug.h>
+#include <wx/checkbox.h>
+#include <wx/choice.h>
+#include <wx/filepicker.h>
+#include <wx/fontpicker.h>
+#include <wx/notebook.h>
+#include <wx/slider.h>
+#include <wx/spinctrl.h>
+#include <wx/textctrl.h>
+#include <wx/tglbtn.h>
 
 #include "LuaRunner.h"
 
 #include <log4cpp/Category.hh>
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <optional>
 #include <set>
+#include <unordered_map>
 
 std::string xLightsFrame::FindSequence(const std::string& seq)
 {
@@ -199,6 +213,74 @@ static bool IsV2Command(const std::map<std::string, std::string>& params) {
     return it != params.end() && it->second == "2";
 }
 
+struct StagedV2Command {
+    std::string cmd;
+    std::map<std::string, std::string> params;
+};
+
+struct PendingV2Transaction {
+    std::string id;
+    std::string sequencePath;
+    std::string initialRevision;
+    long long createdEpochMs = 0;
+    long long expiresEpochMs = 0;
+    std::vector<StagedV2Command> commands;
+};
+
+static std::unordered_map<std::string, PendingV2Transaction> gPendingV2Transactions;
+static constexpr long long kV2TransactionTtlMs = 10LL * 60LL * 1000LL;
+
+static long long NowEpochMs() {
+    using namespace std::chrono;
+    return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+}
+
+static std::string BuildSequenceRevisionToken(xLightsXmlFile* currentSeqXmlFile, const SequenceElements& sequenceElements) {
+    std::string path = currentSeqXmlFile == nullptr ? "" : currentSeqXmlFile->GetFullPath().ToStdString();
+    return path + "#" + std::to_string(sequenceElements.GetChangeCount());
+}
+
+static std::string BuildCurrentSequencePath(xLightsXmlFile* currentSeqXmlFile) {
+    if (currentSeqXmlFile == nullptr) {
+        return "";
+    }
+    return currentSeqXmlFile->GetFullPath().ToStdString();
+}
+
+static void PurgeExpiredTransactions() {
+    long long now = NowEpochMs();
+    for (auto it = gPendingV2Transactions.begin(); it != gPendingV2Transactions.end();) {
+        if (it->second.expiresEpochMs > 0 && now > it->second.expiresEpochMs) {
+            it = gPendingV2Transactions.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+static bool IsV2MutatingCommand(const std::string& cmd) {
+    static const std::set<std::string> mutating = {
+        "media.set",
+        "timing.createTrack",
+        "timing.renameTrack",
+        "timing.deleteTrack",
+        "timing.insertMarks",
+        "timing.replaceMarks",
+        "timing.deleteMarks",
+        "sequencer.setDisplayElementOrder",
+        "effects.create",
+        "effects.update",
+        "effects.delete",
+        "effects.shift",
+        "effects.alignToTiming",
+        "effects.clone",
+        "timing.createFromAudio",
+        "timing.createBarsFromBeats",
+        "timing.createEnergySections"
+    };
+    return mutating.find(cmd) != mutating.end();
+}
+
 // Canonical list of v2 commands advertised by system.getCapabilities.
 static const std::vector<std::string>& GetV2Commands() {
     // PR-2 scaffolding: extend this list as new v2 automation commands are implemented.
@@ -228,12 +310,17 @@ static const std::vector<std::string>& GetV2Commands() {
         "sequencer.getDisplayElementOrder",
         "sequencer.setDisplayElementOrder",
         "effects.list",
+        "effects.listDefinitions",
+        "effects.getDefinition",
         "effects.create",
         "effects.update",
         "effects.delete",
         "effects.shift",
         "effects.alignToTiming",
         "effects.clone",
+        "transactions.begin",
+        "transactions.commit",
+        "transactions.rollback",
         "timing.listAnalysisPlugins",
         "timing.createFromAudio",
         "timing.getTrackSummary",
@@ -606,6 +693,7 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
     if (IsV2Command(params)) {
         auto requestIdIt = params.find("_REQUEST_ID");
         std::string requestId = requestIdIt == params.end() ? "" : requestIdIt->second;
+        PurgeExpiredTransactions();
         auto requireOpenSequence = [&]() -> std::optional<bool> {
             if (CurrentSeqXmlFile != nullptr) {
                 return std::nullopt;
@@ -677,6 +765,168 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
         auto refreshEffectGrid = [&]() {
             RefreshEffectGridIfPresent(mainSequencer);
         };
+
+        // Transaction staging API (G2): stage mutating commands, then apply/discard as a unit.
+        if (cmd == "transactions.begin") {
+            if (CurrentSeqXmlFile == nullptr) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+            }
+            long long now = NowEpochMs();
+            std::string transactionId = "tx-" + std::to_string(now) + "-" + std::to_string(_sequenceElements.GetChangeCount());
+            PendingV2Transaction tx;
+            tx.id = transactionId;
+            tx.sequencePath = BuildCurrentSequencePath(CurrentSeqXmlFile);
+            tx.initialRevision = BuildSequenceRevisionToken(CurrentSeqXmlFile, _sequenceElements);
+            tx.createdEpochMs = now;
+            tx.expiresEpochMs = now + kV2TransactionTtlMs;
+            gPendingV2Transactions[transactionId] = tx;
+
+            nlohmann::json data;
+            data["transactionId"] = transactionId;
+            data["sequenceRevision"] = tx.initialRevision;
+            data["expiresAtEpochMs"] = tx.expiresEpochMs;
+            data["ttlMs"] = kV2TransactionTtlMs;
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+        }
+
+        if (cmd == "transactions.rollback") {
+            std::string transactionId = ReadParamString(params, "transactionId");
+            if (transactionId.empty() || transactionId == "null") {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "transactionId is required.", requestId), "", 422, true);
+            }
+            auto it = gPendingV2Transactions.find(transactionId);
+            if (it == gPendingV2Transactions.end()) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "TRANSACTION_NOT_FOUND", "Transaction not found.", requestId), "", 404, true);
+            }
+            int dropped = static_cast<int>(it->second.commands.size());
+            gPendingV2Transactions.erase(it);
+            nlohmann::json data;
+            data["transactionId"] = transactionId;
+            data["rolledBack"] = true;
+            data["droppedCommandCount"] = dropped;
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+        }
+
+        if (cmd == "transactions.commit") {
+            std::string transactionId = ReadParamString(params, "transactionId");
+            if (transactionId.empty() || transactionId == "null") {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "transactionId is required.", requestId), "", 422, true);
+            }
+            auto it = gPendingV2Transactions.find(transactionId);
+            if (it == gPendingV2Transactions.end()) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "TRANSACTION_NOT_FOUND", "Transaction not found.", requestId), "", 404, true);
+            }
+            PendingV2Transaction& tx = it->second;
+            std::string currentPath = BuildCurrentSequencePath(CurrentSeqXmlFile);
+            if (currentPath != tx.sequencePath) {
+                gPendingV2Transactions.erase(it);
+                return sendResponse(BuildV2ErrorResponse(409, cmd, "TRANSACTION_SEQUENCE_CHANGED", "Open sequence changed since transaction begin.", requestId), "", 409, true);
+            }
+
+            std::string expectedRevision = ReadParamString(params, "expectedRevision");
+            std::string currentRevision = BuildSequenceRevisionToken(CurrentSeqXmlFile, _sequenceElements);
+            if (!expectedRevision.empty() && expectedRevision != "null" && expectedRevision != currentRevision) {
+                return sendResponse(BuildV2ErrorResponse(409, cmd, "REVISION_CONFLICT", "expectedRevision does not match current sequence revision.", requestId), "", 409, true);
+            }
+
+            auto runStaged = [&](const StagedV2Command& staged, bool dryRun, std::string& responseBody, int& statusCode) -> bool {
+                std::vector<std::string> childPaths;
+                childPaths.push_back(staged.cmd);
+                auto childParams = staged.params;
+                childParams["_API_VERSION"] = "2";
+                childParams.erase("transactionId");
+                if (dryRun) {
+                    childParams["_DRY_RUN"] = "true";
+                } else {
+                    childParams.erase("_DRY_RUN");
+                }
+                bool callbackCalled = false;
+                bool handled = ProcessAutomation(
+                    childPaths,
+                    childParams,
+                    [&](const std::string& msg, const std::string& jsonKey, int responseCode, bool msgIsJSON) {
+                        callbackCalled = true;
+                        statusCode = responseCode;
+                        if (msgIsJSON) {
+                            responseBody = msg;
+                        } else {
+                            nlohmann::json fallback;
+                            fallback["res"] = responseCode;
+                            fallback[jsonKey.empty() ? "msg" : jsonKey] = msg;
+                            responseBody = fallback.dump();
+                        }
+                        return true;
+                    });
+                if (!handled && !callbackCalled) {
+                    statusCode = 500;
+                    responseBody = BuildV2ErrorResponse(500, staged.cmd, "INTERNAL_ERROR", "Failed to execute staged command.", requestId);
+                    return false;
+                }
+                return statusCode >= 200 && statusCode < 300;
+            };
+
+            int applied = 0;
+            for (size_t i = 0; i < tx.commands.size(); i++) {
+                std::string body;
+                int status = 0;
+                if (!runStaged(tx.commands[i], false, body, status)) {
+                    gPendingV2Transactions.erase(it);
+                    return sendResponse(
+                        BuildV2ErrorResponse(
+                            409,
+                            cmd,
+                            "TRANSACTION_APPLY_FAILED",
+                            "Commit failed while applying staged command at index " + std::to_string(i) + " (" + tx.commands[i].cmd +
+                                ") after " + std::to_string(applied) + " command(s) applied.",
+                            requestId),
+                        "",
+                        409,
+                        true);
+                }
+                applied++;
+            }
+
+            gPendingV2Transactions.erase(it);
+            nlohmann::json data;
+            data["transactionId"] = transactionId;
+            data["committed"] = true;
+            data["appliedCommandCount"] = applied;
+            data["newRevision"] = BuildSequenceRevisionToken(CurrentSeqXmlFile, _sequenceElements);
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+        }
+
+        std::string transactionId = ReadParamString(params, "transactionId");
+        if (!transactionId.empty() && transactionId != "null" && IsV2MutatingCommand(cmd)) {
+            auto it = gPendingV2Transactions.find(transactionId);
+            if (it == gPendingV2Transactions.end()) {
+                return sendResponse(BuildV2ErrorResponse(404, cmd, "TRANSACTION_NOT_FOUND", "Transaction not found.", requestId), "", 404, true);
+            }
+            PendingV2Transaction& tx = it->second;
+            std::string currentPath = BuildCurrentSequencePath(CurrentSeqXmlFile);
+            if (currentPath != tx.sequencePath) {
+                gPendingV2Transactions.erase(it);
+                return sendResponse(BuildV2ErrorResponse(409, cmd, "TRANSACTION_SEQUENCE_CHANGED", "Open sequence changed since transaction begin.", requestId), "", 409, true);
+            }
+            bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
+            if (dryRun) {
+                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "transactionId cannot be combined with dryRun on staged commands.", requestId), "", 422, true);
+            }
+
+            StagedV2Command staged;
+            staged.cmd = cmd;
+            staged.params = params;
+            staged.params.erase("transactionId");
+            staged.params.erase("_REQUEST_ID");
+            staged.params.erase("_DRY_RUN");
+            tx.commands.push_back(staged);
+
+            nlohmann::json data;
+            data["transactionId"] = transactionId;
+            data["staged"] = true;
+            data["stagedCommandCount"] = static_cast<int>(tx.commands.size());
+            data["stagedCmd"] = cmd;
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+        }
 
         if (auto handled = automation::api::HandleSystemV2Command(cmd, params, requestId, sendResponse)) {
             return *handled;

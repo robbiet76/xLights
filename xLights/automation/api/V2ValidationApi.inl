@@ -198,7 +198,26 @@ static bool ValidateBatchCommandShape(const nlohmann::json& command,
         return false;
     }
 
-    if (childCmd == "sequence.open") {
+    if (childCmd == "transactions.begin") {
+        // no required params
+    } else if (childCmd == "transactions.commit") {
+        if (!params.contains("transactionId") || !params["transactionId"].is_string() || params["transactionId"].get<std::string>().empty()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "transactions.commit requires params.transactionId.";
+            return false;
+        }
+        if (params.contains("expectedRevision") && !(params["expectedRevision"].is_string() || params["expectedRevision"].is_null())) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "transactions.commit expectedRevision must be string when provided.";
+            return false;
+        }
+    } else if (childCmd == "transactions.rollback") {
+        if (!params.contains("transactionId") || !params["transactionId"].is_string() || params["transactionId"].get<std::string>().empty()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "transactions.rollback requires params.transactionId.";
+            return false;
+        }
+    } else if (childCmd == "sequence.open") {
         if (!params.contains("file") || !params["file"].is_string() || params["file"].get<std::string>().empty()) {
             errorCode = "VALIDATION_ERROR";
             errorMessage = "sequence.open requires params.file.";
@@ -262,6 +281,12 @@ static bool ValidateBatchCommandShape(const nlohmann::json& command,
     } else if (childCmd == "sequencer.setDisplayElementOrder") {
         if (!ValidateDisplayOrderParams(params, errorMessage)) {
             errorCode = "VALIDATION_ERROR";
+            return false;
+        }
+    } else if (childCmd == "effects.getDefinition") {
+        if (!params.contains("effectName") || !params["effectName"].is_string() || params["effectName"].get<std::string>().empty()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "effects.getDefinition requires params.effectName.";
             return false;
         }
     } else if (childCmd == "effects.create") {

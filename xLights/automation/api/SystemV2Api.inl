@@ -17,7 +17,9 @@ static std::optional<bool> HandleSystemV2Command(
             {"vampPluginsAvailable", false},
             {"remoteAudioAnalysisAvailable", true},
             {"lyricsSrtImportAvailable", true},
-            {"songStructureDetectionAvailable", false}
+            {"songStructureDetectionAvailable", false},
+            {"effectDefinitionIntrospectionAvailable", true},
+            {"transactionsAvailable", true}
         };
         return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
     }
