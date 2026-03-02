@@ -1052,6 +1052,7 @@ static bool ParseXlDoAutomationBody(const std::string& body,
 #include "api/SystemV2Api.inl"
 #include "api/SequenceV2Api.inl"
 #include "api/LayoutV2Api.inl"
+#include "api/MediaV2Api.inl"
 
 bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                                      std::map<std::string, std::string> &params,
@@ -1143,63 +1144,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
             return *handled;
         } else if (auto handled = automation::api::HandleLayoutV2Command(this, AllModels, _sequenceElements, requireOpenSequence, cmd, params, requestId, sendResponse)) {
             return *handled;
-        } else if (cmd == "media.get") {
-            if (auto response = requireOpenSequence()) {
-                return *response;
-            }
-            std::string mediaFile = CurrentSeqXmlFile->GetMediaFile().ToStdString();
-            nlohmann::json data;
-            data["mediaFile"] = mediaFile.empty() ? nlohmann::json(nullptr) : nlohmann::json(mediaFile);
-            data["hasMedia"] = !mediaFile.empty();
-            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
-        } else if (cmd == "media.set") {
-            if (auto response = requireOpenSequence()) {
-                return *response;
-            }
-            std::string mediaFile = ReadParamString(params, "mediaFile");
-            bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
-            if (mediaFile.empty() || mediaFile == "null") {
-                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "mediaFile is required.", requestId), "", 422, true);
-            }
-            wxFileName mediaPath(wxString::FromUTF8(mediaFile));
-            if (!mediaPath.FileExists() || !mediaPath.IsFileReadable()) {
-                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "mediaFile must exist and be readable.", requestId), "", 422, true);
-            }
-
-            std::string currentMedia = CurrentSeqXmlFile->GetMediaFile().ToStdString();
-            bool updated = currentMedia != mediaFile;
-            if (!dryRun) {
-                CurrentSeqXmlFile->SetMediaFile(GetShowDirectory(), wxString::FromUTF8(mediaFile), true);
-            }
-
-            nlohmann::json warnings = BuildDryRunWarnings(dryRun);
-            nlohmann::json data;
-            data["mediaFile"] = mediaFile;
-            data["updated"] = updated;
-            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
-        } else if (cmd == "media.getMetadata") {
-            if (auto response = requireOpenSequence()) {
-                return *response;
-            }
-            std::string mediaFile = ReadParamString(params, "mediaFile");
-            if (!mediaFile.empty() && mediaFile != "null" && mediaFile != CurrentSeqXmlFile->GetMediaFile().ToStdString()) {
-                return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "mediaFile must match the sequence's loaded media in this phase.", requestId), "", 422, true);
-            }
-            if (!CurrentSeqXmlFile->HasAudioMedia() || CurrentSeqXmlFile->GetMedia() == nullptr) {
-                return sendResponse(BuildV2ErrorResponse(404, cmd, "MEDIA_NOT_AVAILABLE", "Sequence media is not available.", requestId), "", 404, true);
-            }
-
-            auto* media = CurrentSeqXmlFile->GetMedia();
-            long sampleRate = media->GetRate();
-            long sampleCount = media->GetTrackSize();
-            int channels = media->GetChannels();
-            int durationMs = sampleRate > 0 ? static_cast<int>((sampleCount * 1000L) / sampleRate) : 0;
-
-            nlohmann::json data;
-            data["durationMs"] = durationMs;
-            data["sampleRate"] = sampleRate;
-            data["channels"] = channels;
-            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+        } else if (auto handled = automation::api::HandleMediaV2Command(this, requireOpenSequence, cmd, params, requestId, sendResponse)) {
+            return *handled;
         } else if (cmd == "timing.getTracks") {
             if (auto response = requireOpenSequence()) {
                 return *response;
