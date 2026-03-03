@@ -294,6 +294,59 @@ static bool ValidateBatchCommandShape(const nlohmann::json& command,
             errorMessage = "layout.getModel requires params.name.";
             return false;
         }
+    } else if (childCmd == "layout.getModelGeometry") {
+        if (!params.contains("name") || !params["name"].is_string() || params["name"].get<std::string>().empty()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "layout.getModelGeometry requires params.name.";
+            return false;
+        }
+    } else if (childCmd == "layout.getModelNodes") {
+        if (!params.contains("name") || !params["name"].is_string() || params["name"].get<std::string>().empty()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "layout.getModelNodes requires params.name.";
+            return false;
+        }
+        if (params.contains("includeBufferCoords") &&
+            !params["includeBufferCoords"].is_boolean() &&
+            !params["includeBufferCoords"].is_number_integer()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "includeBufferCoords must be boolean when provided.";
+            return false;
+        }
+        if (params.contains("includeWorldCoords") &&
+            !params["includeWorldCoords"].is_boolean() &&
+            !params["includeWorldCoords"].is_number_integer()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "includeWorldCoords must be boolean when provided.";
+            return false;
+        }
+        if (params.contains("includeScreenCoords") &&
+            !params["includeScreenCoords"].is_boolean() &&
+            !params["includeScreenCoords"].is_number_integer()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "includeScreenCoords must be boolean when provided.";
+            return false;
+        }
+        if (params.contains("camera") && !params["camera"].is_string() && !params["camera"].is_null()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "camera must be a string when provided.";
+            return false;
+        }
+    } else if (childCmd == "layout.getScene") {
+        if (params.contains("includeNodes") &&
+            !params["includeNodes"].is_boolean() &&
+            !params["includeNodes"].is_number_integer()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "includeNodes must be boolean when provided.";
+            return false;
+        }
+        if (params.contains("includeCameras") &&
+            !params["includeCameras"].is_boolean() &&
+            !params["includeCameras"].is_number_integer()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "includeCameras must be boolean when provided.";
+            return false;
+        }
     } else if (childCmd == "media.set") {
         if (!params.contains("mediaFile") || !params["mediaFile"].is_string() || params["mediaFile"].get<std::string>().empty()) {
             errorCode = "VALIDATION_ERROR";
@@ -394,6 +447,39 @@ static bool ValidateBatchCommandShape(const nlohmann::json& command,
         if (!params.contains("effectId") || (!params["effectId"].is_string() && !params["effectId"].is_number_integer())) {
             errorCode = "VALIDATION_ERROR";
             errorMessage = "effects.getPalette requires params.effectId.";
+            return false;
+        }
+    } else if (childCmd == "effects.getRenderStyleOptions") {
+        if (!params.contains("modelName") || !params["modelName"].is_string() || params["modelName"].get<std::string>().empty()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "effects.getRenderStyleOptions requires params.modelName.";
+            return false;
+        }
+        if (params.contains("layerIndex") && (!params["layerIndex"].is_number_integer() || params["layerIndex"].get<int>() < 0)) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "effects.getRenderStyleOptions params.layerIndex must be >= 0 when provided.";
+            return false;
+        }
+    } else if (childCmd == "effects.setRenderStyle") {
+        if (!params.contains("effectId") || (!params["effectId"].is_string() && !params["effectId"].is_number_integer()) ||
+            !params.contains("renderStyle") || !params["renderStyle"].is_string() || params["renderStyle"].get<std::string>().empty()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "effects.setRenderStyle requires params.effectId and params.renderStyle.";
+            return false;
+        }
+        if (params.contains("camera") && !params["camera"].is_string() && !params["camera"].is_null()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "effects.setRenderStyle params.camera must be a string when provided.";
+            return false;
+        }
+        if (params.contains("transform") && !params["transform"].is_string() && !params["transform"].is_null()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "effects.setRenderStyle params.transform must be a string when provided.";
+            return false;
+        }
+        if (params.contains("bufferStagger") && !params["bufferStagger"].is_number_integer()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "effects.setRenderStyle params.bufferStagger must be an integer when provided.";
             return false;
         }
     } else if (childCmd == "effects.setPalette") {

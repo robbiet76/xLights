@@ -1,5 +1,71 @@
 namespace automation::api {
 
+static nlohmann::json BuildRenderStyleOptionsData(xLightsFrame* frame, Model* model) {
+    nlohmann::json renderStyles = nlohmann::json::array();
+    if (model != nullptr) {
+        const auto& styles = model->GetBufferStyles();
+        for (const auto& style : styles) {
+            renderStyles.push_back(style);
+        }
+    }
+    if (renderStyles.empty()) {
+        renderStyles.push_back("Default");
+        renderStyles.push_back("Per Preview");
+        renderStyles.push_back("As Pixel");
+    }
+
+    bool supportsPerPreviewCamera = false;
+    for (const auto& styleJson : renderStyles) {
+        if (!styleJson.is_string()) {
+            continue;
+        }
+        const std::string style = styleJson.get<std::string>();
+        if (style.rfind("Per Preview", 0) == 0) {
+            supportsPerPreviewCamera = true;
+            break;
+        }
+    }
+
+    nlohmann::json cameraOptions = nlohmann::json::array();
+    cameraOptions.push_back("2D");
+    for (int i = 0; i < frame->viewpoint_mgr.GetNum3DCameras(); i++) {
+        auto* camera = frame->viewpoint_mgr.GetCamera3D(i);
+        if (camera != nullptr) {
+            cameraOptions.push_back(camera->GetName());
+        }
+    }
+
+    nlohmann::json transformOptions = nlohmann::json::array({
+        "None",
+        "Rotate CC 90",
+        "Rotate CW 90",
+        "Rotate 180",
+        "Flip Vertical",
+        "Flip Horizontal",
+        "Rotate CC 90 Flip Horizontal",
+        "Rotate CW 90 Flip Horizontal"
+    });
+
+    nlohmann::json data;
+    data["renderStyles"] = renderStyles;
+    data["supportsPerPreviewCamera"] = supportsPerPreviewCamera;
+    data["cameraOptions"] = cameraOptions;
+    data["transformOptions"] = transformOptions;
+    return data;
+}
+
+static bool JsonArrayContainsString(const nlohmann::json& values, const std::string& candidate) {
+    if (!values.is_array()) {
+        return false;
+    }
+    for (const auto& value : values) {
+        if (value.is_string() && value.get<std::string>() == candidate) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void AddEffectParamIfAbsent(nlohmann::json& params,
                                    std::set<std::string>& seenNames,
                                    const nlohmann::json& entry) {
@@ -323,6 +389,149 @@ static std::optional<bool> HandleEffectsV2Command(
             }
         }
         return sendResponse(BuildV2ErrorResponse(404, cmd, "EFFECT_NOT_FOUND", "No effect matched effectId.", requestId), "", 404, true);
+    }
+
+    if (cmd == "effects.getRenderStyleOptions") {
+        if (auto response = requireOpenSequence()) {
+            return *response;
+        }
+        std::string modelName = ReadParamString(params, "modelName");
+        int layerIndex = ReadParamInt(params, "layerIndex", -1);
+        if (modelName.empty() || modelName == "null") {
+            return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "modelName is required.", requestId), "", 422, true);
+        }
+
+        Element* element = sequenceElements.GetElement(modelName);
+        if (element == nullptr) {
+            return sendResponse(BuildV2ErrorResponse(404, cmd, "MODEL_NOT_FOUND", "modelName was not found in sequence elements.", requestId), "", 404, true);
+        }
+        if (element->GetType() == ElementType::ELEMENT_TYPE_TIMING) {
+            return sendResponse(BuildV2ErrorResponse(422, cmd, "INVALID_TARGET_ELEMENT", "modelName must reference a non-timing element.", requestId), "", 422, true);
+        }
+        if (layerIndex >= static_cast<int>(element->GetEffectLayerCount())) {
+            return sendResponse(BuildV2ErrorResponse(404, cmd, "LAYER_NOT_FOUND", "layerIndex was not found on modelName.", requestId), "", 404, true);
+        }
+
+        const std::string modelLookupName = element->GetModelName();
+        Model* model = frame->AllModels.GetModel(modelLookupName);
+        if (model == nullptr) {
+            return sendResponse(BuildV2ErrorResponse(404, cmd, "MODEL_NOT_FOUND", "Unable to resolve model metadata for render style options.", requestId), "", 404, true);
+        }
+
+        nlohmann::json data = BuildRenderStyleOptionsData(frame, model);
+        data["modelName"] = modelName;
+        data["resolvedModelName"] = modelLookupName;
+        return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+    }
+
+    if (cmd == "effects.setRenderStyle") {
+        if (auto response = requireOpenSequence()) {
+            return *response;
+        }
+        std::string effectId = ReadParamString(params, "effectId");
+        std::string renderStyle = ReadParamString(params, "renderStyle");
+        std::string camera = ReadParamString(params, "camera");
+        std::string transform = ReadParamString(params, "transform");
+        bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
+        bool hasBufferStagger = params.find("bufferStagger") != params.end();
+        int bufferStagger = ReadParamInt(params, "bufferStagger", 0);
+
+        if (effectId.empty() || effectId == "null") {
+            return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "effectId is required.", requestId), "", 422, true);
+        }
+        if (renderStyle.empty() || renderStyle == "null") {
+            return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "renderStyle is required.", requestId), "", 422, true);
+        }
+
+        bool effectIdIsNumeric = !effectId.empty() &&
+                                 std::all_of(effectId.begin(), effectId.end(), [](unsigned char c) { return std::isdigit(c) != 0; });
+        int numericEffectId = effectIdIsNumeric ? wxAtoi(effectId) : -1;
+
+        std::vector<EffectRef> refs;
+        collectEffects("", -1, 0, frame->CurrentSeqXmlFile->GetSequenceDurationMS(), {}, refs);
+
+        EffectRef* target = nullptr;
+        std::string resolvedHandle;
+        for (auto& ref : refs) {
+            std::string handle = MakeEffectHandle(ref);
+            if (effectId == handle || (effectIdIsNumeric && numericEffectId == ref.effect->GetID())) {
+                target = &ref;
+                resolvedHandle = handle;
+                break;
+            }
+        }
+        if (target == nullptr) {
+            return sendResponse(BuildV2ErrorResponse(404, cmd, "EFFECT_NOT_FOUND", "No effect matched effectId.", requestId), "", 404, true);
+        }
+
+        Element* targetElement = sequenceElements.GetElement(target->modelName);
+        if (targetElement == nullptr) {
+            return sendResponse(BuildV2ErrorResponse(404, cmd, "MODEL_NOT_FOUND", "Unable to resolve target model for effect.", requestId), "", 404, true);
+        }
+        Model* model = frame->AllModels.GetModel(targetElement->GetModelName());
+        if (model == nullptr) {
+            return sendResponse(BuildV2ErrorResponse(404, cmd, "MODEL_NOT_FOUND", "Unable to resolve model metadata for render style update.", requestId), "", 404, true);
+        }
+
+        nlohmann::json options = BuildRenderStyleOptionsData(frame, model);
+        if (!JsonArrayContainsString(options["renderStyles"], renderStyle)) {
+            return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "renderStyle is invalid for model context.", requestId), "", 422, true);
+        }
+        if (!transform.empty() && transform != "null" && !JsonArrayContainsString(options["transformOptions"], transform)) {
+            return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "transform is invalid.", requestId), "", 422, true);
+        }
+        if (!camera.empty() && camera != "null" && !JsonArrayContainsString(options["cameraOptions"], camera)) {
+            return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "camera is invalid.", requestId), "", 422, true);
+        }
+
+        bool perPreviewStyle = renderStyle.rfind("Per Preview", 0) == 0;
+        nlohmann::json warnings = BuildDryRunWarnings(dryRun);
+        if (!perPreviewStyle && !camera.empty() && camera != "null") {
+            warnings.push_back({
+                {"code", "CAMERA_IGNORED"},
+                {"message", "camera is only applied for Per Preview render styles."}
+            });
+        }
+
+        nlohmann::json settings = ParseJsonObjectOrEmpty(target->effect->GetSettingsAsJSON());
+        settings["B_CHOICE_BufferStyle"] = renderStyle;
+        if (!transform.empty() && transform != "null") {
+            settings["B_CHOICE_BufferTransform"] = transform;
+        }
+        if (perPreviewStyle) {
+            if (!camera.empty() && camera != "null") {
+                settings["B_CHOICE_PerPreviewCamera"] = camera;
+            } else if (!settings.contains("B_CHOICE_PerPreviewCamera")) {
+                settings["B_CHOICE_PerPreviewCamera"] = "2D";
+            }
+        } else {
+            settings.erase("B_CHOICE_PerPreviewCamera");
+        }
+        if (hasBufferStagger) {
+            settings["B_SPINCTRL_BufferStagger"] = bufferStagger;
+        }
+
+        if (!dryRun) {
+            target->effect->SetSettings(settings.dump(), true, true);
+            refreshEffectGrid();
+        }
+
+        nlohmann::json data;
+        data["effectId"] = resolvedHandle;
+        data["updated"] = true;
+        nlohmann::json applied;
+        applied["renderStyle"] = settings.value("B_CHOICE_BufferStyle", renderStyle);
+        if (settings.contains("B_CHOICE_PerPreviewCamera")) {
+            applied["camera"] = settings["B_CHOICE_PerPreviewCamera"];
+        }
+        if (settings.contains("B_CHOICE_BufferTransform")) {
+            applied["transform"] = settings["B_CHOICE_BufferTransform"];
+        }
+        if (settings.contains("B_SPINCTRL_BufferStagger")) {
+            applied["bufferStagger"] = settings["B_SPINCTRL_BufferStagger"];
+        }
+        data["applied"] = applied;
+        return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
     }
 
     if (cmd == "effects.setPalette") {
