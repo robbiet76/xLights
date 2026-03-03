@@ -307,12 +307,15 @@ static std::optional<bool> HandleEffectsV2Command(
         if (effectId.empty() || effectId == "null") {
             return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "effectId is required.", requestId), "", 422, true);
         }
+        bool effectIdIsNumeric = !effectId.empty() &&
+                                 std::all_of(effectId.begin(), effectId.end(), [](unsigned char c) { return std::isdigit(c) != 0; });
+        int numericEffectId = effectIdIsNumeric ? wxAtoi(effectId) : -1;
 
         std::vector<EffectRef> refs;
         collectEffects("", -1, 0, frame->CurrentSeqXmlFile->GetSequenceDurationMS(), {}, refs);
         for (const auto& ref : refs) {
             std::string handle = MakeEffectHandle(ref);
-            if (effectId == handle || wxAtoi(effectId) == ref.effect->GetID()) {
+            if (effectId == handle || (effectIdIsNumeric && numericEffectId == ref.effect->GetID())) {
                 nlohmann::json data;
                 data["effectId"] = handle;
                 data["palette"] = ParseJsonObjectOrEmpty(ref.effect->GetPaletteAsJSON());
@@ -336,12 +339,15 @@ static std::optional<bool> HandleEffectsV2Command(
         if (paletteJson.empty() || paletteJson == "null") {
             return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "palette is required.", requestId), "", 422, true);
         }
+        bool effectIdIsNumeric = !effectId.empty() &&
+                                 std::all_of(effectId.begin(), effectId.end(), [](unsigned char c) { return std::isdigit(c) != 0; });
+        int numericEffectId = effectIdIsNumeric ? wxAtoi(effectId) : -1;
 
         std::vector<EffectRef> refs;
         collectEffects("", -1, 0, frame->CurrentSeqXmlFile->GetSequenceDurationMS(), {}, refs);
         for (const auto& ref : refs) {
             std::string handle = MakeEffectHandle(ref);
-            if (effectId == handle || wxAtoi(effectId) == ref.effect->GetID()) {
+            if (effectId == handle || (effectIdIsNumeric && numericEffectId == ref.effect->GetID())) {
                 if (!dryRun) {
                     ref.effect->SetColourOnlyPalette(paletteJson, true);
                     refreshEffectGrid();
