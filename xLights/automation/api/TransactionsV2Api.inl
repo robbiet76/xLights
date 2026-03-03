@@ -94,6 +94,69 @@ static bool ExecuteV2ChildCommand(const std::string& childCmd,
     return statusCode >= 200 && statusCode < 300;
 }
 
+static std::string CreateTransactionBackupPath(const std::string& transactionId) {
+    wxFileName base(wxFileName::CreateTempFileName("xlights-tx-" + transactionId + "-"));
+    wxString tempPath = base.GetFullPath();
+    if (wxFileExists(tempPath)) {
+        wxRemoveFile(tempPath);
+    }
+    base.SetExt("xsq");
+    return base.GetFullPath().ToStdString();
+}
+
+static bool SnapshotSequenceToBackup(xLightsFrame* frame,
+                                     SequenceElements& sequenceElements,
+                                     const std::string& backupPath) {
+    if (frame == nullptr || frame->CurrentSeqXmlFile == nullptr || backupPath.empty()) {
+        return false;
+    }
+
+    wxFileName target(wxString::FromUTF8(backupPath));
+    target.SetExt("xsq");
+    wxString targetPath = target.GetFullPath();
+
+    wxString originalPath = frame->CurrentSeqXmlFile->GetPath();
+    wxString originalName = frame->CurrentSeqXmlFile->GetFullName();
+    wxString originalFseq = frame->xlightsFilename;
+    bool originalRenderMode = frame->_renderMode;
+    bool originalPromptIssues = frame->_promptBatchRenderIssues;
+
+    frame->CurrentSeqXmlFile->SetPath(target.GetPath());
+    frame->CurrentSeqXmlFile->SetFullName(target.GetFullName());
+    wxFileName fseqName(target.GetFullPath());
+    fseqName.SetExt("fseq");
+    frame->xlightsFilename = fseqName.GetFullPath();
+
+    frame->_renderMode = true;
+    frame->_promptBatchRenderIssues = false;
+    ScopedAutomationAssertSuppressor suppressor(true);
+    bool saveOk = frame->CurrentSeqXmlFile->Save(sequenceElements);
+
+    frame->_promptBatchRenderIssues = originalPromptIssues;
+    frame->_renderMode = originalRenderMode;
+    frame->CurrentSeqXmlFile->SetPath(originalPath);
+    frame->CurrentSeqXmlFile->SetFullName(originalName);
+    frame->xlightsFilename = originalFseq;
+
+    wxFileName outFile(targetPath);
+    wxULongLong outSize = outFile.GetSize();
+    if (saveOk && outFile.FileExists() && outSize != wxInvalidSize && outSize.GetValue() > 0) {
+        return true;
+    }
+
+    // Fallback for environments where in-memory Save() is blocked (e.g. launch/runtime constraints):
+    // snapshot the currently open on-disk sequence so commit can still proceed with deterministic restore.
+    wxString currentPath = frame->CurrentSeqXmlFile->GetFullPath();
+    if (!currentPath.IsEmpty() && wxFileExists(currentPath)) {
+        wxRemoveFile(targetPath);
+        if (wxCopyFile(currentPath, targetPath, true)) {
+            wxULongLong copiedSize = outFile.GetSize();
+            return outFile.FileExists() && copiedSize != wxInvalidSize && copiedSize.GetValue() > 0;
+        }
+    }
+    return false;
+}
+
 static std::optional<bool> HandleTransactionsV2Command(
     xLightsFrame* frame,
     SequenceElements& sequenceElements,
@@ -442,19 +505,80 @@ static std::optional<bool> HandleTransactionsV2Command(
             return statusCode >= 200 && statusCode < 300;
         };
 
+        std::string backupPath = CreateTransactionBackupPath(transactionId);
+        bool backupCreated = SnapshotSequenceToBackup(frame, sequenceElements, backupPath);
+        if (!backupCreated) {
+            return sendResponse(
+                BuildV2ErrorResponse(500, cmd, "TRANSACTION_SNAPSHOT_FAILED", "Failed to snapshot sequence before transaction commit.", requestId),
+                "",
+                500,
+                true);
+        }
+
         int applied = 0;
         for (size_t i = 0; i < tx.commands.size(); i++) {
             std::string body;
             int status = 0;
             if (!runStaged(tx.commands[i], false, body, status)) {
+                const std::string failedCmd = tx.commands[i].cmd;
+                bool restored = false;
+                {
+                    bool copiedBack = false;
+                    if (!backupPath.empty() && !tx.sequencePath.empty() && wxFileExists(backupPath)) {
+                        wxString targetPath = wxString::FromUTF8(tx.sequencePath);
+                        wxRemoveFile(targetPath);
+                        copiedBack = wxCopyFile(wxString::FromUTF8(backupPath), targetPath, true);
+                    }
+
+                    if (copiedBack) {
+                        std::vector<std::string> restorePaths = {"sequence.open"};
+                        std::map<std::string, std::string> restoreParams;
+                        restoreParams["_API_VERSION"] = "2";
+                        restoreParams["file"] = tx.sequencePath;
+                        restoreParams["force"] = "true";
+                        restoreParams["promptIssues"] = "false";
+                        if (!requestId.empty()) {
+                            restoreParams["_REQUEST_ID"] = requestId;
+                        }
+                        std::string restoreBody;
+                        int restoreStatus = 0;
+                        bool restoreCallbackCalled = false;
+                        bool restoreHandled = processAutomation(
+                            restorePaths,
+                            restoreParams,
+                            [&](const std::string& msg, const std::string& jsonKey, int responseCode, bool msgIsJSON) {
+                                restoreCallbackCalled = true;
+                                restoreStatus = responseCode;
+                                if (msgIsJSON) {
+                                    restoreBody = msg;
+                                } else {
+                                    nlohmann::json fallback;
+                                    fallback["res"] = responseCode;
+                                    fallback[jsonKey.empty() ? "msg" : jsonKey] = msg;
+                                    restoreBody = fallback.dump();
+                                }
+                                return true;
+                            });
+                        restored = restoreHandled && restoreCallbackCalled && restoreStatus >= 200 && restoreStatus < 300;
+                    }
+                }
+                if (wxFileExists(backupPath)) {
+                    wxRemoveFile(backupPath);
+                }
                 gPendingV2Transactions.erase(it);
+                std::string message = "Commit failed while applying staged command at index " + std::to_string(i) + " (" + failedCmd +
+                    ") after " + std::to_string(applied) + " command(s) applied.";
+                if (restored) {
+                    message += " Sequence restored to pre-commit snapshot.";
+                } else {
+                    message += " Sequence restore failed.";
+                }
                 return sendResponse(
                     BuildV2ErrorResponse(
                         409,
                         cmd,
                         "TRANSACTION_APPLY_FAILED",
-                        "Commit failed while applying staged command at index " + std::to_string(i) + " (" + tx.commands[i].cmd +
-                            ") after " + std::to_string(applied) + " command(s) applied.",
+                        message,
                         requestId),
                     "",
                     409,
@@ -469,6 +593,9 @@ static std::optional<bool> HandleTransactionsV2Command(
         data["committed"] = true;
         data["appliedCommandCount"] = applied;
         data["newRevision"] = BuildSequenceRevisionToken(currentSeqXmlFile, sequenceElements);
+        if (wxFileExists(backupPath)) {
+            wxRemoveFile(backupPath);
+        }
         return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
     }
 
