@@ -89,6 +89,34 @@ static bool ValidateDisplayOrderParams(const nlohmann::json& params, std::string
     return true;
 }
 
+static bool ValidateActiveDisplayElementParams(const nlohmann::json& params, std::string& errorMessage) {
+    if (!HasArrayParam(params, "activeIds") || params["activeIds"].empty()) {
+        errorMessage = "sequencer.setActiveDisplayElements requires non-empty params.activeIds.";
+        return false;
+    }
+
+    std::set<std::string> seen;
+    for (const auto& id : params["activeIds"]) {
+        if (!id.is_string() || id.get<std::string>().empty()) {
+            errorMessage = "activeIds must contain non-empty strings.";
+            return false;
+        }
+        if (!seen.insert(id.get<std::string>()).second) {
+            errorMessage = "activeIds must not contain duplicates.";
+            return false;
+        }
+    }
+
+    if (params.contains("preserveRelativeOrder") &&
+        !params["preserveRelativeOrder"].is_boolean() &&
+        !params["preserveRelativeOrder"].is_number_integer()) {
+        errorMessage = "preserveRelativeOrder must be a boolean when provided.";
+        return false;
+    }
+
+    return true;
+}
+
 static bool IsValidEffectSelectorValue(const nlohmann::json& value) {
     if (value.is_string()) {
         std::string s = value.get<std::string>();
@@ -305,6 +333,11 @@ static bool ValidateBatchCommandShape(const nlohmann::json& command,
             errorCode = "VALIDATION_ERROR";
             return false;
         }
+    } else if (childCmd == "sequencer.setActiveDisplayElements") {
+        if (!ValidateActiveDisplayElementParams(params, errorMessage)) {
+            errorCode = "VALIDATION_ERROR";
+            return false;
+        }
     } else if (childCmd == "effects.getDefinition") {
         if (!params.contains("effectName") || !params["effectName"].is_string() || params["effectName"].get<std::string>().empty()) {
             errorCode = "VALIDATION_ERROR";
@@ -368,6 +401,19 @@ static bool ValidateBatchCommandShape(const nlohmann::json& command,
             !params.contains("palette") || !params["palette"].is_object()) {
             errorCode = "VALIDATION_ERROR";
             errorMessage = "effects.setPalette requires params.effectId and params.palette object.";
+            return false;
+        }
+    } else if (childCmd == "effects.deleteLayer") {
+        if (!params.contains("modelName") || !params["modelName"].is_string() || params["modelName"].get<std::string>().empty() ||
+            !params.contains("layerIndex") || !params["layerIndex"].is_number_integer() || params["layerIndex"].get<int>() < 0) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "effects.deleteLayer requires params.modelName and params.layerIndex>=0.";
+            return false;
+        }
+    } else if (childCmd == "effects.compactLayers") {
+        if (!params.contains("modelName") || !params["modelName"].is_string() || params["modelName"].get<std::string>().empty()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "effects.compactLayers requires params.modelName.";
             return false;
         }
     } else if (childCmd == "effects.clone") {

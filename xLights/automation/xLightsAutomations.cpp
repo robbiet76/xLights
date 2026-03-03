@@ -503,9 +503,12 @@ static bool IsV2MutatingCommand(const std::string& cmd) {
         "timing.replaceMarks",
         "timing.deleteMarks",
         "sequencer.setDisplayElementOrder",
+        "sequencer.setActiveDisplayElements",
         "effects.create",
         "effects.update",
         "effects.delete",
+        "effects.deleteLayer",
+        "effects.compactLayers",
         "effects.setPalette",
         "effects.shift",
         "effects.alignToTiming",
@@ -547,6 +550,7 @@ static const std::vector<std::string>& GetV2Commands() {
         "timing.deleteMarks",
         "sequencer.getDisplayElementOrder",
         "sequencer.setDisplayElementOrder",
+        "sequencer.setActiveDisplayElements",
         "effects.list",
         "effects.listDefinitions",
         "effects.getDefinition",
@@ -554,6 +558,8 @@ static const std::vector<std::string>& GetV2Commands() {
         "effects.create",
         "effects.update",
         "effects.delete",
+        "effects.deleteLayer",
+        "effects.compactLayers",
         "effects.setPalette",
         "effects.shift",
         "effects.alignToTiming",
@@ -926,6 +932,8 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
                                                               const std::string &jsonKey,
                                                               int responseCode,
                                                               bool msgIsJSON)> &sendResponse) {
+    // Keep automation fully non-interactive in debug builds where wx asserts open modal dialogs.
+    ScopedAutomationAssertSuppressor suppressor(true);
 
     if (paths.size() == 0) {
         return sendResponse("No command", "msg", 503, false);
@@ -934,8 +942,6 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
     std::string cmd = paths[0];
     // V2 dispatcher: strict command contracts and structured response envelopes.
     if (IsV2Command(params)) {
-        // Keep automation fully non-interactive in debug builds where wx asserts open modal dialogs.
-        ScopedAutomationAssertSuppressor suppressor(true);
         auto requestIdIt = params.find("_REQUEST_ID");
         std::string requestId = requestIdIt == params.end() ? "" : requestIdIt->second;
         PurgeExpiredTransactions();

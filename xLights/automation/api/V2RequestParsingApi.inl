@@ -27,10 +27,9 @@ static bool ParseXlDoAutomationBody(const std::string& body,
                                     std::map<std::string, std::string>& paramMap,
                                     std::string& errorBody,
                                     int& errorStatus) {
-    nlohmann::json val;
-    try {
-        val = nlohmann::json::parse(body);
-    } catch (const std::exception&) {
+    // Use non-throwing parse mode so malformed input cannot terminate the app.
+    nlohmann::json val = nlohmann::json::parse(body, nullptr, false);
+    if (val.is_discarded()) {
         errorStatus = 400;
         errorBody = BuildV2ErrorResponse(400, "", "BAD_REQUEST", "Malformed JSON request body.");
         return false;

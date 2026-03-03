@@ -363,6 +363,101 @@ static std::optional<bool> HandleEffectsV2Command(
         return sendResponse(BuildV2ErrorResponse(404, cmd, "EFFECT_NOT_FOUND", "No effect matched effectId.", requestId), "", 404, true);
     }
 
+    if (cmd == "effects.deleteLayer") {
+        if (auto response = requireOpenSequence()) {
+            return *response;
+        }
+        std::string modelName = ReadParamString(params, "modelName");
+        int layerIndex = ReadParamInt(params, "layerIndex", -1);
+        bool force = ReadBool(ReadParamString(params, "force", "false"));
+        bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
+
+        if (modelName.empty() || modelName == "null" || layerIndex < 0) {
+            return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "modelName and layerIndex>=0 are required.", requestId), "", 422, true);
+        }
+
+        Element* element = sequenceElements.GetElement(modelName);
+        if (element == nullptr) {
+            return sendResponse(BuildV2ErrorResponse(404, cmd, "MODEL_NOT_FOUND", "modelName was not found in sequence elements.", requestId), "", 404, true);
+        }
+        if (element->GetType() == ElementType::ELEMENT_TYPE_TIMING) {
+            return sendResponse(BuildV2ErrorResponse(422, cmd, "INVALID_TARGET_ELEMENT", "modelName must reference a non-timing element.", requestId), "", 422, true);
+        }
+        if (layerIndex >= static_cast<int>(element->GetEffectLayerCount())) {
+            return sendResponse(BuildV2ErrorResponse(404, cmd, "LAYER_NOT_FOUND", "layerIndex was not found on modelName.", requestId), "", 404, true);
+        }
+        if (element->GetEffectLayerCount() <= 1) {
+            return sendResponse(BuildV2ErrorResponse(409, cmd, "LAYER_LAST_REQUIRED", "At least one effect layer must remain.", requestId), "", 409, true);
+        }
+
+        EffectLayer* layer = element->GetEffectLayer(layerIndex);
+        int effectCount = layer == nullptr ? 0 : layer->GetEffectCount();
+        if (effectCount > 0 && !force) {
+            nlohmann::json details;
+            details["effectCount"] = effectCount;
+            return sendResponse(BuildV2ErrorResponse(409, cmd, "LAYER_NOT_EMPTY", "Target layer contains effects. Set force=true to delete.", requestId, details), "", 409, true);
+        }
+
+        if (!dryRun) {
+            element->RemoveEffectLayer(layerIndex);
+            refreshEffectGrid();
+        }
+
+        nlohmann::json data;
+        data["deleted"] = true;
+        data["modelName"] = modelName;
+        data["deletedLayerIndex"] = layerIndex;
+        data["removedEffects"] = effectCount;
+        return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, BuildDryRunWarnings(dryRun)), "", 200, true);
+    }
+
+    if (cmd == "effects.compactLayers") {
+        if (auto response = requireOpenSequence()) {
+            return *response;
+        }
+        std::string modelName = ReadParamString(params, "modelName");
+        bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
+
+        if (modelName.empty() || modelName == "null") {
+            return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "modelName is required.", requestId), "", 422, true);
+        }
+
+        Element* element = sequenceElements.GetElement(modelName);
+        if (element == nullptr) {
+            return sendResponse(BuildV2ErrorResponse(404, cmd, "MODEL_NOT_FOUND", "modelName was not found in sequence elements.", requestId), "", 404, true);
+        }
+        if (element->GetType() == ElementType::ELEMENT_TYPE_TIMING) {
+            return sendResponse(BuildV2ErrorResponse(422, cmd, "INVALID_TARGET_ELEMENT", "modelName must reference a non-timing element.", requestId), "", 422, true);
+        }
+
+        int layerCount = static_cast<int>(element->GetEffectLayerCount());
+        int remaining = layerCount;
+        std::vector<int> removableIndexes;
+        for (int i = layerCount - 1; i >= 0; --i) {
+            EffectLayer* layer = element->GetEffectLayer(i);
+            if (layer != nullptr && layer->GetEffectCount() == 0 && remaining > 1) {
+                removableIndexes.push_back(i);
+                remaining--;
+            }
+        }
+
+        if (!dryRun) {
+            for (int idx : removableIndexes) {
+                element->RemoveEffectLayer(idx);
+            }
+            if (!removableIndexes.empty()) {
+                refreshEffectGrid();
+            }
+        }
+
+        nlohmann::json data;
+        data["modelName"] = modelName;
+        data["removedCount"] = static_cast<int>(removableIndexes.size());
+        data["removedLayerIndexes"] = removableIndexes;
+        data["layerCount"] = dryRun ? layerCount : static_cast<int>(element->GetEffectLayerCount());
+        return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, BuildDryRunWarnings(dryRun)), "", 200, true);
+    }
+
     if (cmd == "effects.create") {
         if (auto response = requireOpenSequence()) {
             return *response;
