@@ -290,12 +290,71 @@ static std::optional<bool> HandleEffectsV2Command(
                 {"effectName", ref.effect->GetEffectName()},
                 {"startMs", ref.effect->GetStartTimeMS()},
                 {"endMs", ref.effect->GetEndTimeMS()},
-                {"settings", ParseJsonObjectOrEmpty(ref.effect->GetSettingsAsJSON())}
+                {"settings", ParseJsonObjectOrEmpty(ref.effect->GetSettingsAsJSON())},
+                {"palette", ParseJsonObjectOrEmpty(ref.effect->GetPaletteAsJSON())}
             });
         }
         nlohmann::json data;
         data["effects"] = effects;
         return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+    }
+
+    if (cmd == "effects.getPalette") {
+        if (auto response = requireOpenSequence()) {
+            return *response;
+        }
+        std::string effectId = ReadParamString(params, "effectId");
+        if (effectId.empty() || effectId == "null") {
+            return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "effectId is required.", requestId), "", 422, true);
+        }
+
+        std::vector<EffectRef> refs;
+        collectEffects("", -1, 0, frame->CurrentSeqXmlFile->GetSequenceDurationMS(), {}, refs);
+        for (const auto& ref : refs) {
+            std::string handle = MakeEffectHandle(ref);
+            if (effectId == handle || wxAtoi(effectId) == ref.effect->GetID()) {
+                nlohmann::json data;
+                data["effectId"] = handle;
+                data["palette"] = ParseJsonObjectOrEmpty(ref.effect->GetPaletteAsJSON());
+                return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+            }
+        }
+        return sendResponse(BuildV2ErrorResponse(404, cmd, "EFFECT_NOT_FOUND", "No effect matched effectId.", requestId), "", 404, true);
+    }
+
+    if (cmd == "effects.setPalette") {
+        if (auto response = requireOpenSequence()) {
+            return *response;
+        }
+        std::string effectId = ReadParamString(params, "effectId");
+        std::string paletteJson = ReadParamString(params, "palette");
+        bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
+
+        if (effectId.empty() || effectId == "null") {
+            return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "effectId is required.", requestId), "", 422, true);
+        }
+        if (paletteJson.empty() || paletteJson == "null") {
+            return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "palette is required.", requestId), "", 422, true);
+        }
+
+        std::vector<EffectRef> refs;
+        collectEffects("", -1, 0, frame->CurrentSeqXmlFile->GetSequenceDurationMS(), {}, refs);
+        for (const auto& ref : refs) {
+            std::string handle = MakeEffectHandle(ref);
+            if (effectId == handle || wxAtoi(effectId) == ref.effect->GetID()) {
+                if (!dryRun) {
+                    ref.effect->SetColourOnlyPalette(paletteJson, true);
+                    refreshEffectGrid();
+                }
+                nlohmann::json data;
+                data["effectId"] = handle;
+                data["updated"] = true;
+                data["palette"] = dryRun ? ParseJsonObjectOrEmpty(paletteJson)
+                                         : ParseJsonObjectOrEmpty(ref.effect->GetPaletteAsJSON());
+                return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, BuildDryRunWarnings(dryRun)), "", 200, true);
+            }
+        }
+        return sendResponse(BuildV2ErrorResponse(404, cmd, "EFFECT_NOT_FOUND", "No effect matched effectId.", requestId), "", 404, true);
     }
 
     if (cmd == "effects.create") {
@@ -308,6 +367,7 @@ static std::optional<bool> HandleEffectsV2Command(
         int startMs = ReadParamInt(params, "startMs", -1);
         int endMs = ReadParamInt(params, "endMs", -1);
         std::string settingsJson = ReadParamString(params, "settings");
+        std::string paletteJson = ReadParamString(params, "palette");
         bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
 
         if (modelName.empty() || modelName == "null" || layerIndex < 0 || effectName.empty() || effectName == "null" || startMs < 0 || endMs <= startMs) {
@@ -339,6 +399,9 @@ static std::optional<bool> HandleEffectsV2Command(
             }
             if (!settingsJson.empty() && settingsJson != "null") {
                 created->SetSettings(settingsJson, true, true);
+            }
+            if (!paletteJson.empty() && paletteJson != "null") {
+                created->SetColourOnlyPalette(paletteJson, true);
             }
             effectHandle = modelName + ":" + std::to_string(layerIndex) + ":" + std::to_string(created->GetID());
             refreshEffectGrid();
@@ -415,6 +478,7 @@ static std::optional<bool> HandleEffectsV2Command(
             int newStart = ReadParamInt(params, "startMs", -1);
             int newEnd = ReadParamInt(params, "endMs", -1);
             std::string settingsJson = ReadParamString(params, "settings");
+            std::string paletteJson = ReadParamString(params, "palette");
 
             int updatedCount = 0;
             for (auto& ref : refs) {
@@ -435,6 +499,9 @@ static std::optional<bool> HandleEffectsV2Command(
                     }
                     if (!settingsJson.empty() && settingsJson != "null") {
                         ref.effect->SetSettings(settingsJson, true, true);
+                    }
+                    if (!paletteJson.empty() && paletteJson != "null") {
+                        ref.effect->SetColourOnlyPalette(paletteJson, true);
                     }
                 }
                 updatedCount++;

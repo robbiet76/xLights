@@ -322,6 +322,11 @@ static bool ValidateBatchCommandShape(const nlohmann::json& command,
             errorMessage = "effects.create requires modelName, layerIndex>=0, effectName, and endMs>startMs.";
             return false;
         }
+        if (params.contains("palette") && !params["palette"].is_object()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "effects.create params.palette must be an object when provided.";
+            return false;
+        }
     } else if (childCmd == "effects.alignToTiming") {
         if (!ValidateEffectSelectorParams(params, errorMessage)) {
             errorCode = "VALIDATION_ERROR";
@@ -345,6 +350,24 @@ static bool ValidateBatchCommandShape(const nlohmann::json& command,
     } else if (childCmd == "effects.update" || childCmd == "effects.delete") {
         if (!ValidateEffectSelectorParams(params, errorMessage)) {
             errorCode = "VALIDATION_ERROR";
+            return false;
+        }
+        if (childCmd == "effects.update" && params.contains("palette") && !params["palette"].is_object()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "effects.update params.palette must be an object when provided.";
+            return false;
+        }
+    } else if (childCmd == "effects.getPalette") {
+        if (!params.contains("effectId") || (!params["effectId"].is_string() && !params["effectId"].is_number_integer())) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "effects.getPalette requires params.effectId.";
+            return false;
+        }
+    } else if (childCmd == "effects.setPalette") {
+        if (!params.contains("effectId") || (!params["effectId"].is_string() && !params["effectId"].is_number_integer()) ||
+            !params.contains("palette") || !params["palette"].is_object()) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "effects.setPalette requires params.effectId and params.palette object.";
             return false;
         }
     } else if (childCmd == "effects.clone") {
