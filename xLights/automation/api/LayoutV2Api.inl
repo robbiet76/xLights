@@ -144,6 +144,12 @@ static std::optional<bool> HandleLayoutV2Command(
         return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
     }
 
+    if (cmd == "layout.getSubmodels") {
+        nlohmann::json data;
+        data["submodels"] = BuildLayoutSubmodelsData(allModels);
+        return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+    }
+
     if (cmd == "layout.getModelGeometry") {
         std::string name = ReadParamString(params, "name");
         if (name.empty() || name == "null") {

@@ -26,6 +26,12 @@ static std::optional<bool> HandleSystemV2Command(
         return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
     }
 
+    if (cmd == "system.getVersion") {
+        nlohmann::json data;
+        data["version"] = GetDisplayVersionString().ToStdString();
+        return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+    }
+
     if (cmd == "system.validateCommands") {
         std::string rawCommands = ReadParamString(params, "commands");
         if (rawCommands.empty() || rawCommands == "null") {

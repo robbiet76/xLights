@@ -526,6 +526,7 @@ static const std::vector<std::string>& GetV2Commands() {
     // PR-2 scaffolding: extend this list as new v2 automation commands are implemented.
     static const std::vector<std::string> commands = {
         "system.getCapabilities",
+        "system.getVersion",
         "system.validateCommands",
         "system.executePlan",
         "sequence.getOpen",
@@ -542,6 +543,7 @@ static const std::vector<std::string>& GetV2Commands() {
         "layout.getScene",
         "layout.getViews",
         "layout.getDisplayElements",
+        "layout.getSubmodels",
         "media.get",
         "media.set",
         "media.getMetadata",
@@ -776,6 +778,43 @@ static nlohmann::json BuildLayoutDisplayElementsData(SequenceElements& sequenceE
         elements.push_back(entry);
     }
     return elements;
+}
+
+static nlohmann::json BuildLayoutSubmodelsData(const ModelManager& allModels) {
+    nlohmann::json submodels = nlohmann::json::array();
+    for (const auto& modelEntry : allModels) {
+        Model* parent = modelEntry.second;
+        if (parent == nullptr) {
+            continue;
+        }
+        if (parent->GetDisplayAs() == "ModelGroup" || parent->GetDisplayAs() == "SubModel") {
+            continue;
+        }
+
+        for (const auto& submodel : parent->GetSubModels()) {
+            if (submodel == nullptr) {
+                continue;
+            }
+
+            nlohmann::json groupNames = nlohmann::json::array();
+            auto groups = allModels.GetGroupsContainingModel(submodel);
+            for (const auto& group : groups) {
+                groupNames.push_back(group);
+            }
+
+            nlohmann::json entry;
+            entry["id"] = submodel->GetFullName();
+            entry["name"] = submodel->GetName();
+            entry["type"] = "submodel";
+            entry["parentId"] = parent->GetName();
+            entry["layoutGroup"] = submodel->GetLayoutGroup();
+            entry["groupNames"] = groupNames;
+            entry["startChannel"] = static_cast<int>(submodel->GetFirstChannel()) + 1;
+            entry["endChannel"] = static_cast<int>(submodel->GetLastChannel()) + 1;
+            submodels.push_back(entry);
+        }
+    }
+    return submodels;
 }
 
 struct EffectRef {
