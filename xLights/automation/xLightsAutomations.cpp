@@ -30,6 +30,7 @@
 #include "../../xSchedule/wxHTTPServer/wxhttpserver.h"
 #include "../sequencer/MainSequencer.h"
 #include "../ModelPreview.h"
+#include "../models/ModelGroup.h"
 #include "../ValueCurveButton.h"
 #include "../effects/EffectPanelUtils.h"
 #include "../utils/Curl.h"
@@ -537,6 +538,7 @@ static const std::vector<std::string>& GetV2Commands() {
         "sequence.close",
         "layout.getModels",
         "layout.getModel",
+        "layout.getModelGroupMembers",
         "layout.getModelGeometry",
         "layout.getModelNodes",
         "layout.getCameras",
@@ -885,6 +887,69 @@ static nlohmann::json BuildV2ModelData(Model* model, const ModelManager& modelMa
         }
     }
     data["groupNames"] = groupNames;
+    return data;
+}
+
+static nlohmann::json BuildV2GroupMemberEntry(Model* model) {
+    nlohmann::json entry;
+    if (model == nullptr) {
+        return entry;
+    }
+    entry["id"] = model->GetFullName();
+    entry["name"] = model->GetName();
+    entry["type"] = model->GetDisplayAs();
+    entry["isGroup"] = model->GetDisplayAs() == "ModelGroup";
+    entry["isSubmodel"] = model->GetDisplayAs() == "SubModel";
+    entry["active"] = model->IsActive();
+    return entry;
+}
+
+static nlohmann::json BuildV2ModelGroupMembersData(Model* model, const ModelManager& modelManager) {
+    nlohmann::json data;
+    data["groupName"] = model != nullptr ? model->GetName() : "";
+    data["directMembers"] = nlohmann::json::array();
+    data["activeMembers"] = nlohmann::json::array();
+    data["flattenedMembers"] = nlohmann::json::array();
+    data["flattenedAllMembers"] = nlohmann::json::array();
+
+    if (model == nullptr || model->GetDisplayAs() != "ModelGroup") {
+        return data;
+    }
+
+    auto* group = dynamic_cast<ModelGroup*>(model);
+    if (group == nullptr) {
+        return data;
+    }
+
+    for (const auto& name : group->ModelNames()) {
+        Model* member = modelManager.GetModel(name);
+        if (member == nullptr) {
+            continue;
+        }
+        data["directMembers"].push_back(BuildV2GroupMemberEntry(member));
+    }
+
+    for (const auto& member : group->ActiveModels()) {
+        if (member == nullptr) {
+            continue;
+        }
+        data["activeMembers"].push_back(BuildV2GroupMemberEntry(member));
+    }
+
+    for (const auto& member : group->GetFlatModels(true, true)) {
+        if (member == nullptr) {
+            continue;
+        }
+        data["flattenedMembers"].push_back(BuildV2GroupMemberEntry(member));
+    }
+
+    for (const auto& member : group->GetFlatModels(true, false)) {
+        if (member == nullptr) {
+            continue;
+        }
+        data["flattenedAllMembers"].push_back(BuildV2GroupMemberEntry(member));
+    }
+
     return data;
 }
 

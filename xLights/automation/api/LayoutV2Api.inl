@@ -113,6 +113,24 @@ static std::optional<bool> HandleLayoutV2Command(
         return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
     }
 
+    if (cmd == "layout.getModelGroupMembers") {
+        std::string name = ReadParamString(params, "name");
+        if (name.empty() || name == "null") {
+            return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "name is required.", requestId), "", 422, true);
+        }
+        Model* model = allModels.GetModel(name);
+        if (model == nullptr) {
+            return sendResponse(BuildV2ErrorResponse(404, cmd, "MODEL_NOT_FOUND", "Model not found.", requestId), "", 404, true);
+        }
+        if (model->GetDisplayAs() != "ModelGroup") {
+            return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "name must refer to a ModelGroup.", requestId), "", 422, true);
+        }
+        nlohmann::json data;
+        data["group"] = BuildV2ModelData(model, allModels);
+        data["members"] = BuildV2ModelGroupMembersData(model, allModels);
+        return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+    }
+
     if (cmd == "layout.getViews") {
         if (auto response = requireOpenSequence()) {
             return *response;
