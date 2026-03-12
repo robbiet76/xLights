@@ -77,6 +77,7 @@ class ModelGroup : public ModelWithScreenLocation<BoxedScreenLocation>
         void ResetModels();
 
         bool CheckForChanges() const;
+        const std::string& GetDefaultBufferStyle() const { return defaultBufferStyle; }
 
         float GetCentreX() const { return centrex; }
         float GetCentreY() const { return centrey; }
@@ -103,4 +104,3 @@ class ModelGroup : public ModelWithScreenLocation<BoxedScreenLocation>
         float centrex;
         float centrey;
 };
-

@@ -887,6 +887,42 @@ static nlohmann::json BuildV2ModelData(Model* model, const ModelManager& modelMa
         }
     }
     data["groupNames"] = groupNames;
+
+    nlohmann::json renderStyles = nlohmann::json::array();
+    for (const auto& style : model->GetBufferStyles()) {
+        renderStyles.push_back(style);
+    }
+    data["availableBufferStyles"] = renderStyles;
+
+    std::string renderLayout;
+    if (model->GetModelXml() != nullptr) {
+        renderLayout = model->GetModelXml()->GetAttribute("layout", "").ToStdString();
+    }
+    data["renderLayout"] = renderLayout;
+
+    std::string defaultBufferStyle = "Default";
+    std::string renderPolicy = "default";
+    if (model->GetDisplayAs() == "ModelGroup") {
+        auto* group = dynamic_cast<ModelGroup*>(model);
+        if (group != nullptr) {
+            defaultBufferStyle = group->GetDefaultBufferStyle();
+        }
+        if (defaultBufferStyle.find("Overlay") != std::string::npos) {
+            renderPolicy = "overlay";
+        } else if (defaultBufferStyle.find("Per Model/Strand") != std::string::npos ||
+                   defaultBufferStyle.find("Per Model Vertical Per Strand") != std::string::npos ||
+                   defaultBufferStyle.find("Per Model Horizontal Per Strand") != std::string::npos) {
+            renderPolicy = "per_model_strand";
+        } else if (defaultBufferStyle.find("Per Model") != std::string::npos) {
+            renderPolicy = "per_model";
+        } else if (defaultBufferStyle.find("Single Line") != std::string::npos) {
+            renderPolicy = "single_line";
+        } else if (defaultBufferStyle.find("Stack") != std::string::npos) {
+            renderPolicy = "stack";
+        }
+    }
+    data["defaultBufferStyle"] = defaultBufferStyle;
+    data["renderPolicy"] = renderPolicy;
     return data;
 }
 
