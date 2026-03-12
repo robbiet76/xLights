@@ -168,6 +168,30 @@ static std::optional<bool> HandleLayoutV2Command(
         return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
     }
 
+    if (cmd == "layout.getSubmodelDetail") {
+        std::string name = ReadParamString(params, "name");
+        if (name.empty() || name == "null") {
+            return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "name is required.", requestId), "", 422, true);
+        }
+        Model* model = allModels.GetModel(name);
+        if (model == nullptr) {
+            return sendResponse(BuildV2ErrorResponse(404, cmd, "MODEL_NOT_FOUND", "Submodel not found.", requestId), "", 404, true);
+        }
+        if (model->GetDisplayAs() != "SubModel") {
+            return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "name must refer to a SubModel.", requestId), "", 422, true);
+        }
+        std::string parentId = ReadParamString(params, "parentId");
+        Model* parent = nullptr;
+        size_t slash = name.find('/');
+        if (!parentId.empty() && parentId != "null") {
+            parent = allModels.GetModel(parentId);
+        } else if (slash != std::string::npos && slash > 0) {
+            parent = allModels.GetModel(name.substr(0, slash));
+        }
+        nlohmann::json data = BuildV2SubmodelDetailData(model, parent, allModels);
+        return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
+    }
+
     if (cmd == "layout.getModelGeometry") {
         std::string name = ReadParamString(params, "name");
         if (name.empty() || name == "null") {

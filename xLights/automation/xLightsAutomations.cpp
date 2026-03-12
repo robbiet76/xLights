@@ -546,6 +546,7 @@ static const std::vector<std::string>& GetV2Commands() {
         "layout.getViews",
         "layout.getDisplayElements",
         "layout.getSubmodels",
+        "layout.getSubmodelDetail",
         "media.get",
         "media.set",
         "media.getMetadata",
@@ -780,6 +781,52 @@ static nlohmann::json BuildLayoutDisplayElementsData(SequenceElements& sequenceE
         elements.push_back(entry);
     }
     return elements;
+}
+
+static nlohmann::json BuildV2SubmodelDetailData(Model* submodel, Model* parent, const ModelManager& allModels) {
+    nlohmann::json groupNames = nlohmann::json::array();
+    auto groups = allModels.GetGroupsContainingModel(submodel);
+    for (const auto& group : groups) {
+        groupNames.push_back(group);
+    }
+
+    nlohmann::json nodeChannels = nlohmann::json::array();
+    nlohmann::json nodeRefs = nlohmann::json::array();
+    std::set<int> seenChannels;
+    for (uint32_t nodeIndex = 0; nodeIndex < submodel->GetNodeCount(); nodeIndex++) {
+        NodeBaseClass* node = submodel->GetNode(nodeIndex);
+        if (node == nullptr) {
+            continue;
+        }
+        int channel = static_cast<int>(node->ActChan) + 1;
+        if (!seenChannels.insert(channel).second) {
+            continue;
+        }
+        nodeChannels.push_back(channel);
+        nodeRefs.push_back({
+            {"channel", channel},
+            {"stringIndex", static_cast<int>(node->StringNum)},
+            {"coordCount", static_cast<int>(node->Coords.size())}
+        });
+    }
+
+    nlohmann::json detail;
+    detail["submodel"] = {
+        {"id", submodel->GetFullName()},
+        {"name", submodel->GetName()},
+        {"type", "submodel"},
+        {"parentId", parent != nullptr ? parent->GetName() : ""},
+        {"layoutGroup", submodel->GetLayoutGroup()},
+        {"groupNames", groupNames},
+        {"startChannel", static_cast<int>(submodel->GetFirstChannel()) + 1},
+        {"endChannel", static_cast<int>(submodel->GetLastChannel()) + 1}
+    };
+    detail["membership"] = {
+        {"nodeCount", static_cast<int>(nodeRefs.size())},
+        {"nodeChannels", nodeChannels},
+        {"nodeRefs", nodeRefs}
+    };
+    return detail;
 }
 
 static nlohmann::json BuildLayoutSubmodelsData(const ModelManager& allModels) {
