@@ -531,9 +531,11 @@ static const std::vector<std::string>& GetV2Commands() {
         "system.validateCommands",
         "system.executePlan",
         "sequence.getOpen",
+        "sequence.getSettings",
         "sequence.getRevision",
         "sequence.open",
         "sequence.create",
+        "sequence.setSettings",
         "sequence.save",
         "sequence.close",
         "layout.getModels",
@@ -923,13 +925,32 @@ static std::string ReadParamStringOrEnv(const std::map<std::string, std::string>
     return "";
 }
 
+static nlohmann::json BuildV2SequenceSettingsData(const xLightsXmlFile* sequence) {
+    nlohmann::json metadata;
+    metadata["author"] = sequence->GetHeaderInfo(HEADER_INFO_TYPES::AUTHOR).ToStdString();
+    metadata["authorEmail"] = sequence->GetHeaderInfo(HEADER_INFO_TYPES::AUTHOR_EMAIL).ToStdString();
+    metadata["website"] = sequence->GetHeaderInfo(HEADER_INFO_TYPES::WEBSITE).ToStdString();
+    metadata["song"] = sequence->GetHeaderInfo(HEADER_INFO_TYPES::SONG).ToStdString();
+    metadata["artist"] = sequence->GetHeaderInfo(HEADER_INFO_TYPES::ARTIST).ToStdString();
+    metadata["album"] = sequence->GetHeaderInfo(HEADER_INFO_TYPES::ALBUM).ToStdString();
+    metadata["musicUrl"] = sequence->GetHeaderInfo(HEADER_INFO_TYPES::URL).ToStdString();
+    metadata["comment"] = sequence->GetHeaderInfo(HEADER_INFO_TYPES::COMMENT).ToStdString();
+
+    nlohmann::json data;
+    data["sequenceType"] = sequence->GetSequenceType().ToStdString();
+    data["durationMs"] = sequence->GetSequenceDurationMS();
+    data["frameMs"] = sequence->GetFrameMS();
+    data["mediaFile"] = sequence->GetMediaFile().ToStdString();
+    data["supportsModelBlending"] = sequence->supportsModelBlending();
+    data["metadata"] = metadata;
+    return data;
+}
+
 static nlohmann::json BuildV2SequenceData(const xLightsXmlFile* sequence) {
     nlohmann::json data;
     data["name"] = sequence->GetName().ToStdString();
     data["path"] = sequence->GetFullPath().ToStdString();
-    data["durationMs"] = sequence->GetSequenceDurationMS();
-    data["frameMs"] = sequence->GetFrameMS();
-    data["mediaFile"] = sequence->GetMediaFile().ToStdString();
+    data.update(BuildV2SequenceSettingsData(sequence));
     return data;
 }
 

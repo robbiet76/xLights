@@ -267,6 +267,7 @@ static bool ValidateBatchCommandShape(const nlohmann::json& command,
             errorMessage = childCmd + " requires params.jobId.";
             return false;
         }
+    } else if (childCmd == "sequence.getSettings") {
     } else if (childCmd == "sequence.open") {
         if (!params.contains("file") || !params["file"].is_string() || params["file"].get<std::string>().empty()) {
             errorCode = "VALIDATION_ERROR";
@@ -345,6 +346,62 @@ static bool ValidateBatchCommandShape(const nlohmann::json& command,
             !params["includeCameras"].is_number_integer()) {
             errorCode = "VALIDATION_ERROR";
             errorMessage = "includeCameras must be boolean when provided.";
+            return false;
+        }
+    } else if (childCmd == "sequence.setSettings") {
+        bool hasAny = false;
+        if (params.contains("sequenceType")) {
+            if (!params["sequenceType"].is_string() || params["sequenceType"].get<std::string>().empty()) {
+                errorCode = "VALIDATION_ERROR";
+                errorMessage = "sequence.setSettings params.sequenceType must be a non-empty string.";
+                return false;
+            }
+            std::string type = params["sequenceType"].get<std::string>();
+            if (type != "Media" && type != "Animation") {
+                errorCode = "VALIDATION_ERROR";
+                errorMessage = "sequence.setSettings params.sequenceType must be Media or Animation.";
+                return false;
+            }
+            hasAny = true;
+        }
+        if (params.contains("durationMs")) {
+            if (!params["durationMs"].is_number_integer() || params["durationMs"].get<int>() <= 0) {
+                errorCode = "VALIDATION_ERROR";
+                errorMessage = "sequence.setSettings params.durationMs must be > 0.";
+                return false;
+            }
+            hasAny = true;
+        }
+        if (params.contains("frameMs")) {
+            if (!params["frameMs"].is_number_integer() || params["frameMs"].get<int>() <= 0) {
+                errorCode = "VALIDATION_ERROR";
+                errorMessage = "sequence.setSettings params.frameMs must be > 0.";
+                return false;
+            }
+            hasAny = true;
+        }
+        if (params.contains("supportsModelBlending")) {
+            if (!params["supportsModelBlending"].is_boolean() && !params["supportsModelBlending"].is_number_integer()) {
+                errorCode = "VALIDATION_ERROR";
+                errorMessage = "sequence.setSettings params.supportsModelBlending must be boolean when provided.";
+                return false;
+            }
+            hasAny = true;
+        }
+        const char* metaKeys[] = {"metadataAuthor","metadataAuthorEmail","metadataWebsite","metadataSong","metadataArtist","metadataAlbum","metadataMusicUrl","metadataComment"};
+        for (const char* key : metaKeys) {
+            if (params.contains(key)) {
+                if (!params[key].is_string()) {
+                    errorCode = "VALIDATION_ERROR";
+                    errorMessage = std::string("sequence.setSettings params.") + key + " must be a string when provided.";
+                    return false;
+                }
+                hasAny = true;
+            }
+        }
+        if (!hasAny) {
+            errorCode = "VALIDATION_ERROR";
+            errorMessage = "sequence.setSettings requires at least one mutable sequence setting.";
             return false;
         }
     } else if (childCmd == "media.set") {

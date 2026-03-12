@@ -22,6 +22,13 @@ static std::optional<bool> HandleSequenceV2Command(
         return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId), "", 200, true);
     }
 
+    if (cmd == "sequence.getSettings") {
+        if (frame->CurrentSeqXmlFile == nullptr) {
+            return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+        }
+        return sendResponse(BuildV2SuccessResponse(200, cmd, BuildV2SequenceSettingsData(frame->CurrentSeqXmlFile), requestId), "", 200, true);
+    }
+
     if (cmd == "sequence.getRevision") {
         if (frame->CurrentSeqXmlFile == nullptr) {
             return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
@@ -149,6 +156,76 @@ static std::optional<bool> HandleSequenceV2Command(
             return sendResponse(BuildV2ErrorResponse(503, cmd, "CREATE_FAILED", "Failed to create sequence.", requestId), "", 503, true);
         }
         return sendResponse(BuildV2SuccessResponse(200, cmd, BuildV2SequenceData(frame->CurrentSeqXmlFile), requestId), "", 200, true);
+    }
+
+    if (cmd == "sequence.setSettings") {
+        if (frame->CurrentSeqXmlFile == nullptr) {
+            return sendResponse(BuildV2ErrorResponse(404, cmd, "SEQUENCE_NOT_OPEN", "No sequence open.", requestId), "", 404, true);
+        }
+
+        std::string sequenceType = ReadParamString(params, "sequenceType");
+        int durationMs = ReadParamInt(params, "durationMs", -1);
+        int frameMs = ReadParamInt(params, "frameMs", -1);
+        bool hasSupportsModelBlending = params.find("supportsModelBlending") != params.end();
+        bool supportsModelBlending = ReadBool(ReadParamString(params, "supportsModelBlending", "false"));
+        bool dryRun = ReadBool(ReadParamString(params, "_DRY_RUN", "false"));
+
+        std::map<HEADER_INFO_TYPES, std::string> metadataUpdates;
+        auto addMetadataIfPresent = [&](HEADER_INFO_TYPES type, const std::string& key) {
+            auto it = params.find(key);
+            if (it != params.end()) {
+                metadataUpdates[type] = it->second;
+            }
+        };
+        addMetadataIfPresent(HEADER_INFO_TYPES::AUTHOR, "metadataAuthor");
+        addMetadataIfPresent(HEADER_INFO_TYPES::AUTHOR_EMAIL, "metadataAuthorEmail");
+        addMetadataIfPresent(HEADER_INFO_TYPES::WEBSITE, "metadataWebsite");
+        addMetadataIfPresent(HEADER_INFO_TYPES::SONG, "metadataSong");
+        addMetadataIfPresent(HEADER_INFO_TYPES::ARTIST, "metadataArtist");
+        addMetadataIfPresent(HEADER_INFO_TYPES::ALBUM, "metadataAlbum");
+        addMetadataIfPresent(HEADER_INFO_TYPES::URL, "metadataMusicUrl");
+        addMetadataIfPresent(HEADER_INFO_TYPES::COMMENT, "metadataComment");
+
+        if (sequenceType.empty()) {
+            sequenceType = ReadParamString(params, "sequenceType");
+        }
+
+        bool hasAny = !sequenceType.empty() || durationMs > 0 || frameMs > 0 || hasSupportsModelBlending || !metadataUpdates.empty();
+        if (!hasAny) {
+            return sendResponse(BuildV2ErrorResponse(422, cmd, "VALIDATION_ERROR", "At least one mutable sequence setting is required.", requestId), "", 422, true);
+        }
+
+        if (dryRun) {
+            nlohmann::json warnings = BuildDryRunWarnings(true);
+            nlohmann::json data = BuildV2SequenceSettingsData(frame->CurrentSeqXmlFile);
+            data["updated"] = true;
+            return sendResponse(BuildV2SuccessResponse(200, cmd, data, requestId, warnings), "", 200, true);
+        }
+
+        if (!sequenceType.empty() && sequenceType != frame->CurrentSeqXmlFile->GetSequenceType().ToStdString()) {
+            frame->CurrentSeqXmlFile->SetSequenceType(wxString::FromUTF8(sequenceType));
+        }
+        if (durationMs > 0) {
+            frame->CurrentSeqXmlFile->SetSequenceDuration(static_cast<double>(durationMs) / 1000.0);
+            frame->UpdateSequenceLength();
+            frame->SetSequenceEnd(frame->CurrentSeqXmlFile->GetSequenceDurationMS());
+        }
+        if (frameMs > 0 && frameMs != frame->CurrentSeqXmlFile->GetFrameMS()) {
+            frame->CurrentSeqXmlFile->SetSequenceTiming(wxString::Format("%d ms", frameMs));
+            frame->SetSequenceTiming(frameMs);
+            if (frame->CurrentSeqXmlFile->HasAudioMedia() && frame->CurrentSeqXmlFile->GetMedia() != nullptr) {
+                frame->CurrentSeqXmlFile->GetMedia()->SetFrameInterval(frameMs);
+            }
+        }
+        if (hasSupportsModelBlending) {
+            frame->CurrentSeqXmlFile->setSupportsModelBlending(supportsModelBlending);
+            frame->GetSequenceElements().SetSupportsModelBlending(supportsModelBlending);
+        }
+        for (const auto& entry : metadataUpdates) {
+            frame->CurrentSeqXmlFile->SetHeaderInfo(entry.first, wxString::FromUTF8(entry.second));
+        }
+
+        return sendResponse(BuildV2SuccessResponse(200, cmd, BuildV2SequenceSettingsData(frame->CurrentSeqXmlFile), requestId), "", 200, true);
     }
 
     if (cmd == "sequence.save") {
