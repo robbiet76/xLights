@@ -790,6 +790,19 @@ static nlohmann::json BuildV2SubmodelDetailData(Model* submodel, Model* parent, 
         groupNames.push_back(group);
     }
 
+    std::string renderLayout;
+    std::string submodelType;
+    std::string bufferStyle = "Default";
+    if (submodel->GetModelXml() != nullptr) {
+        renderLayout = submodel->GetModelXml()->GetAttribute("layout", "").ToStdString();
+        submodelType = submodel->GetModelXml()->GetAttribute("type", "").ToStdString();
+        bufferStyle = submodel->GetModelXml()->GetAttribute("bufferstyle", "Default").ToStdString();
+    }
+    nlohmann::json availableBufferStyles = nlohmann::json::array();
+    for (const auto& style : submodel->GetBufferStyles()) {
+        availableBufferStyles.push_back(style);
+    }
+
     nlohmann::json nodeChannels = nlohmann::json::array();
     nlohmann::json nodeRefs = nlohmann::json::array();
     std::set<int> seenChannels;
@@ -819,7 +832,11 @@ static nlohmann::json BuildV2SubmodelDetailData(Model* submodel, Model* parent, 
         {"layoutGroup", submodel->GetLayoutGroup()},
         {"groupNames", groupNames},
         {"startChannel", static_cast<int>(submodel->GetFirstChannel()) + 1},
-        {"endChannel", static_cast<int>(submodel->GetLastChannel()) + 1}
+        {"endChannel", static_cast<int>(submodel->GetLastChannel()) + 1},
+        {"renderLayout", renderLayout},
+        {"submodelType", submodelType},
+        {"bufferStyle", bufferStyle},
+        {"availableBufferStyles", availableBufferStyles}
     };
     detail["membership"] = {
         {"nodeCount", static_cast<int>(nodeRefs.size())},
