@@ -71,6 +71,8 @@
 
 #include "xLightsApp.h"
 #include "xLightsMain.h"
+#include "xLightsDesigner/DesignerIntegration.h"
+#include "xLightsDesigner/DesignerInteractionPolicy.h"
 #include "ui/shared/utils/wxUtilities.h"
 
 #include <log.h>
@@ -295,7 +297,13 @@ void xLightsFrame::OpenSequence(const wxString& passed_filename, ConvertLogDialo
                     
                     if (xbkptime.IsValid() && xmltime.IsValid() && (xbkptime > xmltime)) {
                         // autosave file is newer
-                        if (wxMessageBox("Autosaved file found which seems to be newer than your sequence file ... would you like to open that instead and replace your xsq file?", "Newer file found", wxYES_NO) == wxYES) {
+                        if (xLightsDesigner::IsDesignerIntegrationEnabled() && xLightsDesigner::ShouldSuppressDesignerUnsavedShowDirectoryPrompts()) {
+                            if (FileExists(fn)) {
+                                // Age the autosave backup to avoid blocking the owned API open flow.
+                                xmltime -= wxTimeSpan(0, 0, 3, 0);
+                                asfn.SetTimes(&xmltime, &xmltime, &xmltime);
+                            }
+                        } else if (wxMessageBox("Autosaved file found which seems to be newer than your sequence file ... would you like to open that instead and replace your xsq file?", "Newer file found", wxYES_NO) == wxYES) {
                             // run a backup ... equivalent of a F10
                             DoBackup(false, false, true);
                             
@@ -1115,4 +1123,3 @@ void xLightsFrame::SetSequenceEnd(int ms)
     _sequenceElements.SetSequenceEnd(CurrentSeqXmlFile->GetSequenceDurationMS());
     _housePreviewPanel->SetDurationFrames(CurrentSeqXmlFile->GetSequenceDurationMS() / CurrentSeqXmlFile->GetFrameMS());
 }
-

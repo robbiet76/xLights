@@ -35,6 +35,7 @@
 
 #include "xLightsApp.h"
 #include "xLightsVersion.h"
+#include "xLightsDesigner/DesignerIntegration.h"
 #include "UtilFunctions.h"
 #include "ui/shared/utils/wxUtilities.h"
 #include "settings/XLightsConfigAdapter.h"
@@ -799,6 +800,7 @@ bool xLightsApp::OnInit()
 
     xLightsFrame* const topFrame = (xLightsFrame*)GetTopWindow();
     __frame = topFrame;
+    xLightsDesigner::InitializeDesignerIntegration(topFrame);
 
     if (renderOnlyMode) {
         topFrame->CallAfter(&xLightsFrame::OpenRenderAndSaveSequencesF, sequenceFiles, xLightsFrame::RENDER_EXIT_ON_DONE);
@@ -831,6 +833,10 @@ bool xLightsApp::OnInit()
         glutInit(&(wxApp::argc), wxApp::argv);
     #endif
 
+    topFrame->CallAfter([]() {
+        xLightsDesigner::NotifyDesignerAppReady();
+    });
+
     spdlog::info("XLightsApp OnInit Done.");
 
     return wxsOK;
@@ -850,6 +856,12 @@ bool xLightsApp::ProcessIdle() {
         return wxApp::ProcessIdle() | b;
     }
     return b;
+}
+
+int xLightsApp::OnExit()
+{
+    xLightsDesigner::ShutdownDesignerIntegration();
+    return xLightsAppBaseClass::OnExit();
 }
 
 //global flags from command line:

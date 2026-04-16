@@ -40,6 +40,7 @@
 #include "ui/setup/ControllerModelDialog.h"
 #include "utils/ExternalHooks.h"
 #include "utils/ip_utils.h"
+#include "xLightsDesigner/DesignerApiHost.h"
 
 #include "controllers/FPP.h"
 #include "controllers/Falcon.h"
@@ -200,7 +201,9 @@ void xLightsFrame::UpdateRecentFilesList(bool reload) {
 
 bool xLightsFrame::SetDir(const wxString& newdir, bool permanent)
 {
+    xLightsDesigner::detail::AppendDesignerOpenTrace(std::string("setdir enter newdir=") + newdir.ToStdString() + " permanent=" + (permanent ? "true" : "false"));
     if (readOnlyMode) {
+        xLightsDesigner::detail::AppendDesignerOpenTrace("setdir readonly_block");
         wxMessageBox("Show directory cannot be changed in read only mode.", "Read Only Mode", wxICON_INFORMATION | wxOK);
         return false;
     }
@@ -211,12 +214,16 @@ bool xLightsFrame::SetDir(const wxString& newdir, bool permanent)
 
     // don't change show directories with an open sequence because models won't match
     if (!CloseSequence()) {
+        xLightsDesigner::detail::AppendDesignerOpenTrace("setdir close_sequence_failed");
         return false;
     }
+    xLightsDesigner::detail::AppendDesignerOpenTrace("setdir after_close_sequence");
 
     if (!ObtainAccessToURL(newdir, true)) {
+        xLightsDesigner::detail::AppendDesignerOpenTrace("setdir obtain_access_failed");
         return false;
     }
+    xLightsDesigner::detail::AppendDesignerOpenTrace("setdir after_obtain_access");
 
     
     layoutPanel->ClearSelectedModelGroup();
@@ -231,7 +238,9 @@ bool xLightsFrame::SetDir(const wxString& newdir, bool permanent)
     viewpoint_mgr.Clear();
 
     // Check to see if any show directory files need to be saved
+    xLightsDesigner::detail::AppendDesignerOpenTrace("setdir before_check_unsaved");
     CheckUnsavedChanges();
+    xLightsDesigner::detail::AppendDesignerOpenTrace("setdir after_check_unsaved");
 
     // Force update of Preset dialog
     if (EffectTreeDlg != nullptr) {
@@ -309,6 +318,7 @@ bool xLightsFrame::SetDir(const wxString& newdir, bool permanent)
     MenuFile->FindItem(ID_MENUITEM_RECENTFOLDERS)->Enable(cnt != 0);
 
     if (!DirExists) {
+        xLightsDesigner::detail::AppendDesignerOpenTrace("setdir dir_missing");
         wxString msg = _("The show directory '") + nd + ("' no longer exists.\nPlease choose a new show directory.");
         DisplayError(msg, this);
         return false;
@@ -325,6 +335,7 @@ bool xLightsFrame::SetDir(const wxString& newdir, bool permanent)
     _outputManager.DeleteAllControllers();
     CurrentDir = nd;
     showDirectory = nd;
+    xLightsDesigner::detail::AppendDesignerOpenTrace("setdir after_assign_dirs");
     UpdateRecentFilesList(true);
 
     SetFixFileShowDir(CurrentDir);
@@ -370,6 +381,7 @@ bool xLightsFrame::SetDir(const wxString& newdir, bool permanent)
     if (FileExists(networkFile)) {
         ObtainAccessToURL(networkFile.GetFullPath());
         spdlog::debug("Loading networks.");
+        xLightsDesigner::detail::AppendDesignerOpenTrace("setdir before_load_networks");
         wxStopWatch sww;
         if (!_outputManager.Load(ToStdString(CurrentDir))) {
             if (!this->IsVisible()) {
@@ -381,6 +393,7 @@ bool xLightsFrame::SetDir(const wxString& newdir, bool permanent)
             }
             DisplayError(ToStdString(wxString::Format("Unable to load network config %s : Time %ldms", networkFile.GetFullPath(), sww.Time())));
         } else {
+            xLightsDesigner::detail::AppendDesignerOpenTrace("setdir after_load_networks");
             spdlog::debug("Loaded network config {} : Time {}ms", (const char*)networkFile.GetFullPath().c_str(), sww.Time());
 
              // Check for deprecated ZCPP controllers and warn the user
@@ -466,6 +479,7 @@ bool xLightsFrame::SetDir(const wxString& newdir, bool permanent)
     // Merge controllers from base show folder before loading effects file
     // (model/view object XML merging now happens inside LoadEffectsFile before LoadModels)
     if (_outputManager.IsAutoUpdateFromBaseShowDir() && _outputManager.GetBaseShowDir() != "") {
+        xLightsDesigner::detail::AppendDesignerOpenTrace("setdir before_merge_base_show");
         spdlog::debug("Updating from base folder on show folder open.");
         if (!ObtainAccessToURL(_outputManager.GetBaseShowDir(), true)) {
             std::string dstr = _outputManager.GetBaseShowDir();
@@ -480,9 +494,12 @@ bool xLightsFrame::SetDir(const wxString& newdir, bool permanent)
             _outputModelManager.AddASAPWork(OutputModelManager::WORK_NETWORK_CHANGE, "SetDir-controller");
             _outputModelManager.AddASAPWork(OutputModelManager::WORK_NETWORK_CHANNELSCHANGE, "SetDir-controller");
         }
+        xLightsDesigner::detail::AppendDesignerOpenTrace("setdir after_merge_base_show");
     }
 
+    xLightsDesigner::detail::AppendDesignerOpenTrace("setdir before_load_effects");
     LoadEffectsFile();
+    xLightsDesigner::detail::AppendDesignerOpenTrace("setdir after_load_effects");
 
     spdlog::debug("Get start channels right.");
     // make sure these won't refire
@@ -513,6 +530,7 @@ bool xLightsFrame::SetDir(const wxString& newdir, bool permanent)
     }
 
     ValidateWindow();
+    xLightsDesigner::detail::AppendDesignerOpenTrace("setdir success");
 
     return true;
 }
