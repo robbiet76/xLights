@@ -1,6 +1,9 @@
 #pragma once
 
 #include <future>
+#include <filesystem>
+#include <sstream>
+#include <fstream>
 #include <wx/filename.h>
 #include <wx/base64.h>
 #include <memory>
@@ -13,6 +16,7 @@
 #include "models/DisplayAsType.h"
 #include "models/ModelGroup.h"
 #include "ExternalHooks.h"
+#include "DesignerDiagnostics.h"
 #include "DesignerApiRuntime.h"
 #include "api/models/EffectModels.h"
 #include "api/models/ElementModels.h"
@@ -99,18 +103,230 @@ inline wxString FindDesignerShowDirectoryForSequence(const std::string& sequence
     return wxString();
 }
 
+inline std::filesystem::path ResolveOwnedAccessTarget(const std::string& path) {
+    std::error_code ec;
+    const std::filesystem::path fsPath(path);
+    if (fsPath.empty()) {
+        return std::filesystem::path();
+    }
+    if (std::filesystem::exists(fsPath, ec)) {
+        return std::filesystem::weakly_canonical(fsPath, ec);
+    }
+    const auto parent = fsPath.parent_path();
+    if (parent.empty() || !std::filesystem::exists(parent, ec)) {
+        return std::filesystem::path();
+    }
+    return std::filesystem::weakly_canonical(parent, ec) / fsPath.filename();
+}
+
+inline bool IsPathWithinRoot(const std::filesystem::path& target, const std::filesystem::path& root) {
+    auto targetIt = target.begin();
+    auto rootIt = root.begin();
+    for (; rootIt != root.end(); ++rootIt, ++targetIt) {
+        if (targetIt == target.end() || *targetIt != *rootIt) {
+            return false;
+        }
+    }
+    return true;
+}
+
+inline bool IsOwnedTrustedRootPath(const std::string& path) {
+    const auto target = ResolveOwnedAccessTarget(path);
+    if (target.empty()) {
+        return false;
+    }
+
+    const char* rawRoots = std::getenv("XLIGHTS_DESIGNER_TRUSTED_ROOTS");
+    if (rawRoots == nullptr || *rawRoots == '\0') {
+        return false;
+    }
+
+    std::stringstream stream(rawRoots);
+    std::string rootEntry;
+    while (std::getline(stream, rootEntry, ':')) {
+        if (rootEntry.empty()) {
+            continue;
+        }
+        const auto root = ResolveOwnedAccessTarget(rootEntry);
+        if (!root.empty() && IsPathWithinRoot(target, root)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline bool HasOwnedTrustedRootAccess(const std::string& path, bool enforceWritable) {
+    if (path.empty() || !IsOwnedTrustedRootPath(path)) {
+        return false;
+    }
+
+    std::error_code ec;
+    const std::filesystem::path fsPath(path);
+    const auto existingTarget = std::filesystem::exists(fsPath, ec) ? fsPath : fsPath.parent_path();
+    if (ec || existingTarget.empty() || !std::filesystem::exists(existingTarget, ec)) {
+        return false;
+    }
+
+    if (!enforceWritable) {
+        return true;
+    }
+
+    const auto probeDir = std::filesystem::is_directory(existingTarget, ec) ? existingTarget : existingTarget.parent_path();
+    if (ec || probeDir.empty() || !std::filesystem::exists(probeDir, ec)) {
+        return false;
+    }
+
+    const auto probe = probeDir / ".xld-owned-write-test";
+    std::ofstream out(probe.string(), std::ios::out | std::ios::trunc);
+    if (!out.is_open()) {
+        return false;
+    }
+    out.close();
+    std::filesystem::remove(probe, ec);
+    return true;
+}
+
+inline bool ObtainOwnedApiAccessToPath(const std::string& path, bool enforceWritable = false) {
+    if (ObtainAccessToURL(path, enforceWritable)) {
+        return true;
+    }
+    return HasOwnedTrustedRootAccess(path, enforceWritable);
+}
+
+inline bool FilesHaveEqualContents(const std::filesystem::path& left, const std::filesystem::path& right) {
+    std::error_code ec;
+    if (!std::filesystem::exists(left, ec) || !std::filesystem::exists(right, ec)) {
+        return false;
+    }
+    if (std::filesystem::file_size(left, ec) != std::filesystem::file_size(right, ec)) {
+        return false;
+    }
+
+    std::ifstream lhs(left, std::ios::binary);
+    std::ifstream rhs(right, std::ios::binary);
+    if (!lhs.is_open() || !rhs.is_open()) {
+        return false;
+    }
+
+    constexpr std::size_t kBufferSize = 8192;
+    char leftBuffer[kBufferSize];
+    char rightBuffer[kBufferSize];
+    while (lhs && rhs) {
+        lhs.read(leftBuffer, static_cast<std::streamsize>(kBufferSize));
+        rhs.read(rightBuffer, static_cast<std::streamsize>(kBufferSize));
+        if (lhs.gcount() != rhs.gcount()) {
+            return false;
+        }
+        if (std::memcmp(leftBuffer, rightBuffer, static_cast<std::size_t>(lhs.gcount())) != 0) {
+            return false;
+        }
+    }
+    return lhs.eof() && rhs.eof();
+}
+
+inline bool CanReuseCurrentShowForTrustedWorkspace(xLightsFrame* frame, const wxString& targetShowDir) {
+    if (frame == nullptr || targetShowDir.empty() || frame->CurrentDir.empty()) {
+        return false;
+    }
+
+    const auto currentDir = ResolveOwnedAccessTarget(frame->CurrentDir.ToStdString());
+    const auto targetDir = ResolveOwnedAccessTarget(targetShowDir.ToStdString());
+    if (currentDir.empty() || targetDir.empty()) {
+        return false;
+    }
+    if (currentDir == targetDir) {
+        return true;
+    }
+
+    const auto currentRgb = currentDir / XLIGHTS_RGBEFFECTS_FILE;
+    const auto targetRgb = targetDir / XLIGHTS_RGBEFFECTS_FILE;
+    const auto currentNet = currentDir / XLIGHTS_NETWORK_FILE;
+    const auto targetNet = targetDir / XLIGHTS_NETWORK_FILE;
+
+    return FilesHaveEqualContents(currentRgb, targetRgb) &&
+           FilesHaveEqualContents(currentNet, targetNet);
+}
+
 inline bool PrepareDesignerShowDirectoryForSequence(xLightsFrame* frame, const std::string& sequenceFile) {
     if (frame == nullptr || sequenceFile.empty()) {
+        AppendDesignerDiagnostic("PrepareDesignerShowDirectoryForSequence invalid frameOrSequence");
         return false;
     }
     const wxString targetShowDir = FindDesignerShowDirectoryForSequence(sequenceFile);
     if (targetShowDir.empty()) {
+        AppendDesignerDiagnostic(std::string("PrepareDesignerShowDirectoryForSequence noTargetShowDir file=") + sequenceFile);
         return true;
     }
     if (frame->CurrentDir == targetShowDir) {
+        AppendDesignerDiagnostic(std::string("PrepareDesignerShowDirectoryForSequence alreadyCurrent current=") +
+                                 frame->CurrentDir.ToStdString() + " target=" + targetShowDir.ToStdString());
         return true;
     }
-    return frame->SetDir(targetShowDir, true);
+    const std::string targetShowDirUtf8 = targetShowDir.ToStdString();
+    const bool accessOk = ObtainOwnedApiAccessToPath(targetShowDirUtf8, true);
+    const bool trustedWorkspace = IsOwnedTrustedRootPath(targetShowDirUtf8);
+    const bool reusable = trustedWorkspace && CanReuseCurrentShowForTrustedWorkspace(frame, targetShowDir);
+    AppendDesignerDiagnostic(std::string("PrepareDesignerShowDirectoryForSequence current=") +
+                             frame->CurrentDir.ToStdString() +
+                             " target=" + targetShowDirUtf8 +
+                             " accessOk=" + (accessOk ? "1" : "0") +
+                             " trustedWorkspace=" + (trustedWorkspace ? "1" : "0") +
+                             " reusable=" + (reusable ? "1" : "0"));
+    if (!accessOk) {
+        return false;
+    }
+    if (reusable) {
+        return true;
+    }
+    const bool setDirOk = frame->SetDir(targetShowDir, !trustedWorkspace);
+    AppendDesignerDiagnostic(std::string("PrepareDesignerShowDirectoryForSequence setDirOk=") + (setDirOk ? "1" : "0"));
+    return setDirOk;
+}
+
+struct OwnedSequenceOpenGuardState {
+    bool renderMode = false;
+    bool promptBatchRenderIssues = true;
+};
+
+inline OwnedSequenceOpenGuardState EnterOwnedSequenceOpenState(xLightsFrame* frame,
+                                                               const std::string& sequenceFile,
+                                                               bool force) {
+    OwnedSequenceOpenGuardState state;
+    if (frame == nullptr) {
+        return state;
+    }
+
+    state.renderMode = frame->_renderMode;
+    state.promptBatchRenderIssues = frame->_promptBatchRenderIssues;
+
+    // Owned API sequence automation should be prompt-free. Mirror the legacy
+    // automation path by suppressing batch-render prompts while the open runs.
+    frame->_renderMode = true;
+    frame->_promptBatchRenderIssues = false;
+
+    if (!force) {
+        return state;
+    }
+
+    if (frame->CurrentSeqXmlFile != nullptr) {
+        frame->mSavedChangeCount = frame->GetSequenceElements().GetChangeCount();
+    }
+
+    const wxString targetShowDir = FindDesignerShowDirectoryForSequence(sequenceFile);
+    if (!targetShowDir.empty() && IsOwnedTrustedRootPath(targetShowDir.ToStdString())) {
+        frame->UnsavedRgbEffectsChanges = false;
+        frame->UnsavedNetworkChanges = false;
+    }
+
+    return state;
+}
+
+inline void ExitOwnedSequenceOpenState(xLightsFrame* frame, const OwnedSequenceOpenGuardState& state) {
+    if (frame == nullptr) {
+        return;
+    }
+    frame->_renderMode = state.renderMode;
+    frame->_promptBatchRenderIssues = state.promptBatchRenderIssues;
 }
 }
 
@@ -192,17 +408,21 @@ public:
         }
 
         if (wxIsMainThread()) {
-            if (!ObtainAccessToURL(request.file, false)) {
+            const auto guard = detail::EnterOwnedSequenceOpenState(_frame, request.file, request.force);
+            if (!detail::ObtainOwnedApiAccessToPath(request.file, false)) {
+                detail::ExitOwnedSequenceOpenState(_frame, guard);
                 result.errorCode = "SEQUENCE_ACCESS_DENIED";
                 result.errorMessage = "Unable to obtain access to the requested sequence file.";
                 return result;
             }
             if (!detail::PrepareDesignerShowDirectoryForSequence(_frame, request.file)) {
+                detail::ExitOwnedSequenceOpenState(_frame, guard);
                 result.errorCode = "SHOW_DIRECTORY_FAILED";
                 result.errorMessage = "Unable to switch xLights to the target show directory before opening the sequence.";
                 return result;
             }
             _frame->OpenSequence(wxString::FromUTF8(request.file), nullptr);
+            detail::ExitOwnedSequenceOpenState(_frame, guard);
             const auto opened = readOpenSequence();
             if (opened.isOpen && opened.path.has_value() && opened.path.value() == request.file) {
                 result.opened = true;
@@ -218,22 +438,27 @@ public:
         auto future = promise->get_future();
         xLightsFrame* frame = _frame;
         const std::string requestedFile = request.file;
-        frame->CallAfter([this, promise, requestedFile]() mutable {
+        const bool force = request.force;
+        frame->CallAfter([this, promise, requestedFile, force]() mutable {
             api::models::SequenceOpenResult callbackResult;
             callbackResult.requestedPath = requestedFile;
-            if (!ObtainAccessToURL(requestedFile, false)) {
+            const auto guard = detail::EnterOwnedSequenceOpenState(_frame, requestedFile, force);
+            if (!detail::ObtainOwnedApiAccessToPath(requestedFile, false)) {
+                detail::ExitOwnedSequenceOpenState(_frame, guard);
                 callbackResult.errorCode = "SEQUENCE_ACCESS_DENIED";
                 callbackResult.errorMessage = "Unable to obtain access to the requested sequence file.";
                 promise->set_value(callbackResult);
                 return;
             }
             if (!detail::PrepareDesignerShowDirectoryForSequence(_frame, requestedFile)) {
+                detail::ExitOwnedSequenceOpenState(_frame, guard);
                 callbackResult.errorCode = "SHOW_DIRECTORY_FAILED";
                 callbackResult.errorMessage = "Unable to switch xLights to the target show directory before opening the sequence.";
                 promise->set_value(callbackResult);
                 return;
             }
             _frame->OpenSequence(wxString::FromUTF8(requestedFile), nullptr);
+            detail::ExitOwnedSequenceOpenState(_frame, guard);
             const auto opened = readOpenSequence();
             if (opened.isOpen && opened.path.has_value() && opened.path.value() == requestedFile) {
                 callbackResult.opened = true;
@@ -282,12 +507,12 @@ public:
             const std::string targetAccessPath = targetFile.FileExists()
                 ? targetFile.GetFullPath().ToStdString()
                 : targetFile.GetPath().ToStdString();
-            if (!ObtainAccessToURL(targetAccessPath, true)) {
+            if (!detail::ObtainOwnedApiAccessToPath(targetAccessPath, true)) {
                 result.errorCode = "SEQUENCE_ACCESS_DENIED";
                 result.errorMessage = "Unable to obtain write access to the requested sequence path.";
                 return result;
             }
-            if (!request.mediaFile.empty() && !ObtainAccessToURL(request.mediaFile, false)) {
+            if (!request.mediaFile.empty() && !detail::ObtainOwnedApiAccessToPath(request.mediaFile, false)) {
                 result.errorCode = "SEQUENCE_ACCESS_DENIED";
                 result.errorMessage = "Unable to obtain access to the requested media file.";
                 return result;
@@ -364,7 +589,7 @@ public:
             return finalizeResult();
         }
 
-        if (!ObtainAccessToURL(_frame->CurrentSeqXmlFile->GetFullPath(), true)) {
+        if (!detail::ObtainOwnedApiAccessToPath(_frame->CurrentSeqXmlFile->GetFullPath(), true)) {
             return result;
         }
 
@@ -430,7 +655,7 @@ public:
             if (renderedFseqPath.empty()) {
                 return false;
             }
-            ObtainAccessToURL(renderedFseqPath.ToStdString());
+            detail::ObtainOwnedApiAccessToPath(renderedFseqPath.ToStdString());
             xLightsFrame::xlightsFilename = renderedFseqPath;
             _frame->WriteFalconPiFile(renderedFseqPath);
             return _frame->CurrentSeqXmlFile != nullptr;

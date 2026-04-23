@@ -23,6 +23,7 @@
 
 #include "api/transport/ApiResponse.h"
 #include "api/transport/JsonTransport.h"
+#include "DesignerDiagnostics.h"
 
 namespace xLightsDesigner {
 
@@ -207,6 +208,7 @@ inline nlohmann::json ParseJsonBody(const std::string& rawBody) {
 }
 
 inline bool ProbeDesignerApiPort(int port) {
+    AppendDesignerDiagnostic(std::string("StartDesignerApiListenerLocked port=") + std::to_string(port));
     if (port <= 0) {
         return false;
     }
@@ -451,6 +453,7 @@ inline bool StartDesignerApiListenerLocked(const DesignerEndpointHandler& handle
 
     const int port = ResolveDesignerApiPort();
     DesignerApiConfiguredPort() = port;
+    AppendDesignerDiagnostic(std::string("StartDesignerApiListenerLocked port=") + std::to_string(port));
     if (port <= 0) {
         spdlog::info("xLightsDesigner listener disabled because port is {}.", port);
         DesignerApiConfigured() = false;
@@ -463,6 +466,7 @@ inline bool StartDesignerApiListenerLocked(const DesignerEndpointHandler& handle
         DesignerApiHandler() = DesignerEndpointHandler();
         DesignerApiConfigured() = false;
         RecordDesignerApiFailure("socket_create_failed");
+        AppendDesignerDiagnostic("StartDesignerApiListenerLocked socket_create_failed");
         return false;
     }
 
@@ -480,6 +484,7 @@ inline bool StartDesignerApiListenerLocked(const DesignerEndpointHandler& handle
         DesignerApiHandler() = DesignerEndpointHandler();
         DesignerApiConfigured() = false;
         RecordDesignerApiFailure("bind_failed");
+        AppendDesignerDiagnostic("StartDesignerApiListenerLocked bind_failed");
         return false;
     }
 
@@ -495,6 +500,7 @@ inline bool StartDesignerApiListenerLocked(const DesignerEndpointHandler& handle
     DesignerApiLastBindAt() = NowUtcIso8601();
     DesignerApiLastReachableAt() = DesignerApiLastBindAt();
     DesignerApiLastFailure().clear();
+    AppendDesignerDiagnostic(std::string("StartDesignerApiListenerLocked started port=") + std::to_string(port));
     spdlog::info(
         "xLightsDesigner listener running on 0.0.0.0:{} (bind={} restart={}).",
         port,

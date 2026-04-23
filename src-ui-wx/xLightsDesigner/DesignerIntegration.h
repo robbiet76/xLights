@@ -19,6 +19,7 @@
 #include <log.h>
 
 #include "DesignerApiHost.h"
+#include "DesignerDiagnostics.h"
 #include "DesignerApiListener.h"
 #include "DesignerApiRuntime.h"
 #include "DesignerApiSelfTest.h"
@@ -124,6 +125,8 @@ inline void InitializeDesignerIntegration(xLightsFrame* frame) {
     const bool smokeEnabled = IsDesignerSmokeEnabled();
     const bool shouldActivate = integrationEnabled || selfTestEnabled || smokeEnabled;
 
+    AppendDesignerDiagnostic(std::string("InitializeDesignerIntegration integration=") + (integrationEnabled ? "1" : "0") + " selfTest=" + (selfTestEnabled ? "1" : "0") + " smoke=" + (smokeEnabled ? "1" : "0") + " shouldActivate=" + (shouldActivate ? "1" : "0"));
+
     if (integrationEnabled) {
         spdlog::info("xLightsDesigner integration initialized.");
     } else {
@@ -146,11 +149,13 @@ inline void InitializeDesignerIntegration(xLightsFrame* frame) {
         return;
     }
 
+    AppendDesignerDiagnostic("InitializeDesignerIntegration starting runtime");
     StartDesignerApiRuntime();
     detail::RuntimeActivated() = true;
 
     if (integrationEnabled) {
-        StartDesignerApiListener([](
+        AppendDesignerDiagnostic("InitializeDesignerIntegration starting listener");
+        const bool listenerStarted = StartDesignerApiListener([](
             const std::string& method,
             const std::string& path,
             const std::map<std::string, std::string>& queryParams,
@@ -158,6 +163,7 @@ inline void InitializeDesignerIntegration(xLightsFrame* frame) {
             const std::string& requestId) {
             return HandleDesignerApiEndpoint(method, path, queryParams, body, requestId);
         });
+        AppendDesignerDiagnostic(std::string("InitializeDesignerIntegration listenerStarted=") + (listenerStarted ? "1" : "0"));
     }
 
     if (smokeEnabled) {
@@ -171,8 +177,10 @@ inline void InitializeDesignerIntegration(xLightsFrame* frame) {
 
 inline void NotifyDesignerAppReady() {
     if (!detail::RuntimeActivated()) {
+        AppendDesignerDiagnostic("NotifyDesignerAppReady skipped runtimeInactive");
         return;
     }
+    AppendDesignerDiagnostic("NotifyDesignerAppReady marking ready");
     MarkDesignerApiAppReady();
 }
 
