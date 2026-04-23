@@ -65,6 +65,11 @@ inline bool& IntegrationInitialized() {
     return initialized;
 }
 
+inline bool& RuntimeActivated() {
+    static bool activated = false;
+    return activated;
+}
+
 } // namespace detail
 
 inline bool IsTruthyFlagValue(const char* value) {
@@ -115,13 +120,18 @@ inline void InitializeDesignerIntegration(xLightsFrame* frame) {
     detail::IntegrationFrame() = frame;
     detail::IntegrationInitialized() = true;
 
-    if (IsDesignerIntegrationEnabled()) {
+    const bool integrationEnabled = IsDesignerIntegrationEnabled();
+    const bool selfTestEnabled = IsDesignerSelfTestEnabled();
+    const bool smokeEnabled = IsDesignerSmokeEnabled();
+    const bool shouldActivate = integrationEnabled || selfTestEnabled || smokeEnabled;
+
+    if (integrationEnabled) {
         spdlog::info("xLightsDesigner integration initialized.");
     } else {
         spdlog::info("xLightsDesigner integration available but inactive.");
     }
 
-    if (IsDesignerSelfTestEnabled()) {
+    if (selfTestEnabled) {
         const auto selfTest = RunDesignerApiSelfTests();
         if (selfTest.ok()) {
             spdlog::info("xLightsDesigner self-tests passed ({} checks).", selfTest.passed);
@@ -133,9 +143,14 @@ inline void InitializeDesignerIntegration(xLightsFrame* frame) {
         }
     }
 
-    StartDesignerApiRuntime();
+    if (!shouldActivate) {
+        return;
+    }
 
-    if (IsDesignerIntegrationEnabled()) {
+    StartDesignerApiRuntime();
+    detail::RuntimeActivated() = true;
+
+    if (integrationEnabled) {
         StartDesignerApiListener([](
             const std::string& method,
             const std::string& path,
@@ -146,7 +161,7 @@ inline void InitializeDesignerIntegration(xLightsFrame* frame) {
         });
     }
 
-    if (IsDesignerSmokeEnabled()) {
+    if (smokeEnabled) {
         const auto smoke = RunDesignerApiSmoke();
         spdlog::info("xLightsDesigner smoke complete ({} passed, {} failed).", smoke.passed, smoke.failed);
         for (const auto& failure : smoke.failures) {
@@ -156,6 +171,9 @@ inline void InitializeDesignerIntegration(xLightsFrame* frame) {
 }
 
 inline void NotifyDesignerAppReady() {
+    if (!detail::RuntimeActivated()) {
+        return;
+    }
     MarkDesignerApiAppReady();
 }
 
@@ -164,12 +182,15 @@ inline void ShutdownDesignerIntegration() {
         return;
     }
 
-    if (IsDesignerIntegrationEnabled()) {
-        StopDesignerApiListener();
-        spdlog::info("xLightsDesigner integration shutdown.");
-    }
+    if (detail::RuntimeActivated()) {
+        if (IsDesignerIntegrationEnabled()) {
+            StopDesignerApiListener();
+            spdlog::info("xLightsDesigner integration shutdown.");
+        }
 
-    StopDesignerApiRuntime();
+        StopDesignerApiRuntime();
+        detail::RuntimeActivated() = false;
+    }
     detail::IntegrationFrame() = nullptr;
     detail::IntegrationInitialized() = false;
 }
