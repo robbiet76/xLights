@@ -69,8 +69,6 @@
 #include "render/GPURenderUtils.h"
 #include "render/SequenceMedia.h"
 #include "ui/shared/utils/wxUtilities.h"
-#include "xLightsDesigner/DesignerIntegration.h"
-#include "xLightsDesigner/DesignerInteractionPolicy.h"
 #include "ui/graphics/wxTextDrawingContext.h"
 #include "utils/AppCallbacks.h"
 #include "utils/xlImage.h"
@@ -4130,24 +4128,13 @@ void xLightsFrame::CheckUnsavedChanges()
     if (readOnlyMode) {
         return;
     }
-    const bool suppressShowSwitchPrompts =
-        xLightsDesigner::IsDesignerIntegrationEnabled() &&
-        xLightsDesigner::ShouldSuppressDesignerUnsavedShowDirectoryPrompts();
     if (UnsavedRgbEffectsChanges) {
         // This is not necessary but it shows the user that the save button is red which I am hoping makes it clearer
         // to the user what this prompt is for
         Notebook1->SetSelection(LAYOUTTAB);
 
-        if (suppressShowSwitchPrompts) {
-            wxFileName effectsFile;
-            effectsFile.AssignDir(CurrentDir);
-            effectsFile.SetFullName(_(XLIGHTS_RGBEFFECTS_FILE));
-            wxFileName fn(effectsFile.GetFullPath());
-            if (FileExists(fn.GetFullPath())) {
-                fn.Touch();
-            }
-        } else if (wxYES == wxMessageBox("Save Models, Views, Perspectives, and Preset changes?",
-                                         "RGB Effects File Changes Confirmation", wxICON_QUESTION | wxYES_NO | wxNO_DEFAULT)) {
+        if (wxYES == wxMessageBox("Save Models, Views, Perspectives, and Preset changes?",
+                                  "RGB Effects File Changes Confirmation", wxICON_QUESTION | wxYES_NO | wxNO_DEFAULT)) {
             SaveEffectsFile();
         } else {
             wxFileName effectsFile;
@@ -4165,7 +4152,7 @@ void xLightsFrame::CheckUnsavedChanges()
         // to the user what this prompt is for
         Notebook1->SetSelection(SETUPTAB);
 
-        if (!suppressShowSwitchPrompts && wxYES == wxMessageBox("Save Network Setup changes?",
+        if (wxYES == wxMessageBox("Save Network Setup changes?",
                                   "Networks Changes Confirmation", wxICON_QUESTION | wxYES_NO | wxNO_DEFAULT)) {
             SaveNetworksFile();
         }

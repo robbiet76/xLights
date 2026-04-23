@@ -51,8 +51,6 @@
 
 #include "xLightsVersion.h"
 #include "ui/sequencer/TopEffectsPanel.h"
-#include "xLightsDesigner/DesignerIntegration.h"
-#include "xLightsDesigner/DesignerInteractionPolicy.h"
 
 #include <log.h>
 
@@ -182,13 +180,7 @@ void xLightsFrame::LoadEffectsFile()
                     "Would you like to use the autosave file instead?",
                     xmlTimeStr, backupTimeStr
                 );
-                if (xLightsDesigner::IsDesignerIntegrationEnabled() && xLightsDesigner::ShouldSuppressDesignerUnsavedShowDirectoryPrompts()) {
-                    if (FileExists(fn.GetFullPath())) {
-                        // Age the autosave backup to avoid blocking the owned API show-load flow.
-                        xmltime -= wxTimeSpan(0, 0, 3, 0);
-                        asfn.SetTimes(&xmltime, &xmltime, &xmltime);
-                    }
-                } else if (wxMessageBox(msg, "Newer Autosave File Found", wxYES_NO | wxICON_QUESTION) == wxYES) {
+                if (wxMessageBox(msg, "Newer Autosave File Found", wxYES_NO | wxICON_QUESTION) == wxYES) {
                     // run a backup ... equivalent of a F10
 
                     // we have not actually read the backup location yet so lets just use the show folder
