@@ -4,8 +4,6 @@
 #include <wx/filename.h>
 #include <wx/base64.h>
 #include <memory>
-#include <fstream>
-#include <iostream>
 #include <cmath>
 #include <algorithm>
 
@@ -16,7 +14,6 @@
 #include "models/ModelGroup.h"
 #include "ExternalHooks.h"
 #include "DesignerApiRuntime.h"
-#include "DesignerInteractionPolicy.h"
 #include "api/models/EffectModels.h"
 #include "api/models/ElementModels.h"
 #include "api/models/LayoutModels.h"
@@ -39,12 +36,6 @@ inline std::string ReadDesignerApiFileModifiedAt(const wxFileName& fileName) {
         return std::string();
     }
     return FormatDesignerApiDateTime(fileName.GetModificationTime());
-}
-
-inline void AppendDesignerOpenTrace(const std::string& line) {
-    std::ofstream trace("/tmp/xlights-open-sequence-trace.log", std::ios::app);
-    trace << line << std::endl;
-    std::cerr << line << std::endl;
 }
 
 inline std::string ToLowerCopy(std::string value) {
@@ -114,16 +105,11 @@ inline bool PrepareDesignerShowDirectoryForSequence(xLightsFrame* frame, const s
     }
     const wxString targetShowDir = FindDesignerShowDirectoryForSequence(sequenceFile);
     if (targetShowDir.empty()) {
-        AppendDesignerOpenTrace(std::string("host show_dir_not_found path=") + sequenceFile);
         return true;
     }
     if (frame->CurrentDir == targetShowDir) {
-        AppendDesignerOpenTrace(std::string("host show_dir_already_set path=") + sequenceFile + " showDir=" + targetShowDir.ToStdString());
         return true;
     }
-    AppendDesignerOpenTrace(std::string("host set_show_dir path=") + sequenceFile + " showDir=" + targetShowDir.ToStdString());
-    ScopedDesignerCloseSequenceSavePromptSuppression suppressClosePrompt;
-    ScopedDesignerUnsavedShowDirectoryPromptSuppression suppressShowDirPrompts;
     return frame->SetDir(targetShowDir, true);
 }
 }
@@ -206,32 +192,23 @@ public:
         }
 
         if (wxIsMainThread()) {
-            detail::AppendDesignerOpenTrace(std::string("host main_thread path=") + request.file);
-            detail::AppendDesignerOpenTrace(std::string("host before_access path=") + request.file);
             if (!ObtainAccessToURL(request.file, false)) {
-                detail::AppendDesignerOpenTrace(std::string("host access_denied path=") + request.file);
                 result.errorCode = "SEQUENCE_ACCESS_DENIED";
                 result.errorMessage = "Unable to obtain access to the requested sequence file.";
                 return result;
             }
-            detail::AppendDesignerOpenTrace(std::string("host after_access path=") + request.file);
             if (!detail::PrepareDesignerShowDirectoryForSequence(_frame, request.file)) {
                 result.errorCode = "SHOW_DIRECTORY_FAILED";
                 result.errorMessage = "Unable to switch xLights to the target show directory before opening the sequence.";
                 return result;
             }
-            detail::AppendDesignerOpenTrace(std::string("host before_open_sequence path=") + request.file);
-            ScopedDesignerCloseSequenceSavePromptSuppression suppressPrompt;
             _frame->OpenSequence(wxString::FromUTF8(request.file), nullptr);
-            detail::AppendDesignerOpenTrace(std::string("host after_open_sequence path=") + request.file);
             const auto opened = readOpenSequence();
             if (opened.isOpen && opened.path.has_value() && opened.path.value() == request.file) {
-                detail::AppendDesignerOpenTrace(std::string("host open_success path=") + request.file);
                 result.opened = true;
                 result.sequence = opened;
                 return result;
             }
-            detail::AppendDesignerOpenTrace(std::string("host open_failed path=") + request.file);
             result.errorCode = "SEQUENCE_OPEN_FAILED";
             result.errorMessage = "xLights did not report the requested sequence as open after OpenSequence completed.";
             return result;
@@ -241,49 +218,37 @@ public:
         auto future = promise->get_future();
         xLightsFrame* frame = _frame;
         const std::string requestedFile = request.file;
-        detail::AppendDesignerOpenTrace(std::string("host queue_callafter path=") + requestedFile);
         frame->CallAfter([this, promise, requestedFile]() mutable {
-            detail::AppendDesignerOpenTrace(std::string("host callback_entered path=") + requestedFile);
             api::models::SequenceOpenResult callbackResult;
             callbackResult.requestedPath = requestedFile;
-            detail::AppendDesignerOpenTrace(std::string("host before_access path=") + requestedFile);
             if (!ObtainAccessToURL(requestedFile, false)) {
-                detail::AppendDesignerOpenTrace(std::string("host access_denied path=") + requestedFile);
                 callbackResult.errorCode = "SEQUENCE_ACCESS_DENIED";
                 callbackResult.errorMessage = "Unable to obtain access to the requested sequence file.";
                 promise->set_value(callbackResult);
                 return;
             }
-            detail::AppendDesignerOpenTrace(std::string("host after_access path=") + requestedFile);
             if (!detail::PrepareDesignerShowDirectoryForSequence(_frame, requestedFile)) {
                 callbackResult.errorCode = "SHOW_DIRECTORY_FAILED";
                 callbackResult.errorMessage = "Unable to switch xLights to the target show directory before opening the sequence.";
                 promise->set_value(callbackResult);
                 return;
             }
-            detail::AppendDesignerOpenTrace(std::string("host before_open_sequence path=") + requestedFile);
-            ScopedDesignerCloseSequenceSavePromptSuppression suppressPrompt;
             _frame->OpenSequence(wxString::FromUTF8(requestedFile), nullptr);
-            detail::AppendDesignerOpenTrace(std::string("host after_open_sequence path=") + requestedFile);
             const auto opened = readOpenSequence();
             if (opened.isOpen && opened.path.has_value() && opened.path.value() == requestedFile) {
-                detail::AppendDesignerOpenTrace(std::string("host open_success path=") + requestedFile);
                 callbackResult.opened = true;
                 callbackResult.sequence = opened;
             } else {
-                detail::AppendDesignerOpenTrace(std::string("host open_failed path=") + requestedFile);
                 callbackResult.errorCode = "SEQUENCE_OPEN_FAILED";
                 callbackResult.errorMessage = "xLights did not report the requested sequence as open after OpenSequence completed.";
             }
             promise->set_value(callbackResult);
         });
         if (future.wait_for(std::chrono::seconds(90)) != std::future_status::ready) {
-            detail::AppendDesignerOpenTrace(std::string("host timeout path=") + request.file);
             result.errorCode = "SEQUENCE_OPEN_TIMEOUT";
             result.errorMessage = "Timed out waiting for xLights to finish opening the requested sequence.";
             return result;
         }
-        detail::AppendDesignerOpenTrace(std::string("host future_ready path=") + request.file);
         return future.get();
     }
 
@@ -330,7 +295,6 @@ public:
 
             const std::string mediaFile = request.mediaFile == "null" ? std::string() : request.mediaFile;
             const std::string view = request.view == "null" ? std::string() : request.view;
-            ScopedDesignerCloseSequenceSavePromptSuppression suppressPrompt;
             _frame->NewSequence(mediaFile, static_cast<uint32_t>(request.durationMs > 0 ? request.durationMs : 0), static_cast<uint32_t>(request.frameMs > 0 ? request.frameMs : 25), view);
             _frame->EnableSequenceControls(true);
             if (_frame->CurrentSeqXmlFile == nullptr) {
@@ -361,16 +325,12 @@ public:
                 return result;
             }
 
-            detail::AppendDesignerOpenTrace("host close_sequence begin");
-            ScopedDesignerCloseSequenceSavePromptSuppression suppressPrompt;
             if (_frame->CurrentSeqXmlFile != nullptr &&
                 _frame->mSavedChangeCount != _frame->GetSequenceElements().GetChangeCount()) {
                 _frame->mSavedChangeCount = _frame->GetSequenceElements().GetChangeCount();
                 _frame->mLastAutosaveCount = _frame->mSavedChangeCount;
-                detail::AppendDesignerOpenTrace("host close_sequence force_clean_state");
             }
             const bool closed = _frame->CloseSequence();
-            detail::AppendDesignerOpenTrace(std::string("host close_sequence result=") + (closed ? "true" : "false"));
             if (!closed) {
                 result.errorCode = "SEQUENCE_CLOSE_FAILED";
                 result.errorMessage = "Unable to close the current sequence.";
@@ -468,14 +428,11 @@ public:
 
             const wxString renderedFseqPath = detail::BuildDesignerRenderedFseqPath(_frame);
             if (renderedFseqPath.empty()) {
-                detail::AppendDesignerOpenTrace("renderCurrent empty_rendered_fseq_path");
                 return false;
             }
-            detail::AppendDesignerOpenTrace(std::string("renderCurrent write_target=") + renderedFseqPath.ToStdString());
             ObtainAccessToURL(renderedFseqPath.ToStdString());
             xLightsFrame::xlightsFilename = renderedFseqPath;
             _frame->WriteFalconPiFile(renderedFseqPath);
-            detail::AppendDesignerOpenTrace(std::string("renderCurrent write_exists=") + (wxFileExists(renderedFseqPath) ? "true" : "false"));
             return _frame->CurrentSeqXmlFile != nullptr;
         };
 

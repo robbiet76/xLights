@@ -89,7 +89,6 @@ public:
             openRequest.force = (it->second == "1" || it->second == "true" || it->second == "TRUE" || it->second == "yes" || it->second == "YES");
         }
 
-        ::xLightsDesigner::detail::AppendRuntimeTrace(std::string("handler sequence.open received file=") + openRequest.file);
         const auto validation = validateOpenRequest(openRequest);
         if (!validation.ok()) {
             nlohmann::json issues = nlohmann::json::array();
@@ -123,15 +122,12 @@ public:
             return response;
         }
 
-        ::xLightsDesigner::detail::AppendRuntimeTrace(std::string("handler sequence.open submit file=") + openRequest.file);
         const auto jobId = SubmitDesignerApiJob(request.command, request.requestId, [service = _service, request, openRequest]() {
             transport::ApiResponse jobResponse;
             jobResponse.command = request.command;
             jobResponse.requestId = request.requestId;
 
-            ::xLightsDesigner::detail::AppendRuntimeTrace(std::string("handler sequence.open job_enter file=") + openRequest.file);
             const auto result = service.openSequence(openRequest);
-            ::xLightsDesigner::detail::AppendRuntimeTrace(std::string("handler sequence.open job_return file=") + openRequest.file);
             if (!result.opened || !result.sequence.isOpen) {
                 int statusCode = 404;
                 if (result.errorCode.has_value() && result.errorCode.value() == "SEQUENCE_OPEN_TIMEOUT") {

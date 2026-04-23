@@ -5,8 +5,6 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
-#include <fstream>
-#include <iostream>
 #include <iomanip>
 #include <map>
 #include <mutex>
@@ -180,12 +178,6 @@ inline std::string RuntimeNowUtcIso8601() {
     return buffer.str();
 }
 
-inline void AppendRuntimeTrace(const std::string& line) {
-    std::ofstream trace("/tmp/xlights-open-sequence-trace.log", std::ios::app);
-    trace << line << std::endl;
-    std::cerr << line << std::endl;
-}
-
 inline void RunDesignerApiWorkerLoop() {
     while (true) {
         PendingDesignerApiJob job;
@@ -199,7 +191,6 @@ inline void RunDesignerApiWorkerLoop() {
             }
             job = std::move(DesignerApiPendingJobs().front());
             DesignerApiPendingJobs().pop_front();
-            AppendRuntimeTrace(std::string("runtime dequeued job=") + job.jobId);
             DesignerApiWorkerBusyFlag() = true;
             DesignerApiActiveJobId() = job.jobId;
             auto found = DesignerApiJobs().find(job.jobId);
@@ -209,18 +200,14 @@ inline void RunDesignerApiWorkerLoop() {
             }
         }
 
-        AppendRuntimeTrace(std::string("runtime before_invoke job=") + job.jobId);
         api::transport::ApiResponse response;
         try {
             response = job.operation();
-            AppendRuntimeTrace(std::string("runtime after_invoke job=") + job.jobId + " status=" + std::to_string(response.statusCode));
         } catch (const std::exception& ex) {
-            AppendRuntimeTrace(std::string("runtime exception job=") + job.jobId + " message=" + ex.what());
             response.statusCode = 500;
             response.command = "job.execute";
             response.error = api::transport::ApiError{"INTERNAL_ERROR", ex.what(), nlohmann::json::object()};
         } catch (...) {
-            AppendRuntimeTrace(std::string("runtime unknown_exception job=") + job.jobId);
             response.statusCode = 500;
             response.command = "job.execute";
             response.error = api::transport::ApiError{"INTERNAL_ERROR", "Unknown job execution failure.", nlohmann::json::object()};
@@ -251,7 +238,6 @@ inline void RunDesignerApiWorkerLoop() {
 } // namespace detail
 
 inline void StartDesignerApiRuntime() {
-    detail::AppendRuntimeTrace("runtime start_requested");
     std::lock_guard<std::mutex> lock(detail::DesignerApiJobMutex());
     if (detail::DesignerApiWorkerRunningFlag()) {
         return;
@@ -264,11 +250,9 @@ inline void StartDesignerApiRuntime() {
     detail::DesignerApiWorkerStopRequested() = false;
     detail::DesignerApiWorkerThread() = std::thread([]() { detail::RunDesignerApiWorkerLoop(); });
     detail::DesignerApiWorkerRunningFlag() = true;
-    detail::AppendRuntimeTrace("runtime worker_started");
 }
 
 inline void MarkDesignerApiAppReady() {
-    detail::AppendRuntimeTrace("runtime app_ready_notified");
     std::lock_guard<std::mutex> lock(detail::DesignerApiJobMutex());
     detail::DesignerApiAppReadyFlag() = true;
     detail::DesignerApiAppReadySteady() = std::chrono::steady_clock::now();
@@ -338,7 +322,6 @@ inline std::string SubmitDesignerApiJob(
     detail::DesignerApiPendingJobs().push_back({jobId, operation});
     detail::DesignerApiTotalSubmitted()++;
     detail::DesignerApiJobCv().notify_one();
-    detail::AppendRuntimeTrace(std::string("runtime queued job=") + jobId + " command=" + command);
     spdlog::info("xLightsDesigner job {} queued for {}.", jobId, command);
     return jobId;
 }

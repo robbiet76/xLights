@@ -18,7 +18,6 @@
 
 #include <log.h>
 
-#include "DesignerInteractionPolicy.h"
 #include "DesignerApiHost.h"
 #include "DesignerApiListener.h"
 #include "DesignerApiRuntime.h"
