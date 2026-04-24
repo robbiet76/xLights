@@ -105,6 +105,9 @@ Startup gating:
 - `POST /xlightsdesigner/api/sequence/open`
 - `POST /xlightsdesigner/api/sequence/create`
 - `POST /xlightsdesigner/api/sequence/save`
+- `POST /xlightsdesigner/api/sequence/close`
+- `POST /xlightsdesigner/api/sequence/render-current`
+- `POST /xlightsdesigner/api/sequence/render-samples`
 
 ### Timing
 - `GET /xlightsdesigner/api/timing/tracks`
@@ -118,6 +121,7 @@ Startup gating:
 
 ### Layout
 - `GET /xlightsdesigner/api/layout/models`
+- `GET /xlightsdesigner/api/layout/scene`
 - `GET /xlightsdesigner/api/layout/settings`
 - `GET /xlightsdesigner/api/layout/group-members`
 
@@ -128,6 +132,10 @@ Startup gating:
 - saved file paths and last modified timestamps for:
   - `xlights_rgbeffects.xml`
   - networks config
+
+`layout/scene` returns model/group geometry and channel ranges for render-feedback sampling. It is the preferred layout read for sequence-agent observation and critique.
+
+`sequence/render-samples` reads packed channel samples from the most recent rendered `.fseq`. Call `sequence/render-current` first when the current sequence has changed; otherwise the endpoint can return `409 RENDER_SAMPLES_UNAVAILABLE`.
 
 ### Elements
 - `GET /xlightsdesigner/api/elements/summary`

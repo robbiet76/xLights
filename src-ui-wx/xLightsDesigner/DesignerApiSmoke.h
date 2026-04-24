@@ -47,6 +47,24 @@ inline DesignerApiSmokeResult RunDesignerApiSmoke() {
         return harness.invokeEndpoint("GET", "/xlightsdesigner/api/layout/models");
     });
 
+    run("GET /xlightsdesigner/api/layout/scene", [&]() {
+        return harness.invokeEndpoint("GET", "/xlightsdesigner/api/layout/scene");
+    });
+
+    run("POST /xlightsdesigner/api/sequence/render-samples", [&]() {
+        return harness.invokeEndpoint(
+            "POST",
+            "/xlightsdesigner/api/sequence/render-samples",
+            {},
+            nlohmann::json{
+                {"startMs", 0},
+                {"endMs", 25},
+                {"maxFrames", 1},
+                {"channelRanges", nlohmann::json::array({nlohmann::json{{"startChannel", 1}, {"channelCount", 1}}})}
+            }
+        );
+    });
+
     run("command sequence.getOpen", [&]() {
         return harness.invokeCommand("sequence.getOpen");
     });

@@ -11,6 +11,40 @@ They do not require xLights-owned automation routing.
 {}
 ```
 
+## Render Current Sequence
+
+`POST /xlightsdesigner/api/sequence/render-current`
+
+```json
+{}
+```
+
+## Rendered Sequence Samples
+
+`POST /xlightsdesigner/api/sequence/render-samples`
+
+Call `sequence/render-current` first after sequence edits so samples reflect the latest applied revision.
+
+```json
+{
+  "startMs": 44000,
+  "endMs": 62000,
+  "maxFrames": 5,
+  "channelRanges": [
+    { "startChannel": 1, "channelCount": 150 },
+    { "startChannel": 1000, "channelCount": 150 }
+  ]
+}
+```
+
+## Layout Scene
+
+`GET /xlightsdesigner/api/layout/scene`
+
+```json
+{}
+```
+
 ## Timing Tracks
 
 `GET /xlightsdesigner/api/timing/tracks`
