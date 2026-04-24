@@ -48,6 +48,7 @@
 #include "utils/ExternalHooks.h"
 #include "XmlSerializer/XmlSerializer.h"
 #include "XmlSerializer/StringSerializingVisitor.h"
+#include "xLightsDesigner/DesignerLaunchPolicy.h"
 
 #include "xLightsVersion.h"
 #include "ui/sequencer/TopEffectsPanel.h"
@@ -180,7 +181,10 @@ void xLightsFrame::LoadEffectsFile()
                     "Would you like to use the autosave file instead?",
                     xmlTimeStr, backupTimeStr
                 );
-                if (wxMessageBox(msg, "Newer Autosave File Found", wxYES_NO | wxICON_QUESTION) == wxYES) {
+                const bool useAutosave = xLightsDesigner::ShouldSuppressPrompt()
+                    ? xLightsDesigner::ShouldUseAutosaveBackup()
+                    : wxMessageBox(msg, "Newer Autosave File Found", wxYES_NO | wxICON_QUESTION) == wxYES;
+                if (useAutosave) {
                     // run a backup ... equivalent of a F10
 
                     // we have not actually read the backup location yet so lets just use the show folder
@@ -285,7 +289,10 @@ void xLightsFrame::LoadEffectsFile()
                         "Autosave file: %s\n\n"
                         "Would you like to use the autosave file instead?",
                         jsonTime.Format("%Y-%m-%d %H:%M:%S"), bkpTime.Format("%Y-%m-%d %H:%M:%S"));
-                    if (wxMessageBox(msg, "Newer Autosave Presets File Found", wxYES_NO | wxICON_QUESTION) == wxYES) {
+                    const bool useAutosave = xLightsDesigner::ShouldSuppressPrompt()
+                        ? xLightsDesigner::ShouldUseAutosaveBackup()
+                        : wxMessageBox(msg, "Newer Autosave Presets File Found", wxYES_NO | wxICON_QUESTION) == wxYES;
+                    if (useAutosave) {
                         wxRemoveFile(presetsFile.GetFullPath());
                         wxRenameFile(presetsBkp.GetFullPath(), presetsFile.GetFullPath());
                     } else {
@@ -314,7 +321,7 @@ void xLightsFrame::LoadEffectsFile()
     }
     // check version, do we need to convert?
     wxString effectsVersion = _effectPresetManager.GetVersion();
-    if (effectsVersion < "0004") {
+    if (effectsVersion < "0004" && !xLightsDesigner::ShouldSuppressPrompt()) {
         wxMessageBox("Loading of xLights v3 rgbeffects is no longer supported.", "Error", wxOK | wxCENTRE |wxICON_ERROR, xLightsFrame::GetFrame());
     }
     if (effectsVersion < "0005") {

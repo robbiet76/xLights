@@ -30,12 +30,14 @@
 #include <time.h>       /* time */
 #include <thread>
 #include <iomanip>
+#include <csignal>
 #include "utils/ThreadUtils.h"
 #include <curl/curl.h>
 
 #include "xLightsApp.h"
 #include "xLightsVersion.h"
 #include "xLightsDesigner/DesignerIntegration.h"
+#include "xLightsDesigner/DesignerLaunchPolicy.h"
 #include "UtilFunctions.h"
 #include "ui/shared/utils/wxUtilities.h"
 #include "settings/XLightsConfigAdapter.h"
@@ -523,6 +525,9 @@ bool xLightsApp::OnInit()
 {
     SetMainThreadId();
     InitialiseLogging(false);
+    if (xLightsDesigner::IsNonInteractiveLaunch()) {
+        std::signal(SIGPIPE, SIG_IGN);
+    }
 
     AppCallbacks::SetPostToMainThread([](std::function<void()> fn) {
         wxTheApp->CallAfter(std::move(fn));
@@ -727,7 +732,7 @@ bool xLightsApp::OnInit()
             sequenceFiles.Clear();
         }
 
-        if (!parser.Found("cs") && !parser.Found("r") && !parser.Found("o") && !info.empty() && readOnlyZipFile == "")
+        if (!parser.Found("cs") && !parser.Found("r") && !parser.Found("o") && !info.empty() && readOnlyZipFile == "" && !xLightsDesigner::IsNonInteractiveLaunch())
         {
             wxMessageBox(info, "Information", wxICON_INFORMATION | wxOK); // pre-frame: callback not yet registered
         }

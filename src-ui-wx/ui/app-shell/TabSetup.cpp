@@ -25,6 +25,7 @@
 #include <thread>
 
 #include "xLightsMain.h"
+#include "xLightsDesigner/DesignerLaunchPolicy.h"
 #include "ui/layout/LayoutPanel.h"
 #include "render/SequenceFile.h"
 #ifdef __WXOSX__
@@ -394,7 +395,7 @@ bool xLightsFrame::SetDir(const wxString& newdir, bool permanent)
                 }
             }
 
-            if (!zcppControllers.empty()) {
+            if (!zcppControllers.empty() && !xLightsDesigner::ShouldSuppressPrompt()) {
                 wxString controllerList;
                 for (size_t i = 0; i < zcppControllers.size(); i++) {
                     if (i > 0) controllerList += ", ";
