@@ -63,6 +63,11 @@ inline std::string ResolveDesignerRenderedFseqPath(xLightsFrame* frame) {
     }
     const auto xsqPath = frame->CurrentSeqXmlFile->GetFullPath();
     if (!xsqPath.empty()) {
+        wxFileName adjacent(xsqPath);
+        adjacent.SetExt("fseq");
+        if (wxFileExists(adjacent.GetFullPath())) {
+            return adjacent.GetFullPath().ToStdString();
+        }
         const auto resolved = SequenceFile::GetFSEQForXSQ(xsqPath, frame->GetFseqDirectory());
         if (!resolved.empty()) {
             return resolved;
@@ -82,9 +87,6 @@ inline wxString BuildDesignerRenderedFseqPath(xLightsFrame* frame) {
 
     wxFileName output(frame->CurrentSeqXmlFile->GetFullPath());
     output.SetExt("fseq");
-    if (!frame->GetFseqDirectory().empty()) {
-        output.SetPath(frame->GetFseqDirectory());
-    }
     return output.GetFullPath();
 }
 
@@ -528,7 +530,24 @@ public:
                 return result;
             }
 
-            _frame->SaveAsSequence(targetFile.GetFullPath().ToStdString());
+            wxFileName fseqFile(targetFile);
+            fseqFile.SetExt("fseq");
+            xLightsFrame::xlightsFilename = fseqFile.GetFullPath();
+            _frame->CurrentSeqXmlFile->SetFullPath(targetFile.GetFullPath().ToStdString());
+            _frame->_renderCache.SetSequence(_frame->renderCacheDirectory, targetFile.GetName());
+
+            {
+                std::unique_lock<std::mutex> lock(_frame->saveLock);
+                if (!_frame->CurrentSeqXmlFile->Save(_frame->GetSequenceElements())) {
+                    result.errorCode = "CREATE_FAILED";
+                    result.errorMessage = "Failed to save the requested sequence file.";
+                    return result;
+                }
+                _frame->mSavedChangeCount = _frame->GetSequenceElements().GetChangeCount();
+                _frame->mLastAutosaveCount = _frame->mSavedChangeCount;
+            }
+            _frame->AddToMRU(targetFile.GetFullPath().ToStdString());
+            _frame->UpdateRecentFilesList(false);
             const auto created = readOpenSequence();
             if (!created.isOpen || !created.path.has_value() || created.path.value() != targetFile.GetFullPath().ToStdString()) {
                 result.errorCode = "CREATE_FAILED";
@@ -642,6 +661,10 @@ public:
             api::models::SequenceRenderResult renderResult;
             renderResult.sequence = readOpenSequence();
             renderResult.rendered = renderResult.sequence.isOpen;
+            const auto fseqPath = detail::ResolveDesignerRenderedFseqPath(_frame);
+            if (!fseqPath.empty()) {
+                renderResult.fseqPath = fseqPath;
+            }
             return renderResult;
         };
 

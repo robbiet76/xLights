@@ -311,6 +311,7 @@ public:
                 return response;
             }
             response.data["rendered"] = true;
+            response.data["fseqPath"] = result.fseqPath.value_or("");
             response.data["sequence"] = nlohmann::json{{"path", result.sequence.path.value_or("")}, {"revisionToken", result.sequence.revisionToken.value_or("")}};
             return response;
         });

@@ -70,6 +70,7 @@ struct SequenceCloseResult {
 struct SequenceRenderResult {
     bool rendered = false;
     SequenceSummary sequence;
+    std::optional<std::string> fseqPath;
 };
 
 struct SequenceChannelRangeRequest {
