@@ -1,9 +1,8 @@
 # xLightsDesigner API Inventory
 
-This inventory classifies the current xLights-owned automation API surface so it can be re-expressed as a clean owned API under `xLightsDesigner/api/`.
+This inventory records the legacy xLights-owned automation API surface that informed the current owned API under `xLightsDesigner/api/`.
 
-This is an audit artifact only.
-It does not imply that the owned API should preserve these file names or boundaries.
+This is an audit artifact only. It is not the current route contract. For active routes, use `API_CURRENT_STATE.md`.
 
 ## Current source surface
 
@@ -76,9 +75,9 @@ Observed responsibilities:
 - sequencing-oriented mutations
 
 Owned target area:
-- `api/handlers/SequencerHandler.h`
-- `api/services/SequencerService.h`
-- `api/models/SequenceModels.h`
+- `api/handlers/SequencingHandler.h`
+- `api/services/SequencingService.h`
+- `api/models/SequencingModels.h`
 
 ### Layout
 Current files:
@@ -134,10 +133,10 @@ Observed responsibilities:
 - mutation grouping
 - commit/rollback-oriented operations
 
-Owned target area:
-- `api/handlers/TransactionsHandler.h`
-- `api/services/TransactionsService.h`
-- `api/models/TransactionModels.h`
+Owned migration outcome:
+- no active owned transaction handler/service/model exists
+- current mutation orchestration uses `sequencing.applyBatchPlan` plus queued jobs
+- do not restore rollback-style transaction docs unless a new owned contract is explicitly designed
 
 ### Jobs
 Current files:
@@ -147,10 +146,9 @@ Observed responsibilities:
 - long-running work state
 - job polling/status
 
-Owned target area:
-- `api/handlers/JobsHandler.h`
-- `api/services/JobsService.h`
-- `api/models/JobModels.h`
+Owned outcome:
+- no separate jobs module exists
+- queued work is owned by runtime infrastructure and exposed through `GET /jobs/get`
 
 ### System
 Current files:
@@ -163,9 +161,9 @@ Observed responsibilities:
 - playback and control behaviors
 - environmental/process-level operations
 
-Owned target area:
-- `api/handlers/SystemHandler.h`
-- `api/services/SystemService.h`
+Owned outcome:
+- runtime health and job polling are exposed through `RuntimeHandler`
+- playback/export/packaging are not active owned xLightsDesigner routes
 
 ### Effects
 Current files:
@@ -178,12 +176,13 @@ Observed responsibilities:
 - effect mutation support
 
 Owned target area:
-- either a separate `EffectsHandler` if effect complexity warrants it
-- or fold into `SequencerHandler` and `SequencerService`
+- `api/handlers/EffectHandler.h`
+- `api/services/EffectService.h`
+- `api/models/EffectModels.h`
 
 Recommendation:
-- start with effects folded into sequencer capability
-- split only if the owned effect surface becomes large enough to justify it
+- keep effect inspection/mutation in the effect capability
+- keep higher-level orchestration in the sequencing capability
 
 ### Export / render transfer / packaging
 Current files:
@@ -194,9 +193,9 @@ Observed responsibilities:
 - export and packaging flows
 - render transfer / handoff style operations
 
-Owned target area:
-- likely `api/handlers/SystemHandler.h` initially
-- split into export/render capabilities later if needed
+Owned outcome:
+- not active as owned xLightsDesigner routes
+- render feedback currently uses sequence render/sample routes plus layout scene data
 
 ### Read-query compatibility
 Current files:
@@ -220,19 +219,12 @@ Current names that should not survive into the owned API:
 
 Replace with capability names such as:
 - `SequenceHandler`
-- `SequencerService`
+- `SequencingService`
 - `LayoutHandler`
 - `TimingService`
 - `RequestParser`
 - `ValidationResult`
 
-## First owned migration slice
+## Owned migration status
 
-Recommended first owned slice:
-- Sequence
-- shared transport/parsing/validation primitives needed for Sequence
-
-Reason:
-- sequence operations are central
-- they define the request, error, and lifecycle patterns the rest of the API will follow
-- they are the cleanest place to prove the owned architecture before tackling broader mutation surfaces
+Implemented owned areas now include sequence, sequencing, layout, timing, media, effects, elements, runtime health, and queued jobs. See `API_ARCHITECTURE.md` for the current file structure and `API_CURRENT_STATE.md` for active routes.

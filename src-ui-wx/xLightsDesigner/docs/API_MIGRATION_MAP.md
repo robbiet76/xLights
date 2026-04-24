@@ -1,6 +1,6 @@
 # xLightsDesigner API Migration Map
 
-This document maps the current xLights-owned automation surface to the future owned `xLightsDesigner/api/` architecture.
+This document maps the historical xLights-owned automation surface to the current owned `xLightsDesigner/api/` architecture. It should not be read as a future plan.
 
 ## Shared infrastructure
 
@@ -14,7 +14,6 @@ Owned target:
 - `transport/ErrorCatalog.h`
 - `parsing/RequestParser.h`
 - `parsing/ParameterReaders.h`
-- `validation/RequestValidator.h`
 - `validation/ValidationResult.h`
 
 ## Sequence
@@ -36,9 +35,12 @@ Current source:
 - `LegacySequencerMutationApi.inl`
 
 Owned target:
-- `handlers/SequencerHandler.h`
-- `services/SequencerService.h`
-- `models/SequenceModels.h`
+- `handlers/SequencingHandler.h`
+- `services/SequencingService.h`
+- `models/SequencingModels.h`
+- `handlers/EffectHandler.h`
+- `services/EffectService.h`
+- `models/EffectModels.h`
 
 ## Layout
 
@@ -76,20 +78,19 @@ Owned target:
 Current source:
 - `TransactionsV2Api.inl`
 
-Owned target:
-- `handlers/TransactionsHandler.h`
-- `services/TransactionsService.h`
-- `models/TransactionModels.h`
+Owned migration outcome:
+- no active owned transaction module exists
+- current apply semantics use `handlers/SequencingHandler.h`, `services/SequencingService.h`, and `models/SequencingModels.h`
+- app-side apply validation uses owned batch plans and revision tokens rather than rollback transactions
 
 ## Jobs
 
 Current source:
 - `JobsV2Api.inl`
 
-Owned target:
-- `handlers/JobsHandler.h`
-- `services/JobsService.h`
-- `models/JobModels.h`
+Owned outcome:
+- no separate jobs module exists
+- queued work is owned by runtime infrastructure and exposed through `GET /jobs/get`
 
 ## System / playback / export
 
@@ -100,9 +101,9 @@ Current source:
 - `LegacyExportPackagingApi.inl`
 - `LegacyRenderTransferApi.inl`
 
-Owned target:
-- `handlers/SystemHandler.h`
-- `services/SystemService.h`
+Owned outcome:
+- runtime health and job polling are exposed through `RuntimeHandler`
+- playback/export/packaging are not active owned xLightsDesigner routes
 
 ## Explicit cleanup rules
 

@@ -28,51 +28,56 @@ Goal:
 - if xLights-owned automation ever needs to bridge into xLightsDesigner, keep that in a narrow adapter layer
 - do not let compatibility concerns dictate internal owned layout
 
-## Target folder structure
+## Current folder structure
 
 ```text
 xLightsDesigner/
   DesignerIntegration.h
+  DesignerApiHost.h
+  DesignerApiHarness.h
+  DesignerApiRuntime.h
   api/
     transport/
       ApiRequest.h
       ApiResponse.h
       ErrorCatalog.h
+      EndpointRouter.h
+      JsonTransport.h
       RequestRouter.h
     parsing/
       RequestParser.h
       ParameterReaders.h
     validation/
-      RequestValidator.h
       ValidationResult.h
     handlers/
       SequenceHandler.h
-      SequencerHandler.h
+      SequencingHandler.h
       LayoutHandler.h
       TimingHandler.h
       MediaHandler.h
-      TransactionsHandler.h
-      JobsHandler.h
-      SystemHandler.h
+      EffectHandler.h
+      ElementHandler.h
+      RuntimeHandler.h
     services/
       SequenceService.h
-      SequencerService.h
+      SequencingService.h
       LayoutService.h
       TimingService.h
       MediaService.h
-      TransactionsService.h
-      JobsService.h
-      SystemService.h
+      EffectService.h
+      ElementService.h
+      EffectMetadataStatus.h
     models/
       SequenceModels.h
       LayoutModels.h
       TimingModels.h
-      TransactionModels.h
-      JobModels.h
+      MediaModels.h
+      SequencingModels.h
+      EffectModels.h
+      ElementModels.h
 ```
 
-This is a target shape, not a requirement to create many files immediately.
-Start with the minimum set of files that preserves these separations.
+This is the implemented owned surface as of the 2026.06 migration branch. Do not reintroduce transaction handler/service/model files unless a new owned contract explicitly requires them; current mutation orchestration uses `sequencing.applyBatchPlan` and queued jobs.
 
 ## Module responsibilities
 
@@ -162,29 +167,32 @@ Owned APIs should converge on one response model:
 
 Do not spread response conventions across capability files.
 
-## Refactor sequence
+## Refactor status
 
-1. inventory legacy logic worth preserving
-2. group it by capability
-3. define owned request/response models
-4. define shared transport and validation primitives
-5. implement the first handler/service pair end-to-end
-6. only then add further capability modules
+Implemented:
+- shared request/response/error transport
+- owned endpoint router and JSON transport
+- sequence open/create/save/close/revision/settings/render-current/render-samples
+- layout models/settings/group-members/scene
+- timing tracks/marks/ensure-track/add-marks
+- media current/directories
+- effects window/add/clear/apply-batch
+- sequencing apply-window-plan/apply-batch-plan
+- runtime health and job polling
 
-## First concrete target
+Still active cleanup:
+- keep `API_CURRENT_STATE.md` synchronized with route additions/removals
+- prefer route-specific documentation updates when behavior changes
+- remove stale references to future transaction modules or legacy rollback semantics from active docs
 
-The first implementation slice should probably be:
-- `transport/ApiRequest.h`
-- `transport/ApiResponse.h`
-- `transport/ErrorCatalog.h`
-- `parsing/RequestParser.h`
-- `validation/ValidationResult.h`
-- `handlers/SequenceHandler.h`
-- `services/SequenceService.h`
+## Current proof-loop focus
 
-Reason:
-- sequence operations are the most central capability for xLightsDesigner
-- it gives the cleanest template for the rest of the API surface
+The current app integration depends on the owned render-feedback path:
+- `POST /sequence/render-current`
+- `POST /sequence/render-samples`
+- `GET /layout/scene`
+
+These routes must remain smoke-covered and documented because native Review apply uses them for backup, render, observation, critique, and revision evidence.
 
 ## Boundary rule
 
