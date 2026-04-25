@@ -9,6 +9,7 @@
 #include <memory>
 #include <cmath>
 #include <algorithm>
+#include <set>
 
 #include "FSEQFile.h"
 #include "SequenceFile.h"
@@ -986,6 +987,80 @@ public:
         return summary;
     }
 
+    [[nodiscard]] api::models::DisplayElementOrderSummary readDisplayElementOrder() const {
+        api::models::DisplayElementOrderSummary summary;
+        if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) {
+            return summary;
+        }
+
+        summary.sequenceOpen = true;
+        auto& sequenceElements = _frame->GetSequenceElements();
+        summary.elements.reserve(sequenceElements.GetElementCount(MASTER_VIEW));
+        for (size_t i = 0; i < sequenceElements.GetElementCount(MASTER_VIEW); ++i) {
+            Element* element = sequenceElements.GetElement(i, MASTER_VIEW);
+            if (element == nullptr) {
+                continue;
+            }
+            summary.elements.push_back({
+                element->GetFullName(),
+                element->GetTypeDescription(),
+                static_cast<int>(i)
+            });
+        }
+        return summary;
+    }
+
+    [[nodiscard]] api::models::SetDisplayElementOrderResult setDisplayElementOrder(const api::models::SetDisplayElementOrderRequest& request) const {
+        return RunOnMainThread<api::models::SetDisplayElementOrderResult>([this, request]() {
+            api::models::SetDisplayElementOrderResult result;
+            if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) {
+                return result;
+            }
+            result.sequenceOpen = true;
+            auto& sequenceElements = _frame->GetSequenceElements();
+
+            std::set<std::string> seen;
+            for (const auto& id : request.orderedIds) {
+                if (id.empty()) {
+                    continue;
+                }
+                if (!seen.insert(id).second) {
+                    result.duplicateIds.push_back(id);
+                }
+                if (sequenceElements.GetElement(id) == nullptr) {
+                    result.missingIds.push_back(id);
+                }
+            }
+            if (!result.duplicateIds.empty() || !result.missingIds.empty()) {
+                result.errorCode = std::string("VALIDATION_ERROR");
+                result.errorMessage = std::string("Display order contains duplicate or unknown ids.");
+                return result;
+            }
+
+            int destination = 0;
+            for (const auto& id : request.orderedIds) {
+                if (id.empty()) {
+                    continue;
+                }
+                const int currentIndex = sequenceElements.GetElementIndex(id, MASTER_VIEW);
+                if (currentIndex < 0) {
+                    result.missingIds.push_back(id);
+                    continue;
+                }
+                sequenceElements.MoveSequenceElement(currentIndex, destination, MASTER_VIEW);
+                destination++;
+            }
+            sequenceElements.PopulateRowInformation();
+            sequenceElements.PopulateVisibleRowInformation();
+            _frame->MarkEffectsFileDirty();
+            wxCommandEvent eventRowHeaderChanged(EVT_ROW_HEADINGS_CHANGED);
+            wxPostEvent(_frame, eventRowHeaderChanged);
+            result.ok = true;
+            result.orderedCount = destination;
+            return result;
+        });
+    }
+
     [[nodiscard]] api::models::ClearEffectWindowResult clearEffectsWindow(const api::models::ClearEffectWindowRequest& request) const {
         return RunOnMainThread<api::models::ClearEffectWindowResult>([this, request]() {
             api::models::ClearEffectWindowResult result;
@@ -1143,6 +1218,335 @@ public:
         });
     }
 
+    [[nodiscard]] api::models::UpdateEffectResult updateEffect(const api::models::UpdateEffectRequest& request) const {
+        return RunOnMainThread<api::models::UpdateEffectResult>([this, request]() {
+            api::models::UpdateEffectResult result;
+            if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) return result;
+            result.sequenceOpen = true;
+            Element* element = _frame->GetSequenceElements().GetElement(request.selector.elementName);
+            if (element == nullptr) return result;
+            result.elementFound = true;
+
+            struct Match {
+                int layerIndex;
+                int effectIndex;
+                Effect* effect;
+            };
+            std::vector<Match> matches;
+            for (size_t layerIndex = 0; layerIndex < element->GetEffectLayerCount(); ++layerIndex) {
+                if (request.selector.layerNumber.has_value() && static_cast<int>(layerIndex) != *request.selector.layerNumber) continue;
+                EffectLayer* layer = element->GetEffectLayer(static_cast<int>(layerIndex));
+                if (layer == nullptr) continue;
+                for (int effectIndex = 0; effectIndex < layer->GetEffectCount(); ++effectIndex) {
+                    Effect* effect = layer->GetEffect(effectIndex);
+                    if (effect == nullptr) continue;
+                    if (request.selector.effectId.has_value() && effect->GetID() != *request.selector.effectId) continue;
+                    if (request.selector.startMs.has_value() && effect->GetStartTimeMS() != *request.selector.startMs) continue;
+                    if (request.selector.endMs.has_value() && effect->GetEndTimeMS() != *request.selector.endMs) continue;
+                    if (!request.selector.effectName.empty() && effect->GetEffectName() != request.selector.effectName) continue;
+                    matches.push_back({static_cast<int>(layerIndex), effectIndex, effect});
+                }
+            }
+            result.matchedCount = static_cast<int>(matches.size());
+            if (matches.empty()) {
+                result.errorCode = std::string("NOT_FOUND");
+                result.errorMessage = std::string("No effects matched the requested selector.");
+                return result;
+            }
+            if (matches.size() > 1 && !request.selector.effectId.has_value()) {
+                result.errorCode = std::string("AMBIGUOUS_SELECTOR");
+                result.errorMessage = std::string("Effect selector matched more than one effect. Use effectId or a narrower selector.");
+                return result;
+            }
+
+            Match match = matches.front();
+            EffectLayer* sourceLayer = element->GetEffectLayer(match.layerIndex);
+            if (sourceLayer == nullptr) {
+                result.errorCode = std::string("INTERNAL_ERROR");
+                result.errorMessage = std::string("Matched effect layer is no longer available.");
+                return result;
+            }
+            Effect* effect = match.effect;
+            const int nextLayerIndex = request.layerNumber.value_or(match.layerIndex);
+            const int nextStartMs = request.startMs.value_or(effect->GetStartTimeMS());
+            const int nextEndMs = request.endMs.value_or(effect->GetEndTimeMS());
+            const std::string nextEffectName = request.effectName.value_or(effect->GetEffectName());
+            const std::string nextSettings = request.settings.value_or(effect->GetSettingsAsString());
+            const std::string nextPalette = request.palette.value_or(effect->GetPaletteAsString());
+            if (nextLayerIndex < 0 || nextStartMs < 0 || nextEndMs < nextStartMs) {
+                result.errorCode = std::string("VALIDATION_ERROR");
+                result.errorMessage = std::string("Updated layer and timing values must be valid.");
+                return result;
+            }
+
+            while (static_cast<int>(element->GetEffectLayerCount()) <= nextLayerIndex) {
+                if (element->AddEffectLayer() == nullptr) {
+                    result.errorCode = std::string("INTERNAL_ERROR");
+                    result.errorMessage = std::string("Unable to allocate the requested target layer.");
+                    return result;
+                }
+            }
+
+            if (nextLayerIndex != match.layerIndex) {
+                EffectLayer* targetLayer = element->GetEffectLayer(nextLayerIndex);
+                if (targetLayer == nullptr) {
+                    result.errorCode = std::string("INTERNAL_ERROR");
+                    result.errorMessage = std::string("Requested target layer is not available.");
+                    return result;
+                }
+                Effect* created = targetLayer->AddEffect(0, nextEffectName, nextSettings, nextPalette, nextStartMs, nextEndMs, EFFECT_NOT_SELECTED, false);
+                if (created == nullptr) {
+                    result.errorCode = std::string("INTERNAL_ERROR");
+                    result.errorMessage = std::string("Updated effect could not be created on the target layer.");
+                    return result;
+                }
+                sourceLayer->DeleteEffectByIndex(match.effectIndex);
+            } else {
+                effect->SetEffectName(nextEffectName);
+                effect->SetStartTimeMS(nextStartMs);
+                effect->SetEndTimeMS(nextEndMs);
+                if (request.settings.has_value()) {
+                    effect->SetSettings(nextSettings, true);
+                }
+                if (request.palette.has_value()) {
+                    effect->SetPalette(nextPalette);
+                }
+            }
+
+            _frame->MarkEffectsFileDirty();
+            wxCommandEvent eventRowHeaderChanged(EVT_ROW_HEADINGS_CHANGED);
+            wxPostEvent(_frame, eventRowHeaderChanged);
+            result.ok = true;
+            result.updatedCount = 1;
+            return result;
+        });
+    }
+
+    [[nodiscard]] api::models::DeleteEffectsResult deleteEffects(const api::models::DeleteEffectsRequest& request) const {
+        return RunOnMainThread<api::models::DeleteEffectsResult>([this, request]() {
+            api::models::DeleteEffectsResult result;
+            if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) return result;
+            result.sequenceOpen = true;
+            Element* element = _frame->GetSequenceElements().GetElement(request.selector.elementName);
+            if (element == nullptr) return result;
+            result.elementFound = true;
+
+            for (int layerIndex = static_cast<int>(element->GetEffectLayerCount()) - 1; layerIndex >= 0; --layerIndex) {
+                if (request.selector.layerNumber.has_value() && layerIndex != *request.selector.layerNumber) continue;
+                EffectLayer* layer = element->GetEffectLayer(layerIndex);
+                if (layer == nullptr) continue;
+                for (int effectIndex = layer->GetEffectCount() - 1; effectIndex >= 0; --effectIndex) {
+                    Effect* effect = layer->GetEffect(effectIndex);
+                    if (effect == nullptr) continue;
+                    if (request.selector.effectId.has_value() && effect->GetID() != *request.selector.effectId) continue;
+                    if (request.selector.startMs.has_value() && effect->GetStartTimeMS() != *request.selector.startMs) continue;
+                    if (request.selector.endMs.has_value() && effect->GetEndTimeMS() != *request.selector.endMs) continue;
+                    if (!request.selector.effectName.empty() && effect->GetEffectName() != request.selector.effectName) continue;
+                    layer->DeleteEffectByIndex(effectIndex);
+                    result.deletedCount++;
+                }
+            }
+            if (result.deletedCount == 0) {
+                result.errorCode = std::string("NOT_FOUND");
+                result.errorMessage = std::string("No effects matched the requested selector.");
+                return result;
+            }
+            _frame->MarkEffectsFileDirty();
+            wxCommandEvent eventRowHeaderChanged(EVT_ROW_HEADINGS_CHANGED);
+            wxPostEvent(_frame, eventRowHeaderChanged);
+            result.ok = true;
+            return result;
+        });
+    }
+
+    [[nodiscard]] api::models::DeleteEffectLayerResult deleteEffectLayer(const api::models::DeleteEffectLayerRequest& request) const {
+        return RunOnMainThread<api::models::DeleteEffectLayerResult>([this, request]() {
+            api::models::DeleteEffectLayerResult result;
+            result.layerNumber = request.layerNumber;
+            if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) return result;
+            result.sequenceOpen = true;
+            Element* element = _frame->GetSequenceElements().GetElement(request.elementName);
+            if (element == nullptr) return result;
+            result.elementFound = true;
+            result.layerCount = static_cast<int>(element->GetEffectLayerCount());
+            if (request.layerNumber < 0 || request.layerNumber >= result.layerCount) return result;
+            result.layerFound = true;
+            if (result.layerCount <= 1) {
+                result.errorCode = std::string("VALIDATION_ERROR");
+                result.errorMessage = std::string("Cannot delete the last effect layer.");
+                return result;
+            }
+            EffectLayer* layer = element->GetEffectLayer(request.layerNumber);
+            result.effectCount = layer == nullptr ? 0 : layer->GetEffectCount();
+            if (result.effectCount > 0 && !request.force) {
+                result.errorCode = std::string("LAYER_NOT_EMPTY");
+                result.errorMessage = std::string("Layer contains effects. Pass force=true to delete it.");
+                return result;
+            }
+            element->RemoveEffectLayer(request.layerNumber);
+            _frame->GetSequenceElements().PopulateRowInformation();
+            _frame->GetSequenceElements().PopulateVisibleRowInformation();
+            _frame->MarkEffectsFileDirty();
+            wxCommandEvent eventRowHeaderChanged(EVT_ROW_HEADINGS_CHANGED);
+            wxPostEvent(_frame, eventRowHeaderChanged);
+            result.ok = true;
+            result.layerCount = static_cast<int>(element->GetEffectLayerCount());
+            return result;
+        });
+    }
+
+    [[nodiscard]] api::models::ReorderEffectLayerResult reorderEffectLayer(const api::models::ReorderEffectLayerRequest& request) const {
+        return RunOnMainThread<api::models::ReorderEffectLayerResult>([this, request]() {
+            api::models::ReorderEffectLayerResult result;
+            result.fromLayer = request.fromLayer;
+            result.toLayer = request.toLayer;
+            if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) return result;
+            result.sequenceOpen = true;
+            Element* element = _frame->GetSequenceElements().GetElement(request.elementName);
+            if (element == nullptr) return result;
+            result.elementFound = true;
+            result.layerCount = static_cast<int>(element->GetEffectLayerCount());
+            if (request.fromLayer < 0 || request.toLayer < 0 || request.fromLayer >= result.layerCount || request.toLayer >= result.layerCount) {
+                result.errorCode = std::string("VALIDATION_ERROR");
+                result.errorMessage = std::string("Layer indexes are outside the current layer range.");
+                return result;
+            }
+            if (request.fromLayer == request.toLayer) {
+                result.ok = true;
+                return result;
+            }
+
+            struct EffectSnapshot {
+                std::string effectName;
+                std::string settings;
+                std::string palette;
+                int startMs = 0;
+                int endMs = 0;
+                int selected = EFFECT_NOT_SELECTED;
+                bool isProtected = false;
+            };
+            struct LayerSnapshot {
+                std::string layerName;
+                std::vector<EffectSnapshot> effects;
+            };
+
+            std::vector<LayerSnapshot> layers;
+            layers.reserve(static_cast<std::size_t>(result.layerCount));
+            for (int layerIndex = 0; layerIndex < result.layerCount; ++layerIndex) {
+                EffectLayer* layer = element->GetEffectLayer(layerIndex);
+                if (layer == nullptr) {
+                    result.errorCode = std::string("INTERNAL_ERROR");
+                    result.errorMessage = std::string("Layer snapshot failed.");
+                    return result;
+                }
+                LayerSnapshot layerSnapshot;
+                layerSnapshot.layerName = layer->GetLayerName();
+                layerSnapshot.effects.reserve(static_cast<std::size_t>(layer->GetEffectCount()));
+                for (int effectIndex = 0; effectIndex < layer->GetEffectCount(); ++effectIndex) {
+                    Effect* effect = layer->GetEffect(effectIndex);
+                    if (effect == nullptr) continue;
+                    layerSnapshot.effects.push_back({
+                        effect->GetEffectName(),
+                        effect->GetSettingsAsString(),
+                        effect->GetPaletteAsString(),
+                        effect->GetStartTimeMS(),
+                        effect->GetEndTimeMS(),
+                        effect->GetSelected(),
+                        effect->GetProtected(),
+                    });
+                }
+                layers.push_back(std::move(layerSnapshot));
+            }
+
+            LayerSnapshot movedLayer = std::move(layers[static_cast<std::size_t>(request.fromLayer)]);
+            layers.erase(layers.begin() + request.fromLayer);
+            layers.insert(layers.begin() + request.toLayer, std::move(movedLayer));
+
+            for (int layerIndex = static_cast<int>(element->GetEffectLayerCount()) - 1; layerIndex >= 0; --layerIndex) {
+                EffectLayer* layer = element->GetEffectLayer(layerIndex);
+                if (layer == nullptr) continue;
+                for (int effectIndex = layer->GetEffectCount() - 1; effectIndex >= 0; --effectIndex) {
+                    Effect* effect = layer->GetEffect(effectIndex);
+                    if (effect != nullptr) {
+                        effect->SetLocked(false);
+                    }
+                    layer->DeleteEffectByIndex(effectIndex);
+                }
+                if (layerIndex > 0) {
+                    element->RemoveEffectLayer(layerIndex);
+                }
+            }
+
+            EffectLayer* firstLayer = element->GetEffectLayer(0);
+            if (firstLayer == nullptr) {
+                result.errorCode = std::string("INTERNAL_ERROR");
+                result.errorMessage = std::string("Layer rebuild failed.");
+                return result;
+            }
+            firstLayer->SetLayerName(layers.front().layerName);
+            while (static_cast<int>(element->GetEffectLayerCount()) < static_cast<int>(layers.size())) {
+                if (element->AddEffectLayer() == nullptr) {
+                    result.errorCode = std::string("INTERNAL_ERROR");
+                    result.errorMessage = std::string("Layer allocation failed.");
+                    return result;
+                }
+            }
+            for (std::size_t layerIndex = 0; layerIndex < layers.size(); ++layerIndex) {
+                EffectLayer* layer = element->GetEffectLayer(static_cast<int>(layerIndex));
+                if (layer == nullptr) {
+                    result.errorCode = std::string("INTERNAL_ERROR");
+                    result.errorMessage = std::string("Layer rebuild failed.");
+                    return result;
+                }
+                layer->SetLayerName(layers[layerIndex].layerName);
+                for (const auto& effect : layers[layerIndex].effects) {
+                    Effect* created = layer->AddEffect(0, effect.effectName, effect.settings, effect.palette, effect.startMs, effect.endMs, effect.selected, effect.isProtected, false);
+                    if (created == nullptr) {
+                        result.errorCode = std::string("INTERNAL_ERROR");
+                        result.errorMessage = std::string("Effect rebuild failed.");
+                        return result;
+                    }
+                }
+            }
+            _frame->GetSequenceElements().PopulateRowInformation();
+            _frame->GetSequenceElements().PopulateVisibleRowInformation();
+            _frame->MarkEffectsFileDirty();
+            wxCommandEvent eventRowHeaderChanged(EVT_ROW_HEADINGS_CHANGED);
+            wxPostEvent(_frame, eventRowHeaderChanged);
+            result.ok = true;
+            return result;
+        });
+    }
+
+    [[nodiscard]] api::models::CompactEffectLayersResult compactEffectLayers(const api::models::CompactEffectLayersRequest& request) const {
+        return RunOnMainThread<api::models::CompactEffectLayersResult>([this, request]() {
+            api::models::CompactEffectLayersResult result;
+            if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) return result;
+            result.sequenceOpen = true;
+            Element* element = _frame->GetSequenceElements().GetElement(request.elementName);
+            if (element == nullptr) return result;
+            result.elementFound = true;
+            for (int layerIndex = static_cast<int>(element->GetEffectLayerCount()) - 1; layerIndex >= 0; --layerIndex) {
+                if (element->GetEffectLayerCount() <= 1) break;
+                EffectLayer* layer = element->GetEffectLayer(layerIndex);
+                if (layer != nullptr && layer->GetEffectCount() == 0) {
+                    element->RemoveEffectLayer(layerIndex);
+                    result.removedLayerNumbers.push_back(layerIndex);
+                }
+            }
+            _frame->GetSequenceElements().PopulateRowInformation();
+            _frame->GetSequenceElements().PopulateVisibleRowInformation();
+            if (!result.removedLayerNumbers.empty()) {
+                _frame->MarkEffectsFileDirty();
+                wxCommandEvent eventRowHeaderChanged(EVT_ROW_HEADINGS_CHANGED);
+                wxPostEvent(_frame, eventRowHeaderChanged);
+            }
+            result.layerCount = static_cast<int>(element->GetEffectLayerCount());
+            result.ok = true;
+            return result;
+        });
+    }
+
     [[nodiscard]] api::models::EffectWindowSummary readEffectsWindow(const api::models::EffectWindowRequest& request) const {
         api::models::EffectWindowSummary summary;
         summary.elementName = request.elementName;
@@ -1169,10 +1573,13 @@ public:
                     continue;
                 }
                 summary.effects.push_back({
+                    effect->GetID(),
                     static_cast<int>(layerIndex),
                     effect->GetEffectName(),
                     effect->GetStartTimeMS(),
-                    effect->GetEndTimeMS()
+                    effect->GetEndTimeMS(),
+                    effect->GetSettingsAsString(),
+                    effect->GetPaletteAsString()
                 });
             }
         }

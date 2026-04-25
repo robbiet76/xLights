@@ -104,6 +104,12 @@ public:
         if (request.command == "elements.getSummary") {
             return _elementHandler.handleGetSummary(request);
         }
+        if (request.command == "elements.getDisplayOrder") {
+            return _elementHandler.handleGetDisplayOrder(request);
+        }
+        if (request.command == "elements.setDisplayOrder") {
+            return _elementHandler.handleSetDisplayOrder(request);
+        }
         if (request.command == "effects.getWindow") {
             return _effectHandler.handleGetWindow(request);
         }
@@ -115,6 +121,21 @@ public:
         }
         if (request.command == "effects.clearWindow") {
             return _effectHandler.handleClearWindow(request);
+        }
+        if (request.command == "effects.update") {
+            return _effectHandler.handleUpdateEffect(request);
+        }
+        if (request.command == "effects.delete") {
+            return _effectHandler.handleDeleteEffects(request);
+        }
+        if (request.command == "effects.deleteLayer") {
+            return _effectHandler.handleDeleteLayer(request);
+        }
+        if (request.command == "effects.reorderLayer") {
+            return _effectHandler.handleReorderLayer(request);
+        }
+        if (request.command == "effects.compactLayers") {
+            return _effectHandler.handleCompactLayers(request);
         }
         if (request.command == "sequencing.applyWindowPlan") {
             return _sequencingHandler.handleApplyWindowPlan(request);

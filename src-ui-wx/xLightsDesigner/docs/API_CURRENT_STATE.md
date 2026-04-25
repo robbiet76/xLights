@@ -139,12 +139,19 @@ Startup gating:
 
 ### Elements
 - `GET /xlightsdesigner/api/elements/summary`
+- `GET /xlightsdesigner/api/elements/display-order`
+- `POST /xlightsdesigner/api/elements/display-order`
 
 ### Effects
 - `GET /xlightsdesigner/api/effects/window`
 - `POST /xlightsdesigner/api/effects/add-effect`
 - `POST /xlightsdesigner/api/effects/clear-window`
 - `POST /xlightsdesigner/api/effects/apply-batch`
+- `POST /xlightsdesigner/api/effects/update`
+- `POST /xlightsdesigner/api/effects/delete`
+- `POST /xlightsdesigner/api/effects/delete-layer`
+- `POST /xlightsdesigner/api/effects/reorder-layer`
+- `POST /xlightsdesigner/api/effects/compact-layers`
 
 ### Sequencing
 - `POST /xlightsdesigner/api/sequencing/apply-window-plan`
@@ -172,6 +179,12 @@ The following routes are job-backed and return `202 Accepted` with a `jobId`:
 - `effects.addEffect`
 - `effects.clearWindow`
 - `effects.applyBatch`
+- `effects.update`
+- `effects.delete`
+- `effects.deleteLayer`
+- `effects.reorderLayer`
+- `effects.compactLayers`
+- `elements.setDisplayOrder`
 - `sequencing.applyWindowPlan`
 - `sequencing.applyBatchPlan`
 

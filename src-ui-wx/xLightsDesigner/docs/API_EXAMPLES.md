@@ -125,6 +125,85 @@ Call `sequence/render-current` first after sequence edits so samples reflect the
 }
 ```
 
+## Update Effect
+
+`POST /xlightsdesigner/api/effects/update`
+
+Select by `effectId`, or by `element` + `layer` + `startMs` + `endMs` with optional `effectName`.
+
+```json
+{
+  "element": "Snowman",
+  "layer": 0,
+  "startMs": 44000,
+  "endMs": 62000,
+  "effectName": "Color Wash",
+  "newLayer": 1,
+  "newStartMs": 44500,
+  "newEndMs": 62000
+}
+```
+
+## Delete Effects
+
+`POST /xlightsdesigner/api/effects/delete`
+
+```json
+{
+  "element": "Snowman",
+  "layer": 1,
+  "startMs": 44500,
+  "endMs": 62000,
+  "effectName": "Color Wash"
+}
+```
+
+## Layer Stack Edits
+
+`POST /xlightsdesigner/api/effects/reorder-layer`
+
+```json
+{
+  "element": "Snowman",
+  "fromLayer": 1,
+  "toLayer": 0
+}
+```
+
+`POST /xlightsdesigner/api/effects/delete-layer`
+
+```json
+{
+  "element": "Snowman",
+  "layer": 1,
+  "force": true
+}
+```
+
+`POST /xlightsdesigner/api/effects/compact-layers`
+
+```json
+{
+  "element": "Snowman"
+}
+```
+
+## Display Element Order
+
+`GET /xlightsdesigner/api/elements/display-order`
+
+```json
+{}
+```
+
+`POST /xlightsdesigner/api/elements/display-order`
+
+```json
+{
+  "orderedIds": ["Lyrics", "XD: Song Structure", "All Models", "Snowman"]
+}
+```
+
 ## Apply Window Plan
 
 `POST /xlightsdesigner/api/sequencing/apply-window-plan`

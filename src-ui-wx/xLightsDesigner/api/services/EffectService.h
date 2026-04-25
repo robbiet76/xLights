@@ -12,15 +12,30 @@ public:
     using AddEffectFn = std::function<models::AddEffectResult(const models::AddEffectRequest&)>;
     using ClearEffectWindowFn = std::function<models::ClearEffectWindowResult(const models::ClearEffectWindowRequest&)>;
     using ApplyEffectBatchFn = std::function<models::ApplyEffectBatchResult(const models::ApplyEffectBatchRequest&)>;
+    using UpdateEffectFn = std::function<models::UpdateEffectResult(const models::UpdateEffectRequest&)>;
+    using DeleteEffectsFn = std::function<models::DeleteEffectsResult(const models::DeleteEffectsRequest&)>;
+    using DeleteEffectLayerFn = std::function<models::DeleteEffectLayerResult(const models::DeleteEffectLayerRequest&)>;
+    using ReorderEffectLayerFn = std::function<models::ReorderEffectLayerResult(const models::ReorderEffectLayerRequest&)>;
+    using CompactEffectLayersFn = std::function<models::CompactEffectLayersResult(const models::CompactEffectLayersRequest&)>;
 
     EffectService(ReadEffectWindowFn readEffectWindow,
                   AddEffectFn addEffect,
                   ClearEffectWindowFn clearEffectWindow,
-                  ApplyEffectBatchFn applyEffectBatch)
+                  ApplyEffectBatchFn applyEffectBatch,
+                  UpdateEffectFn updateEffect,
+                  DeleteEffectsFn deleteEffects,
+                  DeleteEffectLayerFn deleteEffectLayer,
+                  ReorderEffectLayerFn reorderEffectLayer,
+                  CompactEffectLayersFn compactEffectLayers)
         : _readEffectWindow(std::move(readEffectWindow)),
           _addEffect(std::move(addEffect)),
           _clearEffectWindow(std::move(clearEffectWindow)),
-          _applyEffectBatch(std::move(applyEffectBatch)) {}
+          _applyEffectBatch(std::move(applyEffectBatch)),
+          _updateEffect(std::move(updateEffect)),
+          _deleteEffects(std::move(deleteEffects)),
+          _deleteEffectLayer(std::move(deleteEffectLayer)),
+          _reorderEffectLayer(std::move(reorderEffectLayer)),
+          _compactEffectLayers(std::move(compactEffectLayers)) {}
 
     [[nodiscard]] models::EffectWindowSummary getWindow(const models::EffectWindowRequest& request) const {
         return _readEffectWindow ? _readEffectWindow(request) : models::EffectWindowSummary{};
@@ -38,11 +53,36 @@ public:
         return _applyEffectBatch ? _applyEffectBatch(request) : models::ApplyEffectBatchResult{};
     }
 
+    [[nodiscard]] models::UpdateEffectResult updateEffect(const models::UpdateEffectRequest& request) const {
+        return _updateEffect ? _updateEffect(request) : models::UpdateEffectResult{};
+    }
+
+    [[nodiscard]] models::DeleteEffectsResult deleteEffects(const models::DeleteEffectsRequest& request) const {
+        return _deleteEffects ? _deleteEffects(request) : models::DeleteEffectsResult{};
+    }
+
+    [[nodiscard]] models::DeleteEffectLayerResult deleteLayer(const models::DeleteEffectLayerRequest& request) const {
+        return _deleteEffectLayer ? _deleteEffectLayer(request) : models::DeleteEffectLayerResult{};
+    }
+
+    [[nodiscard]] models::ReorderEffectLayerResult reorderLayer(const models::ReorderEffectLayerRequest& request) const {
+        return _reorderEffectLayer ? _reorderEffectLayer(request) : models::ReorderEffectLayerResult{};
+    }
+
+    [[nodiscard]] models::CompactEffectLayersResult compactLayers(const models::CompactEffectLayersRequest& request) const {
+        return _compactEffectLayers ? _compactEffectLayers(request) : models::CompactEffectLayersResult{};
+    }
+
 private:
     ReadEffectWindowFn _readEffectWindow;
     AddEffectFn _addEffect;
     ClearEffectWindowFn _clearEffectWindow;
     ApplyEffectBatchFn _applyEffectBatch;
+    UpdateEffectFn _updateEffect;
+    DeleteEffectsFn _deleteEffects;
+    DeleteEffectLayerFn _deleteEffectLayer;
+    ReorderEffectLayerFn _reorderEffectLayer;
+    CompactEffectLayersFn _compactEffectLayers;
 };
 
 } // namespace xLightsDesigner::api::services

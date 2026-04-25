@@ -1,5 +1,9 @@
 #pragma once
 
+#include <nlohmann/json.hpp>
+
+#include "../../DesignerApiRuntime.h"
+#include "../parsing/ParameterReaders.h"
 #include "../services/ElementService.h"
 #include "../transport/ApiRequest.h"
 #include "../transport/ApiResponse.h"
@@ -46,6 +50,95 @@ public:
             response.data["elements"].push_back(std::move(jsonElement));
         }
         return response;
+    }
+
+    [[nodiscard]] transport::ApiResponse handleGetDisplayOrder(const transport::ApiRequest& request) const {
+        transport::ApiResponse response;
+        response.command = request.command;
+        response.requestId = request.requestId;
+
+        const auto summary = _service.getDisplayOrder();
+        if (!summary.sequenceOpen) {
+            response.statusCode = 404;
+            response.error = transport::ApiError{std::string(transport::errors::SequenceNotOpen), "No sequence open.", nlohmann::json::object()};
+            return response;
+        }
+
+        response.data["elements"] = nlohmann::json::array();
+        for (const auto& element : summary.elements) {
+            response.data["elements"].push_back({
+                {"id", element.id},
+                {"type", element.type},
+                {"orderIndex", element.orderIndex}
+            });
+        }
+        return response;
+    }
+
+    [[nodiscard]] transport::ApiResponse handleSetDisplayOrder(const transport::ApiRequest& request) const {
+        transport::ApiResponse response;
+        response.command = request.command;
+        response.requestId = request.requestId;
+
+        const auto orderedIdsText = parsing::ReadString(request.params, "orderedIds");
+        if (orderedIdsText.empty()) {
+            response.statusCode = 400;
+            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "elements.setDisplayOrder requires orderedIds JSON.", nlohmann::json::object()};
+            return response;
+        }
+
+        nlohmann::json orderedIdsJson;
+        try {
+            orderedIdsJson = nlohmann::json::parse(orderedIdsText);
+        } catch (const std::exception& ex) {
+            response.statusCode = 400;
+            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "elements.setDisplayOrder received invalid orderedIds JSON.", {{"reason", ex.what()}}};
+            return response;
+        }
+        if (!orderedIdsJson.is_array() || orderedIdsJson.empty()) {
+            response.statusCode = 400;
+            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "elements.setDisplayOrder requires orderedIds to be a non-empty JSON array.", nlohmann::json::object()};
+            return response;
+        }
+
+        models::SetDisplayElementOrderRequest orderRequest;
+        for (const auto& item : orderedIdsJson) {
+            if (item.is_string()) {
+                orderRequest.orderedIds.push_back(item.get<std::string>());
+            } else if (item.is_number_integer()) {
+                orderRequest.orderedIds.push_back(std::to_string(item.get<int>()));
+            }
+        }
+        if (orderRequest.orderedIds.empty()) {
+            response.statusCode = 400;
+            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "elements.setDisplayOrder did not receive any usable ids.", nlohmann::json::object()};
+            return response;
+        }
+
+        const auto jobId = SubmitDesignerApiJob(request.command, request.requestId, [service = _service, request, orderRequest]() {
+            transport::ApiResponse queuedResponse;
+            queuedResponse.command = request.command;
+            queuedResponse.requestId = request.requestId;
+            const auto result = service.setDisplayOrder(orderRequest);
+            if (!result.sequenceOpen) {
+                queuedResponse.statusCode = 404;
+                queuedResponse.error = transport::ApiError{std::string(transport::errors::SequenceNotOpen), "No sequence open.", nlohmann::json::object()};
+                return queuedResponse;
+            }
+            if (!result.ok) {
+                queuedResponse.statusCode = 400;
+                queuedResponse.error = transport::ApiError{
+                    result.errorCode.value_or(std::string(transport::errors::ValidationError)),
+                    result.errorMessage.value_or("elements.setDisplayOrder failed."),
+                    {{"missingIds", result.missingIds}, {"duplicateIds", result.duplicateIds}}
+                };
+                return queuedResponse;
+            }
+            queuedResponse.data["ok"] = true;
+            queuedResponse.data["orderedCount"] = result.orderedCount;
+            return queuedResponse;
+        });
+        return BuildQueuedJobAcceptedResponse(request, jobId);
     }
 
 private:

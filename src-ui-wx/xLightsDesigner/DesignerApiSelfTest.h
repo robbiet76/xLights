@@ -56,6 +56,16 @@ inline DesignerApiSelfTestResult RunDesignerApiSelfTests() {
               "EndpointRouter should map render samples endpoint.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/sequencing/apply-window-plan") == std::optional<std::string>("sequencing.applyWindowPlan"),
               "EndpointRouter should map sequencing apply-window-plan endpoint.", result);
+        Check(router.resolve("GET", "/xlightsdesigner/api/elements/display-order") == std::optional<std::string>("elements.getDisplayOrder"),
+              "EndpointRouter should map display-order read endpoint.", result);
+        Check(router.resolve("POST", "/xlightsdesigner/api/elements/display-order") == std::optional<std::string>("elements.setDisplayOrder"),
+              "EndpointRouter should map display-order mutation endpoint.", result);
+        Check(router.resolve("POST", "/xlightsdesigner/api/effects/update") == std::optional<std::string>("effects.update"),
+              "EndpointRouter should map effect update endpoint.", result);
+        Check(router.resolve("POST", "/xlightsdesigner/api/effects/delete") == std::optional<std::string>("effects.delete"),
+              "EndpointRouter should map effect delete endpoint.", result);
+        Check(router.resolve("POST", "/xlightsdesigner/api/effects/reorder-layer") == std::optional<std::string>("effects.reorderLayer"),
+              "EndpointRouter should map effect layer reorder endpoint.", result);
         Check(!router.resolve("DELETE", "/xlightsdesigner/api/sequence/open").has_value(),
               "EndpointRouter should reject unsupported method/path pairs.", result);
     }

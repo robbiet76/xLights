@@ -36,11 +36,18 @@ public:
         if (method == "GET" && path == "/xlightsdesigner/api/layout/settings") return "layout.getSettings";
         if (method == "GET" && path == "/xlightsdesigner/api/layout/group-members") return "layout.getGroupMembers";
         if (method == "GET" && path == "/xlightsdesigner/api/elements/summary") return "elements.getSummary";
+        if (method == "GET" && path == "/xlightsdesigner/api/elements/display-order") return "elements.getDisplayOrder";
+        if (method == "POST" && path == "/xlightsdesigner/api/elements/display-order") return "elements.setDisplayOrder";
 
         if (method == "GET" && path == "/xlightsdesigner/api/effects/window") return "effects.getWindow";
         if (method == "POST" && path == "/xlightsdesigner/api/effects/add-effect") return "effects.addEffect";
         if (method == "POST" && path == "/xlightsdesigner/api/effects/apply-batch") return "effects.applyBatch";
         if (method == "POST" && path == "/xlightsdesigner/api/effects/clear-window") return "effects.clearWindow";
+        if (method == "POST" && path == "/xlightsdesigner/api/effects/update") return "effects.update";
+        if (method == "POST" && path == "/xlightsdesigner/api/effects/delete") return "effects.delete";
+        if (method == "POST" && path == "/xlightsdesigner/api/effects/delete-layer") return "effects.deleteLayer";
+        if (method == "POST" && path == "/xlightsdesigner/api/effects/reorder-layer") return "effects.reorderLayer";
+        if (method == "POST" && path == "/xlightsdesigner/api/effects/compact-layers") return "effects.compactLayers";
 
         if (method == "POST" && path == "/xlightsdesigner/api/sequencing/apply-window-plan") return "sequencing.applyWindowPlan";
         if (method == "POST" && path == "/xlightsdesigner/api/sequencing/apply-batch-plan") return "sequencing.applyBatchPlan";

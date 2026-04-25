@@ -238,12 +238,19 @@ inline std::optional<api::transport::ApiResponse> HandleDesignerApiRequest(
         [host]() { return host->readLayoutSettings(); },
         [host]() { return host->readLayoutGroupMemberships(); });
     api::services::ElementService elementService(
-        [host]() { return host->readElements(); });
+        [host]() { return host->readElements(); },
+        [host]() { return host->readDisplayElementOrder(); },
+        [host](const api::models::SetDisplayElementOrderRequest& request) { return host->setDisplayElementOrder(request); });
     api::services::EffectService effectService(
         [host](const api::models::EffectWindowRequest& request) { return host->readEffectsWindow(request); },
         [host](const api::models::AddEffectRequest& request) { return host->addEffect(request); },
         [host](const api::models::ClearEffectWindowRequest& request) { return host->clearEffectsWindow(request); },
-        [host](const api::models::ApplyEffectBatchRequest& request) { return host->applyEffectBatch(request); });
+        [host](const api::models::ApplyEffectBatchRequest& request) { return host->applyEffectBatch(request); },
+        [host](const api::models::UpdateEffectRequest& request) { return host->updateEffect(request); },
+        [host](const api::models::DeleteEffectsRequest& request) { return host->deleteEffects(request); },
+        [host](const api::models::DeleteEffectLayerRequest& request) { return host->deleteEffectLayer(request); },
+        [host](const api::models::ReorderEffectLayerRequest& request) { return host->reorderEffectLayer(request); },
+        [host](const api::models::CompactEffectLayersRequest& request) { return host->compactEffectLayers(request); });
     api::services::SequencingService sequencingService(timingService, effectService);
     api::handlers::RuntimeHandler runtimeHandler;
     api::handlers::SequenceHandler sequenceHandler(std::move(sequenceService));

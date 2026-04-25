@@ -1,6 +1,8 @@
 #pragma once
 
+#include <map>
 #include <nlohmann/json.hpp>
+#include <optional>
 
 #include "../../DesignerApiRuntime.h"
 #include "../parsing/ParameterReaders.h"
@@ -21,6 +23,16 @@ inline std::string ReadOptionalJsonText(const nlohmann::json& item, const char* 
         return value.get<std::string>();
     }
     return value.dump();
+}
+
+inline std::optional<int> ReadOptionalInt(const std::map<std::string, std::string>& params, const char* key) {
+    const auto it = params.find(key);
+    if (it == params.end() || it->second.empty()) return std::nullopt;
+    try {
+        return std::stoi(it->second);
+    } catch (...) {
+        return std::nullopt;
+    }
 }
 }
 
@@ -205,9 +217,200 @@ public:
         response.data["endMs"] = summary.endMs;
         response.data["effects"] = nlohmann::json::array();
         for (const auto& effect : summary.effects) {
-            response.data["effects"].push_back({{"layerNumber", effect.layerNumber}, {"effectName", effect.effectName}, {"startMs", effect.startMs}, {"endMs", effect.endMs}});
+            response.data["effects"].push_back({{"effectId", effect.effectId}, {"layerNumber", effect.layerNumber}, {"effectName", effect.effectName}, {"startMs", effect.startMs}, {"endMs", effect.endMs}, {"settings", effect.settings}, {"palette", effect.palette}});
         }
         return response;
+    }
+
+    [[nodiscard]] transport::ApiResponse handleUpdateEffect(const transport::ApiRequest& request) const {
+        transport::ApiResponse response;
+        response.command = request.command;
+        response.requestId = request.requestId;
+        const auto elementName = parsing::ReadString(request.params, "element");
+        const auto effectName = parsing::ReadString(request.params, "effectName");
+        if (elementName.empty()) {
+            response.statusCode = 400;
+            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "effects.update requires element plus effectId or layer/startMs/endMs selector fields.", nlohmann::json::object()};
+            return response;
+        }
+        models::UpdateEffectRequest updateRequest;
+        updateRequest.selector.elementName = elementName;
+        updateRequest.selector.effectId = effect_handler_detail::ReadOptionalInt(request.params, "effectId");
+        updateRequest.selector.layerNumber = effect_handler_detail::ReadOptionalInt(request.params, "layer");
+        updateRequest.selector.startMs = effect_handler_detail::ReadOptionalInt(request.params, "startMs");
+        updateRequest.selector.endMs = effect_handler_detail::ReadOptionalInt(request.params, "endMs");
+        updateRequest.selector.effectName = effectName;
+        updateRequest.layerNumber = effect_handler_detail::ReadOptionalInt(request.params, "newLayer");
+        updateRequest.startMs = effect_handler_detail::ReadOptionalInt(request.params, "newStartMs");
+        updateRequest.endMs = effect_handler_detail::ReadOptionalInt(request.params, "newEndMs");
+        const auto newEffectName = parsing::ReadString(request.params, "newEffectName");
+        const auto settings = parsing::ReadString(request.params, "settings");
+        const auto palette = parsing::ReadString(request.params, "palette");
+        if (!newEffectName.empty()) updateRequest.effectName = newEffectName;
+        if (!settings.empty()) updateRequest.settings = settings;
+        if (!palette.empty()) updateRequest.palette = palette;
+        if (!updateRequest.selector.effectId.has_value() && (!updateRequest.selector.layerNumber.has_value() || !updateRequest.selector.startMs.has_value() || !updateRequest.selector.endMs.has_value())) {
+            response.statusCode = 400;
+            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "effects.update requires effectId or layer/startMs/endMs selector fields.", nlohmann::json::object()};
+            return response;
+        }
+        if (!updateRequest.layerNumber.has_value() && !updateRequest.startMs.has_value() && !updateRequest.endMs.has_value() && !updateRequest.effectName.has_value() && !updateRequest.settings.has_value() && !updateRequest.palette.has_value()) {
+            response.statusCode = 400;
+            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "effects.update requires at least one new value.", nlohmann::json::object()};
+            return response;
+        }
+        const auto jobId = SubmitDesignerApiJob(request.command, request.requestId, [service = _service, request, updateRequest]() {
+            transport::ApiResponse queuedResponse;
+            queuedResponse.command = request.command;
+            queuedResponse.requestId = request.requestId;
+            const auto result = service.updateEffect(updateRequest);
+            if (!result.sequenceOpen) {
+                queuedResponse.statusCode = 404; queuedResponse.error = transport::ApiError{std::string(transport::errors::SequenceNotOpen), "No sequence open.", nlohmann::json::object()}; return queuedResponse;
+            }
+            if (!result.elementFound) {
+                queuedResponse.statusCode = 404; queuedResponse.error = transport::ApiError{std::string(transport::errors::ValidationError), "Requested element was not found in the current sequence.", {{"element", updateRequest.selector.elementName}}}; return queuedResponse;
+            }
+            if (!result.ok) {
+                queuedResponse.statusCode = 400; queuedResponse.error = transport::ApiError{result.errorCode.value_or(std::string(transport::errors::ValidationError)), result.errorMessage.value_or("effects.update failed."), {{"matchedCount", result.matchedCount}, {"updatedCount", result.updatedCount}}}; return queuedResponse;
+            }
+            queuedResponse.data["ok"] = true;
+            queuedResponse.data["matchedCount"] = result.matchedCount;
+            queuedResponse.data["updatedCount"] = result.updatedCount;
+            return queuedResponse;
+        });
+        return BuildQueuedJobAcceptedResponse(request, jobId);
+    }
+
+    [[nodiscard]] transport::ApiResponse handleDeleteEffects(const transport::ApiRequest& request) const {
+        transport::ApiResponse response;
+        response.command = request.command;
+        response.requestId = request.requestId;
+        const auto elementName = parsing::ReadString(request.params, "element");
+        if (elementName.empty()) {
+            response.statusCode = 400;
+            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "effects.delete requires element plus effectId or layer/startMs/endMs selector fields.", nlohmann::json::object()};
+            return response;
+        }
+        models::DeleteEffectsRequest deleteRequest;
+        deleteRequest.selector.elementName = elementName;
+        deleteRequest.selector.effectId = effect_handler_detail::ReadOptionalInt(request.params, "effectId");
+        deleteRequest.selector.layerNumber = effect_handler_detail::ReadOptionalInt(request.params, "layer");
+        deleteRequest.selector.startMs = effect_handler_detail::ReadOptionalInt(request.params, "startMs");
+        deleteRequest.selector.endMs = effect_handler_detail::ReadOptionalInt(request.params, "endMs");
+        deleteRequest.selector.effectName = parsing::ReadString(request.params, "effectName");
+        if (!deleteRequest.selector.effectId.has_value() && (!deleteRequest.selector.layerNumber.has_value() || !deleteRequest.selector.startMs.has_value() || !deleteRequest.selector.endMs.has_value())) {
+            response.statusCode = 400;
+            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "effects.delete requires effectId or layer/startMs/endMs selector fields.", nlohmann::json::object()};
+            return response;
+        }
+        const auto jobId = SubmitDesignerApiJob(request.command, request.requestId, [service = _service, request, deleteRequest]() {
+            transport::ApiResponse queuedResponse;
+            queuedResponse.command = request.command;
+            queuedResponse.requestId = request.requestId;
+            const auto result = service.deleteEffects(deleteRequest);
+            if (!result.sequenceOpen) {
+                queuedResponse.statusCode = 404; queuedResponse.error = transport::ApiError{std::string(transport::errors::SequenceNotOpen), "No sequence open.", nlohmann::json::object()}; return queuedResponse;
+            }
+            if (!result.elementFound) {
+                queuedResponse.statusCode = 404; queuedResponse.error = transport::ApiError{std::string(transport::errors::ValidationError), "Requested element was not found in the current sequence.", {{"element", deleteRequest.selector.elementName}}}; return queuedResponse;
+            }
+            if (!result.ok) {
+                queuedResponse.statusCode = 400; queuedResponse.error = transport::ApiError{result.errorCode.value_or(std::string(transport::errors::ValidationError)), result.errorMessage.value_or("effects.delete failed."), {{"deletedCount", result.deletedCount}}}; return queuedResponse;
+            }
+            queuedResponse.data["ok"] = true;
+            queuedResponse.data["deletedCount"] = result.deletedCount;
+            return queuedResponse;
+        });
+        return BuildQueuedJobAcceptedResponse(request, jobId);
+    }
+
+    [[nodiscard]] transport::ApiResponse handleDeleteLayer(const transport::ApiRequest& request) const {
+        const auto elementName = parsing::ReadString(request.params, "element");
+        const int layerNumber = parsing::ReadInt(request.params, "layer", -1);
+        const bool force = parsing::ReadBool(request.params, "force", false);
+        if (elementName.empty() || layerNumber < 0) {
+            transport::ApiResponse response; response.command = request.command; response.requestId = request.requestId; response.statusCode = 400;
+            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "effects.deleteLayer requires element and layer.", {{"element", elementName}, {"layer", layerNumber}}};
+            return response;
+        }
+        const auto deleteRequest = models::DeleteEffectLayerRequest{elementName, layerNumber, force};
+        const auto jobId = SubmitDesignerApiJob(request.command, request.requestId, [service = _service, request, deleteRequest]() {
+            transport::ApiResponse response; response.command = request.command; response.requestId = request.requestId;
+            const auto result = service.deleteLayer(deleteRequest);
+            if (!result.sequenceOpen) {
+                response.statusCode = 404; response.error = transport::ApiError{std::string(transport::errors::SequenceNotOpen), "No sequence open.", nlohmann::json::object()}; return response;
+            }
+            if (!result.elementFound) {
+                response.statusCode = 404; response.error = transport::ApiError{std::string(transport::errors::ValidationError), "Requested element was not found in the current sequence.", {{"element", deleteRequest.elementName}}}; return response;
+            }
+            if (!result.layerFound || !result.ok) {
+                response.statusCode = 400; response.error = transport::ApiError{result.errorCode.value_or(std::string(transport::errors::ValidationError)), result.errorMessage.value_or("effects.deleteLayer failed."), {{"layer", result.layerNumber}, {"layerCount", result.layerCount}, {"effectCount", result.effectCount}}}; return response;
+            }
+            response.data["ok"] = true;
+            response.data["layer"] = result.layerNumber;
+            response.data["layerCount"] = result.layerCount;
+            return response;
+        });
+        return BuildQueuedJobAcceptedResponse(request, jobId);
+    }
+
+    [[nodiscard]] transport::ApiResponse handleReorderLayer(const transport::ApiRequest& request) const {
+        const auto elementName = parsing::ReadString(request.params, "element");
+        const int fromLayer = parsing::ReadInt(request.params, "fromLayer", -1);
+        const int toLayer = parsing::ReadInt(request.params, "toLayer", -1);
+        if (elementName.empty() || fromLayer < 0 || toLayer < 0) {
+            transport::ApiResponse response; response.command = request.command; response.requestId = request.requestId; response.statusCode = 400;
+            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "effects.reorderLayer requires element, fromLayer, and toLayer.", {{"element", elementName}, {"fromLayer", fromLayer}, {"toLayer", toLayer}}};
+            return response;
+        }
+        const auto reorderRequest = models::ReorderEffectLayerRequest{elementName, fromLayer, toLayer};
+        const auto jobId = SubmitDesignerApiJob(request.command, request.requestId, [service = _service, request, reorderRequest]() {
+            transport::ApiResponse response; response.command = request.command; response.requestId = request.requestId;
+            const auto result = service.reorderLayer(reorderRequest);
+            if (!result.sequenceOpen) {
+                response.statusCode = 404; response.error = transport::ApiError{std::string(transport::errors::SequenceNotOpen), "No sequence open.", nlohmann::json::object()}; return response;
+            }
+            if (!result.elementFound) {
+                response.statusCode = 404; response.error = transport::ApiError{std::string(transport::errors::ValidationError), "Requested element was not found in the current sequence.", {{"element", reorderRequest.elementName}}}; return response;
+            }
+            if (!result.ok) {
+                response.statusCode = 400; response.error = transport::ApiError{result.errorCode.value_or(std::string(transport::errors::ValidationError)), result.errorMessage.value_or("effects.reorderLayer failed."), {{"fromLayer", result.fromLayer}, {"toLayer", result.toLayer}, {"layerCount", result.layerCount}}}; return response;
+            }
+            response.data["ok"] = true;
+            response.data["fromLayer"] = result.fromLayer;
+            response.data["toLayer"] = result.toLayer;
+            response.data["layerCount"] = result.layerCount;
+            return response;
+        });
+        return BuildQueuedJobAcceptedResponse(request, jobId);
+    }
+
+    [[nodiscard]] transport::ApiResponse handleCompactLayers(const transport::ApiRequest& request) const {
+        const auto elementName = parsing::ReadString(request.params, "element");
+        if (elementName.empty()) {
+            transport::ApiResponse response; response.command = request.command; response.requestId = request.requestId; response.statusCode = 400;
+            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "effects.compactLayers requires element.", nlohmann::json::object()};
+            return response;
+        }
+        const auto compactRequest = models::CompactEffectLayersRequest{elementName};
+        const auto jobId = SubmitDesignerApiJob(request.command, request.requestId, [service = _service, request, compactRequest]() {
+            transport::ApiResponse response; response.command = request.command; response.requestId = request.requestId;
+            const auto result = service.compactLayers(compactRequest);
+            if (!result.sequenceOpen) {
+                response.statusCode = 404; response.error = transport::ApiError{std::string(transport::errors::SequenceNotOpen), "No sequence open.", nlohmann::json::object()}; return response;
+            }
+            if (!result.elementFound) {
+                response.statusCode = 404; response.error = transport::ApiError{std::string(transport::errors::ValidationError), "Requested element was not found in the current sequence.", {{"element", compactRequest.elementName}}}; return response;
+            }
+            if (!result.ok) {
+                response.statusCode = 400; response.error = transport::ApiError{result.errorCode.value_or(std::string(transport::errors::ValidationError)), result.errorMessage.value_or("effects.compactLayers failed."), {{"layerCount", result.layerCount}}}; return response;
+            }
+            response.data["ok"] = true;
+            response.data["layerCount"] = result.layerCount;
+            response.data["removedLayerNumbers"] = result.removedLayerNumbers;
+            return response;
+        });
+        return BuildQueuedJobAcceptedResponse(request, jobId);
     }
 
 private:
