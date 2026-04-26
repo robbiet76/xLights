@@ -523,7 +523,9 @@ public:
 
             const std::string mediaFile = request.mediaFile == "null" ? std::string() : request.mediaFile;
             const std::string view = request.view == "null" ? std::string() : request.view;
+            const auto guard = detail::EnterOwnedSequenceOpenState(_frame, request.file, true);
             _frame->NewSequence(mediaFile, static_cast<uint32_t>(request.durationMs > 0 ? request.durationMs : 0), static_cast<uint32_t>(request.frameMs > 0 ? request.frameMs : 25), view);
+            detail::ExitOwnedSequenceOpenState(_frame, guard);
             _frame->EnableSequenceControls(true);
             if (_frame->CurrentSeqXmlFile == nullptr) {
                 result.errorCode = "CREATE_FAILED";
