@@ -178,6 +178,8 @@ Select by `effectId`, or by `element` + `layer` + `startMs` + `endMs` with optio
 
 Use `targetModels` with an array of element names for multi-target clones. Set `mode` to `move` to delete the matched source effects after clone creation succeeds.
 
+The clone route allocates missing destination layers before creation. It also preflights the full destination set before mutating the sequence; if any requested target layer/time window overlaps existing effects, the job fails with `TARGET_WINDOW_OCCUPIED` and returns conflict details. Callers should choose an open layer or explicitly delete/update existing effects before retrying.
+
 ## Layer Stack Edits
 
 `POST /xlightsdesigner/api/effects/reorder-layer`

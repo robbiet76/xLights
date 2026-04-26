@@ -191,6 +191,8 @@ The following routes are job-backed and return `202 Accepted` with a `jobId`:
 
 `timing.ensureTrack` is still a narrow single-purpose mutation route and remains directly exposed as part of the owned surface.
 
+`effects.clone` preserves existing sequence content by default. Missing target layers are allocated automatically, but occupied target layer/time windows are rejected atomically with `TARGET_WINDOW_OCCUPIED` before any clone effects are created.
+
 ## High-Level Sequencing Contracts
 
 ### `sequencing.applyWindowPlan`

@@ -276,7 +276,10 @@ public:
             }
             if (!result.ok) {
                 queuedResponse.statusCode = 400;
-                nlohmann::json details = {{"matchedCount", result.matchedCount}, {"createdCount", result.createdCount}, {"deletedSourceCount", result.deletedSourceCount}, {"missingTargetElements", result.missingTargetElements}};
+                nlohmann::json details = {{"matchedCount", result.matchedCount}, {"createdCount", result.createdCount}, {"deletedSourceCount", result.deletedSourceCount}, {"missingTargetElements", result.missingTargetElements}, {"conflictCount", result.conflictCount}, {"conflicts", nlohmann::json::array()}};
+                for (const auto& conflict : result.conflicts) {
+                    details["conflicts"].push_back({{"targetElement", conflict.targetElementName}, {"targetLayer", conflict.targetLayerNumber}, {"targetStartMs", conflict.targetStartMs}, {"targetEndMs", conflict.targetEndMs}, {"existingEffectName", conflict.existingEffectName}, {"existingStartMs", conflict.existingStartMs}, {"existingEndMs", conflict.existingEndMs}});
+                }
                 queuedResponse.error = transport::ApiError{result.errorCode.value_or(std::string(transport::errors::ValidationError)), result.errorMessage.value_or("effects.clone failed."), details};
                 return queuedResponse;
             }
@@ -285,6 +288,7 @@ public:
             queuedResponse.data["matchedCount"] = result.matchedCount;
             queuedResponse.data["createdCount"] = result.createdCount;
             queuedResponse.data["deletedSourceCount"] = result.deletedSourceCount;
+            queuedResponse.data["conflictCount"] = result.conflictCount;
             queuedResponse.data["targetCount"] = result.targetCount;
             queuedResponse.data["effects"] = nlohmann::json::array();
             for (const auto& item : result.items) {

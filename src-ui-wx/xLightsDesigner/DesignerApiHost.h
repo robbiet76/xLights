@@ -1283,13 +1283,60 @@ public:
 
             const int targetStartMs = request.targetStartMs >= 0 ? request.targetStartMs : request.sourceStartMs;
             const int deltaMs = targetStartMs - request.sourceStartMs;
+
+            auto targetLayerForSource = [&request](const SourceEffectSnapshot& source) {
+                return request.targetLayerNumber >= 0
+                    ? request.targetLayerNumber + (request.sourceLayerNumber >= 0 ? source.layerNumber - request.sourceLayerNumber : 0)
+                    : source.layerNumber;
+            };
+
+            auto windowOverlaps = [](int aStartMs, int aEndMs, int bStartMs, int bEndMs) {
+                return aStartMs < bEndMs && aEndMs > bStartMs;
+            };
+
             for (std::size_t targetIndex = 0; targetIndex < targetElements.size(); ++targetIndex) {
                 Element* targetElement = targetElements[targetIndex];
                 const std::string& targetName = request.targetElementNames[targetIndex];
                 for (const auto& source : sourceEffects) {
-                    const int targetLayerNumber = request.targetLayerNumber >= 0
-                        ? request.targetLayerNumber + (request.sourceLayerNumber >= 0 ? source.layerNumber - request.sourceLayerNumber : 0)
-                        : source.layerNumber;
+                    const int targetLayerNumber = targetLayerForSource(source);
+                    const int nextStartMs = source.startMs + deltaMs;
+                    const int nextEndMs = source.endMs + deltaMs;
+                    if (targetLayerNumber < 0 || nextStartMs < 0 || nextEndMs < nextStartMs) {
+                        result.errorCode = std::string("VALIDATION_ERROR");
+                        result.errorMessage = std::string("Clone target layer and timing values must be valid.");
+                        return result;
+                    }
+                    if (static_cast<int>(targetElement->GetEffectLayerCount()) <= targetLayerNumber) continue;
+
+                    EffectLayer* targetLayer = targetElement->GetEffectLayer(targetLayerNumber);
+                    if (targetLayer == nullptr) continue;
+                    for (auto* existing : targetLayer->GetAllEffectsByTime(nextStartMs, nextEndMs)) {
+                        if (existing == nullptr) continue;
+                        if (!windowOverlaps(nextStartMs, nextEndMs, existing->GetStartTimeMS(), existing->GetEndTimeMS())) continue;
+                        result.conflicts.push_back({
+                            targetName,
+                            targetLayerNumber,
+                            nextStartMs,
+                            nextEndMs,
+                            existing->GetEffectName(),
+                            existing->GetStartTimeMS(),
+                            existing->GetEndTimeMS()
+                        });
+                    }
+                }
+            }
+            result.conflictCount = static_cast<int>(result.conflicts.size());
+            if (result.conflictCount > 0) {
+                result.errorCode = std::string("TARGET_WINDOW_OCCUPIED");
+                result.errorMessage = std::string("Clone target layer/time window overlaps existing effects. Choose an open layer or delete/update the existing effects explicitly.");
+                return result;
+            }
+
+            for (std::size_t targetIndex = 0; targetIndex < targetElements.size(); ++targetIndex) {
+                Element* targetElement = targetElements[targetIndex];
+                const std::string& targetName = request.targetElementNames[targetIndex];
+                for (const auto& source : sourceEffects) {
+                    const int targetLayerNumber = targetLayerForSource(source);
                     const int nextStartMs = source.startMs + deltaMs;
                     const int nextEndMs = source.endMs + deltaMs;
                     if (targetLayerNumber < 0 || nextStartMs < 0 || nextEndMs < nextStartMs) {

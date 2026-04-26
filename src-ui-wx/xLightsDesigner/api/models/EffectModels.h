@@ -133,6 +133,16 @@ struct CloneEffectsItemResult {
     bool created = false;
 };
 
+struct CloneEffectsConflictResult {
+    std::string targetElementName;
+    int targetLayerNumber = 0;
+    int targetStartMs = 0;
+    int targetEndMs = 0;
+    std::string existingEffectName;
+    int existingStartMs = 0;
+    int existingEndMs = 0;
+};
+
 struct CloneEffectsResult {
     bool sequenceOpen = false;
     bool sourceElementFound = false;
@@ -140,12 +150,14 @@ struct CloneEffectsResult {
     int matchedCount = 0;
     int createdCount = 0;
     int deletedSourceCount = 0;
+    int conflictCount = 0;
     int targetCount = 0;
     bool dryRun = false;
     std::vector<std::string> missingTargetElements;
     std::optional<std::string> errorCode;
     std::optional<std::string> errorMessage;
     std::vector<CloneEffectsItemResult> items;
+    std::vector<CloneEffectsConflictResult> conflicts;
 };
 
 struct EffectSelectorRequest {
