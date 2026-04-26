@@ -1,11 +1,11 @@
 # xLightsDesigner API Current State
 
 Status date:
-- 2026-03-16
+- 2026-04-26
 
 Repository:
-- `/Users/robterry/xLights-api-cleanup`
-- branch: `api-cleanup`
+- `/Users/robterry/xLights-2026.06`
+- branch: `xld-2026.06-migration`
 
 Reference points:
 - baseline fork commit: `9bcfba7f44462ed8038dd3532e8739c8a19c4f7d`
@@ -24,8 +24,9 @@ What exists now:
 - sequence lifecycle APIs for open, create, and save
 - mutation APIs for timing and effects
 - higher-level sequencing APIs for composed apply operations
-- atomic sequence save protection in core xLights
-- autosave prompt suppression in owned-enabled mode so startup is automatable
+- owned API modal/window state reporting through `/health`
+- launch-time prompt suppression for known owned-enabled startup paths
+- rgbeffects and effect-preset autosave prompt policy in owned-enabled mode
 
 What does not exist yet:
 - full app migration to the owned API for every xLights operation
@@ -46,9 +47,7 @@ Primary integration entrypoint:
 Minimal host hooks outside the owned directory:
 - `xLights/xLightsApp.cpp`
 - `xLights/xLightsApp.h`
-- `xLights/SeqFileUtilities.cpp`
 - `xLights/TabSequence.cpp`
-- `xLights/xLightsXmlFile.cpp`
 
 ## Runtime Model
 
@@ -253,8 +252,8 @@ Measured open timings from live validation on `Validation-Clean-Phase1.xsq`:
   - creating a second sequence successfully without a blocking save dialog
 
 ### Sequence save
-- save corruption issue was fixed by changing xLights core save behavior to atomic temp-write plus replace
-- this addressed the previously observed zero-byte `.xsq` corruption path
+- owned `sequence.save` uses native `SequenceFile::Save(...)` after validating that the current sequence path is writable through the current show folder or an explicitly trusted root
+- the current owned route intentionally does not create an extra xLightsDesigner temporary save file outside native xLights save behavior
 
 ### Timing routes
 Validated:
@@ -306,41 +305,14 @@ Current responsibilities added:
 Purpose of change:
 - add `OnExit()` override required for clean integration shutdown
 
-### `xLights/SeqFileUtilities.cpp`
-Purpose of change:
-- suppress sequence autosave modal in owned-enabled mode
-- support open-sequence stability diagnostics
-
-Current responsibilities added:
-- include `xLightsDesigner/DesignerIntegration.h`
-- when integration is enabled, auto-decline the autosave recovery path instead of showing a blocking modal
-- age the `.xbkp` timestamp to avoid immediate re-prompt
-- add open-sequence trace output used during sequence-open stability work
-- add temporary frame freeze and phase timing logs during `OpenSequence(...)`
-
-Note:
-- the trace instrumentation is diagnostic and should be considered temporary until open-sequence hardening is fully settled
-
 ### `xLights/TabSequence.cpp`
 Purpose of change:
-- suppress rgbeffects autosave modal in owned-enabled mode
+- apply owned-enabled policy to rgbeffects and effect-preset autosave recovery prompts
 
 Current responsibilities added:
-- include `xLightsDesigner/DesignerIntegration.h`
-- when integration is enabled, auto-decline the rgbeffects autosave recovery prompt instead of blocking startup with a modal dialog
-
-### `xLights/xLightsXmlFile.cpp`
-Purpose of change:
-- make sequence saves atomic
-
-Current responsibilities added:
-- save to `target + ".saving"`
-- flush and close the temp file
-- rename temp file over the target only after success
-- remove temp file on failure
-
-This is an xLights core safety fix, not just an owned API feature.
-It protects native save paths, autosave paths, and owned save routes from zero-byte truncation on write failure.
+- include `xLightsDesigner/DesignerLaunchPolicy.h`
+- when integration is enabled, avoid showing rgbeffects/effect-preset recovery prompts during automated startup
+- use `XLIGHTS_DESIGNER_MODAL_POLICY=save` only when explicitly opting into autosave recovery
 
 ## Owned xLightsDesigner Files Added
 
@@ -408,11 +380,11 @@ It protects native save paths, autosave paths, and owned save routes from zero-b
 
 Current limitations:
 - the owned API surface is working, but not all app-side xLights operations have been migrated to it yet
-- some open-sequence tracing in `SeqFileUtilities.cpp` is diagnostic scaffolding and should be cleaned up later
+- `/health` now reports modal/window state, but root-cause fixes are still required for any unexpected modal surfaced by validation
 - the owned API contract exists, but the final production schema for all plan shapes is not yet frozen
 
 Recommended next cleanup work inside xLights:
-- remove temporary open-sequence diagnostics once no longer needed
+- root-cause and prevent any unexpected modal surfaced by owned API validation
 - document a stable production request schema for batch sequencing
 - continue migrating app-side xLights operations to the owned queued routes only where the owned path is already proven stable
 
@@ -423,5 +395,4 @@ It has a live owned listener, a queued runtime, a non-trivial read surface, bulk
 
 The xLights fork impact is still contained:
 - the owned product surface lives under `xLights/xLightsDesigner/`
-- only five xLights-owned files differ from baseline
-- those five changes are either lifecycle hooks, modal suppression for automation safety, or atomic save protection
+- non-owned source changes are limited to explicit lifecycle hooks and narrowly scoped startup prompt policy

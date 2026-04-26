@@ -9,14 +9,16 @@ Goal:
 Current allowed non-baseline files outside `xLights/xLightsDesigner/`:
 - `xLights/xLightsApp.cpp`
 - `xLights/xLightsApp.h`
-- `xLights/SeqFileUtilities.cpp`
 - `xLights/TabSequence.cpp`
-- `xLights/xLightsXmlFile.cpp`
 
 Reason:
 - `xLightsApp.*` provides the minimal startup and shutdown lifecycle hooks used to register the xLightsDesigner integration module
-- `SeqFileUtilities.cpp` and `TabSequence.cpp` suppress autosave recovery prompts in owned-enabled mode so listener startup is not blocked by modal dialogs
-- `xLightsXmlFile.cpp` implements atomic sequence save behavior so write failures do not corrupt `.xsq` files
+- `TabSequence.cpp` applies owned-enabled policy to rgbeffects and effect-preset autosave recovery prompts so known startup recovery prompts do not block automated listener startup
+
+Modal boundary:
+- normal owned API automation should prevent modals by using deterministic route preconditions
+- unexpected xLights modals should be reported as blocking diagnostics rather than silently dismissed
+- macOS Accessibility-based dismissal is a launch-time fallback before the owned API is available, not the core modal strategy
 
 Baseline-preserved surfaces:
 - `xLights/automation/...` remains xLights-owned and baseline

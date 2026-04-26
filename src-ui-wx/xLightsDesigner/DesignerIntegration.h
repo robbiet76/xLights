@@ -253,7 +253,7 @@ inline std::optional<api::transport::ApiResponse> HandleDesignerApiRequest(
         [host](const api::models::ReorderEffectLayerRequest& request) { return host->reorderEffectLayer(request); },
         [host](const api::models::CompactEffectLayersRequest& request) { return host->compactEffectLayers(request); });
     api::services::SequencingService sequencingService(timingService, effectService);
-    api::handlers::RuntimeHandler runtimeHandler;
+    api::handlers::RuntimeHandler runtimeHandler([host]() { return host->readModalState(); });
     api::handlers::SequenceHandler sequenceHandler(std::move(sequenceService));
     api::handlers::TimingHandler timingHandler(std::move(timingService));
     api::handlers::MediaHandler mediaHandler(std::move(mediaService));

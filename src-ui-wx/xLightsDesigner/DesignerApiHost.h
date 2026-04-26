@@ -6,6 +6,9 @@
 #include <fstream>
 #include <wx/filename.h>
 #include <wx/base64.h>
+#include <wx/button.h>
+#include <wx/dialog.h>
+#include <wx/toplevel.h>
 #include <memory>
 #include <cmath>
 #include <algorithm>
@@ -156,6 +159,68 @@ inline bool IsOwnedTrustedRootPath(const std::string& path) {
         }
     }
     return false;
+}
+
+inline void CollectDesignerWindowButtonLabels(wxWindow* window, nlohmann::json& labels) {
+    if (window == nullptr) {
+        return;
+    }
+    if (auto* button = wxDynamicCast(window, wxButton)) {
+        const auto label = button->GetLabelText().ToStdString();
+        if (!label.empty()) {
+            labels.push_back(label);
+        }
+    }
+    for (wxWindowList::compatibility_iterator child = window->GetChildren().GetFirst(); child; child = child->GetNext()) {
+        CollectDesignerWindowButtonLabels(child->GetData(), labels);
+    }
+}
+
+inline nlohmann::json BuildDesignerModalStateJson(xLightsFrame* frame) {
+    nlohmann::json windows = nlohmann::json::array();
+    std::size_t modalCount = 0;
+    std::size_t shownDialogCount = 0;
+
+    for (wxWindowList::compatibility_iterator node = wxTopLevelWindows.GetFirst(); node; node = node->GetNext()) {
+        wxWindow* window = node->GetData();
+        if (window == nullptr || !window->IsShown()) {
+            continue;
+        }
+
+        auto* topLevel = wxDynamicCast(window, wxTopLevelWindow);
+        auto* dialog = wxDynamicCast(window, wxDialog);
+        const bool isDialog = dialog != nullptr;
+        const bool isModal = dialog != nullptr && dialog->IsModal();
+        if (!isDialog) {
+            continue;
+        }
+
+        if (isDialog) {
+            shownDialogCount++;
+        }
+        if (isModal) {
+            modalCount++;
+        }
+
+        nlohmann::json buttons = nlohmann::json::array();
+        CollectDesignerWindowButtonLabels(window, buttons);
+        const wxClassInfo* classInfo = window->GetClassInfo();
+        windows.push_back(nlohmann::json{
+            {"title", topLevel != nullptr ? topLevel->GetTitle().ToStdString() : std::string()},
+            {"className", classInfo != nullptr ? wxString(classInfo->GetClassName()).ToStdString() : std::string()},
+            {"isDialog", isDialog},
+            {"isModal", isModal},
+            {"buttons", buttons}
+        });
+    }
+
+    return nlohmann::json{
+        {"observed", true},
+        {"blocked", modalCount > 0},
+        {"modalCount", modalCount},
+        {"shownDialogCount", shownDialogCount},
+        {"windows", windows}
+    };
 }
 
 inline bool HasOwnedTrustedRootAccess(const std::string& path, bool enforceWritable) {
@@ -419,6 +484,41 @@ public:
         return settings;
     }
 
+    [[nodiscard]] nlohmann::json readModalState() const {
+        if (_frame == nullptr) {
+            return nlohmann::json{
+                {"observed", false},
+                {"blocked", false},
+                {"modalCount", 0},
+                {"shownDialogCount", 0},
+                {"windows", nlohmann::json::array()},
+                {"error", "xLights frame is unavailable."}
+            };
+        }
+        if (wxIsMainThread()) {
+            return detail::BuildDesignerModalStateJson(_frame);
+        }
+
+        auto promise = std::make_shared<std::promise<nlohmann::json>>();
+        auto future = promise->get_future();
+        xLightsFrame* frame = _frame;
+        frame->CallAfter([promise, frame]() mutable {
+            promise->set_value(detail::BuildDesignerModalStateJson(frame));
+        });
+        if (future.wait_for(std::chrono::milliseconds(1500)) != std::future_status::ready) {
+            return nlohmann::json{
+                {"observed", false},
+                {"blocked", false},
+                {"uiThreadResponsive", false},
+                {"modalCount", 0},
+                {"shownDialogCount", 0},
+                {"windows", nlohmann::json::array()},
+                {"error", "Timed out waiting for the xLights UI thread to report modal state."}
+            };
+        }
+        return future.get();
+    }
+
 
     [[nodiscard]] api::models::SequenceOpenResult openSequence(const api::models::SequenceOpenRequest& request) const {
         api::models::SequenceOpenResult result;
@@ -660,57 +760,20 @@ public:
             std::unique_lock<std::mutex> lock(_frame->saveLock);
             const auto ext = detail::ToLowerCopy(_frame->CurrentSeqXmlFile->GetExt());
             if (ext == "xml") {
+                wxRemoveFile(_frame->CurrentSeqXmlFile->GetFullPath());
                 _frame->CurrentSeqXmlFile->SetExt("xsq");
             } else if (ext == "xbkp") {
                 _frame->CurrentSeqXmlFile->SetExt("xsq");
             }
-
-            const std::string targetPath = _frame->CurrentSeqXmlFile->GetFullPath();
-            if (targetPath.empty()) {
-                result.errorCode = "SEQUENCE_SAVE_UNAVAILABLE";
-                result.errorMessage = "The current sequence has no target path after extension normalization.";
-                return false;
-            }
-
-            wxFileName targetFile(targetPath);
-            wxFileName tempFile(targetFile);
-            tempFile.SetFullName(targetFile.GetFullName() + ".xldtmp");
-            const std::string tempPath = tempFile.GetFullPath().ToStdString();
-            if (tempPath.empty() || tempPath == targetPath) {
-                result.errorCode = "SEQUENCE_SAVE_UNAVAILABLE";
-                result.errorMessage = "Unable to build a temporary save path for the current sequence.";
-                return false;
-            }
-
-            if (wxFileExists(tempFile.GetFullPath())) {
-                wxRemoveFile(tempFile.GetFullPath());
-            }
-
-            _frame->CurrentSeqXmlFile->SetFullPath(tempPath);
             const bool ok = _frame->CurrentSeqXmlFile->Save(_frame->GetSequenceElements());
-            _frame->CurrentSeqXmlFile->SetFullPath(targetPath);
             if (!ok) {
                 result.errorCode = "SEQUENCE_SAVE_FAILED";
-                result.errorMessage = "Unable to write the temporary sequence save file.";
-                if (wxFileExists(tempFile.GetFullPath())) {
-                    wxRemoveFile(tempFile.GetFullPath());
-                }
+                result.errorMessage = "Unable to save the current sequence file.";
                 return false;
             }
 
-            if (!wxRenameFile(tempFile.GetFullPath(), targetFile.GetFullPath(), true)) {
-                result.errorCode = "SEQUENCE_SAVE_FAILED";
-                result.errorMessage = "Unable to replace the current sequence file with the temporary save file.";
-                if (wxFileExists(tempFile.GetFullPath())) {
-                    wxRemoveFile(tempFile.GetFullPath());
-                }
-                return false;
-            }
-
-            if (ok) {
-                _frame->mSavedChangeCount = _frame->GetSequenceElements().GetChangeCount();
-                _frame->mLastAutosaveCount = _frame->mSavedChangeCount;
-            }
+            _frame->mSavedChangeCount = _frame->GetSequenceElements().GetChangeCount();
+            _frame->mLastAutosaveCount = _frame->mSavedChangeCount;
             return true;
         };
 

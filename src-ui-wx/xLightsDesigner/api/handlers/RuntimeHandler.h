@@ -1,5 +1,8 @@
 #pragma once
 
+#include <functional>
+#include <utility>
+
 #include "../../DesignerApiRuntime.h"
 #include "../parsing/ParameterReaders.h"
 #include "../services/EffectMetadataStatus.h"
@@ -10,6 +13,11 @@ namespace xLightsDesigner::api::handlers {
 
 class RuntimeHandler {
 public:
+    RuntimeHandler() = default;
+
+    explicit RuntimeHandler(std::function<nlohmann::json()> modalStateProvider)
+        : _modalStateProvider(std::move(modalStateProvider)) {}
+
     [[nodiscard]] transport::ApiResponse handleHealth(const transport::ApiRequest& request) const {
         transport::ApiResponse response;
         response.command = request.command;
@@ -38,6 +46,9 @@ public:
         response.data["initializedAt"] = health.initializedAt;
         response.data["appReadyAt"] = health.appReadyAt;
         response.data["startupState"] = health.startupState;
+        if (_modalStateProvider) {
+            response.data["modalState"] = _modalStateProvider();
+        }
         response.data["state"] = !health.listenerReachable ? "degraded" : (health.busy ? "busy" : health.startupState);
         return response;
     }
@@ -76,6 +87,9 @@ public:
         response.data["files"] = status.files;
         return response;
     }
+
+private:
+    std::function<nlohmann::json()> _modalStateProvider;
 };
 
 } // namespace xLightsDesigner::api::handlers
