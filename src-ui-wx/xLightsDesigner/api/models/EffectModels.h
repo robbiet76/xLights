@@ -108,6 +108,46 @@ struct ApplyEffectBatchResult {
     std::vector<EffectBatchItemResult> items;
 };
 
+struct CloneEffectsRequest {
+    std::string sourceElementName;
+    int sourceLayerNumber = -1;
+    int sourceStartMs = 0;
+    int sourceEndMs = 0;
+    std::vector<std::string> targetElementNames;
+    int targetLayerNumber = -1;
+    int targetStartMs = -1;
+    std::string mode = "copy";
+    bool dryRun = false;
+};
+
+struct CloneEffectsItemResult {
+    std::string sourceElementName;
+    int sourceLayerNumber = 0;
+    int sourceStartMs = 0;
+    int sourceEndMs = 0;
+    std::string targetElementName;
+    int targetLayerNumber = 0;
+    int targetStartMs = 0;
+    int targetEndMs = 0;
+    std::string effectName;
+    bool created = false;
+};
+
+struct CloneEffectsResult {
+    bool sequenceOpen = false;
+    bool sourceElementFound = false;
+    bool ok = false;
+    int matchedCount = 0;
+    int createdCount = 0;
+    int deletedSourceCount = 0;
+    int targetCount = 0;
+    bool dryRun = false;
+    std::vector<std::string> missingTargetElements;
+    std::optional<std::string> errorCode;
+    std::optional<std::string> errorMessage;
+    std::vector<CloneEffectsItemResult> items;
+};
+
 struct EffectSelectorRequest {
     std::string elementName;
     std::optional<int> effectId;

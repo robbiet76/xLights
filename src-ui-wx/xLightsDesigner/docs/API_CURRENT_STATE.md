@@ -179,6 +179,7 @@ The following routes are job-backed and return `202 Accepted` with a `jobId`:
 - `effects.addEffect`
 - `effects.clearWindow`
 - `effects.applyBatch`
+- `effects.clone`
 - `effects.update`
 - `effects.delete`
 - `effects.deleteLayer`

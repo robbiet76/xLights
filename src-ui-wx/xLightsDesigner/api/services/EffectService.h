@@ -12,6 +12,7 @@ public:
     using AddEffectFn = std::function<models::AddEffectResult(const models::AddEffectRequest&)>;
     using ClearEffectWindowFn = std::function<models::ClearEffectWindowResult(const models::ClearEffectWindowRequest&)>;
     using ApplyEffectBatchFn = std::function<models::ApplyEffectBatchResult(const models::ApplyEffectBatchRequest&)>;
+    using CloneEffectsFn = std::function<models::CloneEffectsResult(const models::CloneEffectsRequest&)>;
     using UpdateEffectFn = std::function<models::UpdateEffectResult(const models::UpdateEffectRequest&)>;
     using DeleteEffectsFn = std::function<models::DeleteEffectsResult(const models::DeleteEffectsRequest&)>;
     using DeleteEffectLayerFn = std::function<models::DeleteEffectLayerResult(const models::DeleteEffectLayerRequest&)>;
@@ -22,6 +23,7 @@ public:
                   AddEffectFn addEffect,
                   ClearEffectWindowFn clearEffectWindow,
                   ApplyEffectBatchFn applyEffectBatch,
+                  CloneEffectsFn cloneEffects,
                   UpdateEffectFn updateEffect,
                   DeleteEffectsFn deleteEffects,
                   DeleteEffectLayerFn deleteEffectLayer,
@@ -31,6 +33,7 @@ public:
           _addEffect(std::move(addEffect)),
           _clearEffectWindow(std::move(clearEffectWindow)),
           _applyEffectBatch(std::move(applyEffectBatch)),
+          _cloneEffects(std::move(cloneEffects)),
           _updateEffect(std::move(updateEffect)),
           _deleteEffects(std::move(deleteEffects)),
           _deleteEffectLayer(std::move(deleteEffectLayer)),
@@ -51,6 +54,10 @@ public:
 
     [[nodiscard]] models::ApplyEffectBatchResult applyBatch(const models::ApplyEffectBatchRequest& request) const {
         return _applyEffectBatch ? _applyEffectBatch(request) : models::ApplyEffectBatchResult{};
+    }
+
+    [[nodiscard]] models::CloneEffectsResult cloneEffects(const models::CloneEffectsRequest& request) const {
+        return _cloneEffects ? _cloneEffects(request) : models::CloneEffectsResult{};
     }
 
     [[nodiscard]] models::UpdateEffectResult updateEffect(const models::UpdateEffectRequest& request) const {
@@ -78,6 +85,7 @@ private:
     AddEffectFn _addEffect;
     ClearEffectWindowFn _clearEffectWindow;
     ApplyEffectBatchFn _applyEffectBatch;
+    CloneEffectsFn _cloneEffects;
     UpdateEffectFn _updateEffect;
     DeleteEffectsFn _deleteEffects;
     DeleteEffectLayerFn _deleteEffectLayer;

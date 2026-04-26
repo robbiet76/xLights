@@ -246,6 +246,7 @@ inline std::optional<api::transport::ApiResponse> HandleDesignerApiRequest(
         [host](const api::models::AddEffectRequest& request) { return host->addEffect(request); },
         [host](const api::models::ClearEffectWindowRequest& request) { return host->clearEffectsWindow(request); },
         [host](const api::models::ApplyEffectBatchRequest& request) { return host->applyEffectBatch(request); },
+        [host](const api::models::CloneEffectsRequest& request) { return host->cloneEffects(request); },
         [host](const api::models::UpdateEffectRequest& request) { return host->updateEffect(request); },
         [host](const api::models::DeleteEffectsRequest& request) { return host->deleteEffects(request); },
         [host](const api::models::DeleteEffectLayerRequest& request) { return host->deleteEffectLayer(request); },

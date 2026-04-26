@@ -42,6 +42,7 @@ public:
         if (method == "GET" && path == "/xlightsdesigner/api/effects/window") return "effects.getWindow";
         if (method == "POST" && path == "/xlightsdesigner/api/effects/add-effect") return "effects.addEffect";
         if (method == "POST" && path == "/xlightsdesigner/api/effects/apply-batch") return "effects.applyBatch";
+        if (method == "POST" && path == "/xlightsdesigner/api/effects/clone") return "effects.clone";
         if (method == "POST" && path == "/xlightsdesigner/api/effects/clear-window") return "effects.clearWindow";
         if (method == "POST" && path == "/xlightsdesigner/api/effects/update") return "effects.update";
         if (method == "POST" && path == "/xlightsdesigner/api/effects/delete") return "effects.delete";

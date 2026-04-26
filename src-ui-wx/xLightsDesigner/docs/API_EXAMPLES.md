@@ -158,6 +158,26 @@ Select by `effectId`, or by `element` + `layer` + `startMs` + `endMs` with optio
 }
 ```
 
+## Clone Effects
+
+`POST /xlightsdesigner/api/effects/clone`
+
+```json
+{
+  "sourceElement": "Star",
+  "sourceLayer": 0,
+  "sourceStartMs": 1000,
+  "sourceEndMs": 5000,
+  "targetElement": "MegaTree",
+  "targetLayer": 1,
+  "targetStartMs": 8000,
+  "mode": "copy",
+  "dryRun": false
+}
+```
+
+Use `targetModels` with an array of element names for multi-target clones. Set `mode` to `move` to delete the matched source effects after clone creation succeeds.
+
 ## Layer Stack Edits
 
 `POST /xlightsdesigner/api/effects/reorder-layer`

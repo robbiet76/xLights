@@ -1220,6 +1220,151 @@ public:
         });
     }
 
+    [[nodiscard]] api::models::CloneEffectsResult cloneEffects(const api::models::CloneEffectsRequest& request) const {
+        return RunOnMainThread<api::models::CloneEffectsResult>([this, request]() {
+            api::models::CloneEffectsResult result;
+            result.dryRun = request.dryRun;
+            result.targetCount = static_cast<int>(request.targetElementNames.size());
+            if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) return result;
+            result.sequenceOpen = true;
+
+            Element* sourceElement = _frame->GetSequenceElements().GetElement(request.sourceElementName);
+            if (sourceElement == nullptr) return result;
+            result.sourceElementFound = true;
+
+            std::vector<Element*> targetElements;
+            targetElements.reserve(request.targetElementNames.size());
+            for (const auto& targetName : request.targetElementNames) {
+                Element* targetElement = _frame->GetSequenceElements().GetElement(targetName);
+                if (targetElement == nullptr) {
+                    result.missingTargetElements.push_back(targetName);
+                    continue;
+                }
+                targetElements.push_back(targetElement);
+            }
+            if (!result.missingTargetElements.empty()) {
+                result.errorCode = std::string("VALIDATION_ERROR");
+                result.errorMessage = std::string("One or more target elements were not found in the current sequence.");
+                return result;
+            }
+
+            struct SourceEffectSnapshot {
+                int layerNumber = 0;
+                int startMs = 0;
+                int endMs = 0;
+                std::string effectName;
+                std::string settings;
+                std::string palette;
+            };
+            std::vector<SourceEffectSnapshot> sourceEffects;
+            for (size_t layerIndex = 0; layerIndex < sourceElement->GetEffectLayerCount(); ++layerIndex) {
+                const int layerNumber = static_cast<int>(layerIndex);
+                if (request.sourceLayerNumber >= 0 && layerNumber != request.sourceLayerNumber) continue;
+                EffectLayer* layer = sourceElement->GetEffectLayer(layerNumber);
+                if (layer == nullptr) continue;
+                for (auto* effect : layer->GetAllEffectsByTime(request.sourceStartMs, request.sourceEndMs)) {
+                    if (effect == nullptr) continue;
+                    sourceEffects.push_back({
+                        layerNumber,
+                        effect->GetStartTimeMS(),
+                        effect->GetEndTimeMS(),
+                        effect->GetEffectName(),
+                        effect->GetSettingsAsString(),
+                        effect->GetPaletteAsString()
+                    });
+                }
+            }
+            result.matchedCount = static_cast<int>(sourceEffects.size());
+            if (sourceEffects.empty()) {
+                result.errorCode = std::string("NOT_FOUND");
+                result.errorMessage = std::string("No source effects matched the requested selector.");
+                return result;
+            }
+
+            const int targetStartMs = request.targetStartMs >= 0 ? request.targetStartMs : request.sourceStartMs;
+            const int deltaMs = targetStartMs - request.sourceStartMs;
+            for (std::size_t targetIndex = 0; targetIndex < targetElements.size(); ++targetIndex) {
+                Element* targetElement = targetElements[targetIndex];
+                const std::string& targetName = request.targetElementNames[targetIndex];
+                for (const auto& source : sourceEffects) {
+                    const int targetLayerNumber = request.targetLayerNumber >= 0
+                        ? request.targetLayerNumber + (request.sourceLayerNumber >= 0 ? source.layerNumber - request.sourceLayerNumber : 0)
+                        : source.layerNumber;
+                    const int nextStartMs = source.startMs + deltaMs;
+                    const int nextEndMs = source.endMs + deltaMs;
+                    if (targetLayerNumber < 0 || nextStartMs < 0 || nextEndMs < nextStartMs) {
+                        result.errorCode = std::string("VALIDATION_ERROR");
+                        result.errorMessage = std::string("Clone target layer and timing values must be valid.");
+                        return result;
+                    }
+                    while (static_cast<int>(targetElement->GetEffectLayerCount()) <= targetLayerNumber) {
+                        if (request.dryRun) break;
+                        if (targetElement->AddEffectLayer() == nullptr) {
+                            result.errorCode = std::string("INTERNAL_ERROR");
+                            result.errorMessage = std::string("Unable to allocate the requested target effect layer.");
+                            return result;
+                        }
+                    }
+                    if (!request.dryRun && static_cast<int>(targetElement->GetEffectLayerCount()) <= targetLayerNumber) {
+                        result.errorCode = std::string("INTERNAL_ERROR");
+                        result.errorMessage = std::string("Requested target layer was not available after allocation.");
+                        return result;
+                    }
+                    if (!request.dryRun) {
+                        EffectLayer* targetLayer = targetElement->GetEffectLayer(targetLayerNumber);
+                        if (targetLayer == nullptr) {
+                            result.errorCode = std::string("INTERNAL_ERROR");
+                            result.errorMessage = std::string("Requested target layer was not available.");
+                            return result;
+                        }
+                        Effect* created = targetLayer->AddEffect(0, source.effectName, source.settings, source.palette, nextStartMs, nextEndMs, EFFECT_NOT_SELECTED, false);
+                        if (created == nullptr) {
+                            result.errorCode = std::string("INTERNAL_ERROR");
+                            result.errorMessage = std::string("Cloned effect could not be created.");
+                            return result;
+                        }
+                        result.createdCount++;
+                    }
+                    result.items.push_back({
+                        request.sourceElementName,
+                        source.layerNumber,
+                        source.startMs,
+                        source.endMs,
+                        targetName,
+                        targetLayerNumber,
+                        nextStartMs,
+                        nextEndMs,
+                        source.effectName,
+                        !request.dryRun
+                    });
+                }
+            }
+
+            if (request.mode == "move" && !request.dryRun) {
+                for (int layerIndex = static_cast<int>(sourceElement->GetEffectLayerCount()) - 1; layerIndex >= 0; --layerIndex) {
+                    if (request.sourceLayerNumber >= 0 && layerIndex != request.sourceLayerNumber) continue;
+                    EffectLayer* layer = sourceElement->GetEffectLayer(layerIndex);
+                    if (layer == nullptr) continue;
+                    for (int effectIndex = layer->GetEffectCount() - 1; effectIndex >= 0; --effectIndex) {
+                        Effect* effect = layer->GetEffect(effectIndex);
+                        if (effect == nullptr) continue;
+                        if (effect->GetEndTimeMS() < request.sourceStartMs || effect->GetStartTimeMS() > request.sourceEndMs) continue;
+                        layer->DeleteEffectByIndex(effectIndex);
+                        result.deletedSourceCount++;
+                    }
+                }
+            }
+
+            if (!request.dryRun && (result.createdCount > 0 || result.deletedSourceCount > 0)) {
+                _frame->MarkEffectsFileDirty();
+                wxCommandEvent eventRowHeaderChanged(EVT_ROW_HEADINGS_CHANGED);
+                wxPostEvent(_frame, eventRowHeaderChanged);
+            }
+            result.ok = true;
+            return result;
+        });
+    }
+
     [[nodiscard]] api::models::UpdateEffectResult updateEffect(const api::models::UpdateEffectRequest& request) const {
         return RunOnMainThread<api::models::UpdateEffectResult>([this, request]() {
             api::models::UpdateEffectResult result;

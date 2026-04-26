@@ -119,6 +119,9 @@ public:
         if (request.command == "effects.applyBatch") {
             return _effectHandler.handleApplyBatch(request);
         }
+        if (request.command == "effects.clone") {
+            return _effectHandler.handleCloneEffects(request);
+        }
         if (request.command == "effects.clearWindow") {
             return _effectHandler.handleClearWindow(request);
         }

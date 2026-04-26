@@ -3,6 +3,7 @@
 #include <map>
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <vector>
 
 #include "../../DesignerApiRuntime.h"
 #include "../parsing/ParameterReaders.h"
@@ -33,6 +34,40 @@ inline std::optional<int> ReadOptionalInt(const std::map<std::string, std::strin
     } catch (...) {
         return std::nullopt;
     }
+}
+
+inline std::vector<std::string> ReadTargetElementNames(const std::map<std::string, std::string>& params) {
+    std::vector<std::string> targets;
+    const auto targetElement = parsing::ReadString(params, "targetElement");
+    const auto targetModel = parsing::ReadString(params, "targetModel");
+    if (!targetElement.empty()) targets.push_back(targetElement);
+    if (!targetModel.empty()) targets.push_back(targetModel);
+    const auto targetModelsText = parsing::ReadString(params, "targetModels");
+    if (!targetModelsText.empty()) {
+        try {
+            const auto parsed = nlohmann::json::parse(targetModelsText);
+            if (parsed.is_array()) {
+                for (const auto& row : parsed) {
+                    if (row.is_string() && !row.get<std::string>().empty()) {
+                        targets.push_back(row.get<std::string>());
+                    }
+                }
+            }
+        } catch (...) {
+        }
+    }
+    std::vector<std::string> deduped;
+    for (const auto& target : targets) {
+        bool seen = false;
+        for (const auto& existing : deduped) {
+            if (existing == target) {
+                seen = true;
+                break;
+            }
+        }
+        if (!seen) deduped.push_back(target);
+    }
+    return deduped;
 }
 }
 
@@ -189,6 +224,73 @@ public:
                 response.data["effects"].push_back({{"element", item.elementName}, {"layer", item.layerNumber}, {"effectName", item.effectName}, {"startMs", item.startMs}, {"endMs", item.endMs}, {"clearExisting", item.clearExisting}, {"clearedEffectCount", item.clearedEffectCount}, {"created", item.created}});
             }
             return response;
+        });
+        return BuildQueuedJobAcceptedResponse(request, jobId);
+    }
+
+    [[nodiscard]] transport::ApiResponse handleCloneEffects(const transport::ApiRequest& request) const {
+        transport::ApiResponse response;
+        response.command = request.command;
+        response.requestId = request.requestId;
+
+        const auto sourceElementName = parsing::ReadString(request.params, "sourceElement", parsing::ReadString(request.params, "sourceModel"));
+        const auto targetElementNames = effect_handler_detail::ReadTargetElementNames(request.params);
+        const int sourceLayerNumber = parsing::ReadInt(request.params, "sourceLayer", -1);
+        const int targetLayerNumber = parsing::ReadInt(request.params, "targetLayer", -1);
+        const int sourceStartMs = parsing::ReadInt(request.params, "sourceStartMs", -1);
+        const int sourceEndMs = parsing::ReadInt(request.params, "sourceEndMs", -1);
+        const int targetStartMs = parsing::ReadInt(request.params, "targetStartMs", -1);
+        const auto mode = parsing::ReadString(request.params, "mode", "copy");
+        const bool dryRun = request.dryRun || parsing::ReadBool(request.params, "dryRun", false);
+        if (sourceElementName.empty() || targetElementNames.empty() || sourceStartMs < 0 || sourceEndMs < 0 || sourceEndMs < sourceStartMs || (targetStartMs < -1) || (sourceLayerNumber < -1) || (targetLayerNumber < -1) || (mode != "copy" && mode != "move")) {
+            response.statusCode = 400;
+            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "effects.clone requires sourceElement/sourceModel, targetElement/targetModel/targetModels, sourceStartMs, sourceEndMs, and mode copy or move.", {{"sourceElement", sourceElementName}, {"targetCount", static_cast<int>(targetElementNames.size())}, {"sourceLayer", sourceLayerNumber}, {"targetLayer", targetLayerNumber}, {"sourceStartMs", sourceStartMs}, {"sourceEndMs", sourceEndMs}, {"targetStartMs", targetStartMs}, {"mode", mode}}};
+            return response;
+        }
+
+        models::CloneEffectsRequest cloneRequest;
+        cloneRequest.sourceElementName = sourceElementName;
+        cloneRequest.sourceLayerNumber = sourceLayerNumber;
+        cloneRequest.sourceStartMs = sourceStartMs;
+        cloneRequest.sourceEndMs = sourceEndMs;
+        cloneRequest.targetElementNames = targetElementNames;
+        cloneRequest.targetLayerNumber = targetLayerNumber;
+        cloneRequest.targetStartMs = targetStartMs;
+        cloneRequest.mode = mode;
+        cloneRequest.dryRun = dryRun;
+
+        const auto jobId = SubmitDesignerApiJob(request.command, request.requestId, [service = _service, request, cloneRequest]() {
+            transport::ApiResponse queuedResponse;
+            queuedResponse.command = request.command;
+            queuedResponse.requestId = request.requestId;
+            const auto result = service.cloneEffects(cloneRequest);
+            if (!result.sequenceOpen) {
+                queuedResponse.statusCode = 404;
+                queuedResponse.error = transport::ApiError{std::string(transport::errors::SequenceNotOpen), "No sequence open.", nlohmann::json::object()};
+                return queuedResponse;
+            }
+            if (!result.sourceElementFound) {
+                queuedResponse.statusCode = 404;
+                queuedResponse.error = transport::ApiError{std::string(transport::errors::ValidationError), "Requested source element was not found in the current sequence.", {{"sourceElement", cloneRequest.sourceElementName}}};
+                return queuedResponse;
+            }
+            if (!result.ok) {
+                queuedResponse.statusCode = 400;
+                nlohmann::json details = {{"matchedCount", result.matchedCount}, {"createdCount", result.createdCount}, {"deletedSourceCount", result.deletedSourceCount}, {"missingTargetElements", result.missingTargetElements}};
+                queuedResponse.error = transport::ApiError{result.errorCode.value_or(std::string(transport::errors::ValidationError)), result.errorMessage.value_or("effects.clone failed."), details};
+                return queuedResponse;
+            }
+            queuedResponse.data["ok"] = true;
+            queuedResponse.data["dryRun"] = result.dryRun;
+            queuedResponse.data["matchedCount"] = result.matchedCount;
+            queuedResponse.data["createdCount"] = result.createdCount;
+            queuedResponse.data["deletedSourceCount"] = result.deletedSourceCount;
+            queuedResponse.data["targetCount"] = result.targetCount;
+            queuedResponse.data["effects"] = nlohmann::json::array();
+            for (const auto& item : result.items) {
+                queuedResponse.data["effects"].push_back({{"sourceElement", item.sourceElementName}, {"sourceLayer", item.sourceLayerNumber}, {"sourceStartMs", item.sourceStartMs}, {"sourceEndMs", item.sourceEndMs}, {"targetElement", item.targetElementName}, {"targetLayer", item.targetLayerNumber}, {"targetStartMs", item.targetStartMs}, {"targetEndMs", item.targetEndMs}, {"effectName", item.effectName}, {"created", item.created}});
+            }
+            return queuedResponse;
         });
         return BuildQueuedJobAcceptedResponse(request, jobId);
     }
