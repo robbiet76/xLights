@@ -256,9 +256,9 @@ public:
             if (!result.saved || !result.sequence.isOpen) {
                 response.statusCode = 409;
                 response.error = transport::ApiError{
-                    std::string(transport::errors::ValidationError),
-                    "Unable to save the current sequence.",
-                    nlohmann::json::object()
+                    result.errorCode.value_or(std::string(transport::errors::ValidationError)),
+                    result.errorMessage.value_or("Unable to save the current sequence."),
+                    nlohmann::json{{"sequenceOpen", result.sequence.isOpen}, {"sequencePath", result.sequence.path.value_or("")}}
                 };
                 return response;
             }

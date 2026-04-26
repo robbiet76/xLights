@@ -196,6 +196,37 @@ inline bool ObtainOwnedApiAccessToPath(const std::string& path, bool enforceWrit
     return HasOwnedTrustedRootAccess(path, enforceWritable);
 }
 
+inline bool HasOwnedShowFolderAccess(xLightsFrame* frame, const std::string& path, bool enforceWritable = false) {
+    if (frame == nullptr || path.empty() || frame->CurrentDir.empty()) {
+        return false;
+    }
+
+    const auto target = ResolveOwnedAccessTarget(path);
+    const auto showRoot = ResolveOwnedAccessTarget(frame->CurrentDir.ToStdString());
+    if (target.empty() || showRoot.empty() || !IsPathWithinRoot(target, showRoot)) {
+        return false;
+    }
+
+    if (!enforceWritable) {
+        return true;
+    }
+
+    std::error_code ec;
+    const auto probeDir = std::filesystem::is_directory(target, ec) ? target : target.parent_path();
+    if (ec || probeDir.empty() || !std::filesystem::exists(probeDir, ec)) {
+        return false;
+    }
+
+    const auto probe = probeDir / ".xld-owned-show-write-test";
+    std::ofstream out(probe.string(), std::ios::out | std::ios::trunc);
+    if (!out.is_open()) {
+        return false;
+    }
+    out.close();
+    std::filesystem::remove(probe, ec);
+    return true;
+}
+
 inline bool FilesHaveEqualContents(const std::filesystem::path& left, const std::filesystem::path& right) {
     std::error_code ec;
     if (!std::filesystem::exists(left, ec) || !std::filesystem::exists(right, ec)) {
@@ -593,6 +624,8 @@ public:
     [[nodiscard]] api::models::SequenceSaveResult saveSequence() const {
         api::models::SequenceSaveResult result;
         if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) {
+            result.errorCode = "SEQUENCE_NOT_OPEN";
+            result.errorMessage = "No sequence is open.";
             return result;
         }
 
@@ -604,6 +637,8 @@ public:
         };
 
         if (_frame->CurrentSeqXmlFile->GetFullPath().empty() || _frame->IsReadOnlyMode()) {
+            result.errorCode = "SEQUENCE_SAVE_UNAVAILABLE";
+            result.errorMessage = "The current sequence has no writable path or is in read-only mode.";
             return result;
         }
 
@@ -611,27 +646,72 @@ public:
             return finalizeResult();
         }
 
-        if (!detail::ObtainOwnedApiAccessToPath(_frame->CurrentSeqXmlFile->GetFullPath(), true)) {
+        const std::string currentSequencePath = _frame->CurrentSeqXmlFile->GetFullPath();
+        if (!detail::HasOwnedShowFolderAccess(_frame, currentSequencePath, true) &&
+            !detail::ObtainOwnedApiAccessToPath(currentSequencePath, true)) {
+            result.errorCode = "SEQUENCE_ACCESS_DENIED";
+            result.errorMessage = "Unable to obtain write access to the current sequence path.";
             return result;
         }
 
-        auto performSave = [this]() {
+        auto performSave = [this, &result]() {
             wxCommandEvent playEvent(EVT_STOP_SEQUENCE);
             wxPostEvent(_frame, playEvent);
             std::unique_lock<std::mutex> lock(_frame->saveLock);
             const auto ext = detail::ToLowerCopy(_frame->CurrentSeqXmlFile->GetExt());
             if (ext == "xml") {
-                wxRemoveFile(_frame->CurrentSeqXmlFile->GetFullPath());
                 _frame->CurrentSeqXmlFile->SetExt("xsq");
             } else if (ext == "xbkp") {
                 _frame->CurrentSeqXmlFile->SetExt("xsq");
             }
+
+            const std::string targetPath = _frame->CurrentSeqXmlFile->GetFullPath();
+            if (targetPath.empty()) {
+                result.errorCode = "SEQUENCE_SAVE_UNAVAILABLE";
+                result.errorMessage = "The current sequence has no target path after extension normalization.";
+                return false;
+            }
+
+            wxFileName targetFile(targetPath);
+            wxFileName tempFile(targetFile);
+            tempFile.SetFullName(targetFile.GetFullName() + ".xldtmp");
+            const std::string tempPath = tempFile.GetFullPath().ToStdString();
+            if (tempPath.empty() || tempPath == targetPath) {
+                result.errorCode = "SEQUENCE_SAVE_UNAVAILABLE";
+                result.errorMessage = "Unable to build a temporary save path for the current sequence.";
+                return false;
+            }
+
+            if (wxFileExists(tempFile.GetFullPath())) {
+                wxRemoveFile(tempFile.GetFullPath());
+            }
+
+            _frame->CurrentSeqXmlFile->SetFullPath(tempPath);
             const bool ok = _frame->CurrentSeqXmlFile->Save(_frame->GetSequenceElements());
+            _frame->CurrentSeqXmlFile->SetFullPath(targetPath);
+            if (!ok) {
+                result.errorCode = "SEQUENCE_SAVE_FAILED";
+                result.errorMessage = "Unable to write the temporary sequence save file.";
+                if (wxFileExists(tempFile.GetFullPath())) {
+                    wxRemoveFile(tempFile.GetFullPath());
+                }
+                return false;
+            }
+
+            if (!wxRenameFile(tempFile.GetFullPath(), targetFile.GetFullPath(), true)) {
+                result.errorCode = "SEQUENCE_SAVE_FAILED";
+                result.errorMessage = "Unable to replace the current sequence file with the temporary save file.";
+                if (wxFileExists(tempFile.GetFullPath())) {
+                    wxRemoveFile(tempFile.GetFullPath());
+                }
+                return false;
+            }
+
             if (ok) {
                 _frame->mSavedChangeCount = _frame->GetSequenceElements().GetChangeCount();
                 _frame->mLastAutosaveCount = _frame->mSavedChangeCount;
             }
-            return ok;
+            return true;
         };
 
         if (wxIsMainThread()) {

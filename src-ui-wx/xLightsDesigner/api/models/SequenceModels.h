@@ -57,6 +57,8 @@ struct SequenceCreateResult {
 
 struct SequenceSaveResult {
     bool saved = false;
+    std::optional<std::string> errorCode;
+    std::optional<std::string> errorMessage;
     SequenceSummary sequence;
 };
 
