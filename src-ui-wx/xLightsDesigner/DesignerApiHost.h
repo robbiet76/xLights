@@ -94,6 +94,21 @@ inline wxString BuildDesignerRenderedFseqPath(xLightsFrame* frame) {
     return output.GetFullPath();
 }
 
+inline bool WaitDesignerRenderComplete(xLightsFrame* frame) {
+    if (frame == nullptr) {
+        return false;
+    }
+
+    // RenderAll schedules asynchronous render work. The owned API must not
+    // write the FSEQ until that work has populated sequence data for all frames.
+    constexpr int maxAttempts = 2400; // 60 seconds at 25ms per attempt.
+    for (int attempt = 0; attempt < maxAttempts && frame->ProgressBar != nullptr && frame->ProgressBar->IsShown(); ++attempt) {
+        wxMilliSleep(25);
+        wxYieldIfNeeded();
+    }
+    return frame->ProgressBar == nullptr || !frame->ProgressBar->IsShown();
+}
+
 inline wxString FindDesignerShowDirectoryForSequence(const std::string& sequenceFile) {
     wxString showDir = wxPathOnly(wxString::FromUTF8(sequenceFile));
     while (!showDir.empty()) {
@@ -816,6 +831,9 @@ public:
 
         auto performRender = [this]() {
             _frame->RenderAll();
+            if (!detail::WaitDesignerRenderComplete(_frame)) {
+                return false;
+            }
             if (_frame->CurrentSeqXmlFile == nullptr) {
                 return false;
             }
