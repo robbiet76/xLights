@@ -15,12 +15,14 @@
 #include <set>
 
 #include "FSEQFile.h"
+#include "AudioManager.h"
 #include "SequenceFile.h"
 #include "xLightsMain.h"
 #include "models/CustomModel.h"
 #include "models/DisplayAsType.h"
 #include "models/ModelGroup.h"
 #include "models/OutputModelManager.h"
+#include "models/SubModel.h"
 #include "ExternalHooks.h"
 #include "DesignerDiagnostics.h"
 #include "DesignerApiRuntime.h"
@@ -30,6 +32,7 @@
 #include "api/models/MediaModels.h"
 #include "api/models/SequenceModels.h"
 #include "api/models/TimingModels.h"
+#include "api/transport/ErrorCatalog.h"
 
 namespace xLightsDesigner {
 
@@ -475,8 +478,88 @@ public:
         settings.mediaFile = _frame->CurrentSeqXmlFile->GetMediaFile();
         settings.durationMs = _frame->CurrentSeqXmlFile->GetSequenceDurationMS();
         settings.frameMs = _frame->CurrentSeqXmlFile->GetFrameMS();
+        settings.supportsModelBlending = _frame->CurrentSeqXmlFile->supportsModelBlending();
         settings.hasUnsavedChanges = (_frame->mSavedChangeCount != _frame->GetSequenceElements().GetChangeCount());
         return settings;
+    }
+
+    [[nodiscard]] api::models::SequenceSettingsUpdateResult updateSequenceSettings(const api::models::SequenceSettingsUpdateRequest& request) const {
+        return RunOnMainThread<api::models::SequenceSettingsUpdateResult>([this, request]() {
+            api::models::SequenceSettingsUpdateResult result;
+            if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) {
+                result.errorCode = std::string(api::transport::errors::SequenceNotOpen);
+                result.errorMessage = "No sequence is open.";
+                return result;
+            }
+            if (_frame->IsReadOnlyMode()) {
+                result.errorCode = std::string(api::transport::errors::ValidationError);
+                result.errorMessage = "Sequence settings cannot be updated in read only mode.";
+                return result;
+            }
+
+            bool changed = false;
+
+            if (request.sequenceType.has_value() &&
+                request.sequenceType.value() != _frame->CurrentSeqXmlFile->GetSequenceType()) {
+                _frame->CurrentSeqXmlFile->SetSequenceType(request.sequenceType.value());
+                changed = true;
+            }
+
+            if (request.durationMs.has_value() &&
+                request.durationMs.value() != _frame->CurrentSeqXmlFile->GetSequenceDurationMS()) {
+                _frame->CurrentSeqXmlFile->SetSequenceDuration(static_cast<double>(request.durationMs.value()) / 1000.0);
+                _frame->UpdateSequenceLength();
+                _frame->SetSequenceEnd(_frame->CurrentSeqXmlFile->GetSequenceDurationMS());
+                changed = true;
+            }
+
+            if (request.frameMs.has_value() &&
+                request.frameMs.value() != _frame->CurrentSeqXmlFile->GetFrameMS()) {
+                const wxString timing = wxString::Format("%d ms", request.frameMs.value());
+                _frame->CurrentSeqXmlFile->SetSequenceTiming(timing);
+                _frame->SetSequenceTiming(request.frameMs.value());
+                if (_frame->CurrentSeqXmlFile->GetMedia() != nullptr) {
+                    _frame->CurrentSeqXmlFile->GetMedia()->SetFrameInterval(request.frameMs.value());
+                }
+                changed = true;
+            }
+
+            if (request.supportsModelBlending.has_value() &&
+                request.supportsModelBlending.value() != _frame->CurrentSeqXmlFile->supportsModelBlending()) {
+                _frame->CurrentSeqXmlFile->setSupportsModelBlending(request.supportsModelBlending.value());
+                _frame->GetSequenceElements().SetSupportsModelBlending(request.supportsModelBlending.value());
+                changed = true;
+            }
+
+            auto applyHeader = [this, &changed](HEADER_INFO_TYPES type, const std::optional<std::string>& value) {
+                if (!value.has_value()) {
+                    return;
+                }
+                const wxString next = wxString::FromUTF8(value.value());
+                if (_frame->CurrentSeqXmlFile->GetHeaderInfo(type) == next) {
+                    return;
+                }
+                _frame->CurrentSeqXmlFile->SetHeaderInfo(type, next);
+                changed = true;
+            };
+
+            applyHeader(HEADER_INFO_TYPES::AUTHOR, request.metadataAuthor);
+            applyHeader(HEADER_INFO_TYPES::AUTHOR_EMAIL, request.metadataAuthorEmail);
+            applyHeader(HEADER_INFO_TYPES::WEBSITE, request.metadataWebsite);
+            applyHeader(HEADER_INFO_TYPES::SONG, request.metadataSong);
+            applyHeader(HEADER_INFO_TYPES::ARTIST, request.metadataArtist);
+            applyHeader(HEADER_INFO_TYPES::ALBUM, request.metadataAlbum);
+            applyHeader(HEADER_INFO_TYPES::URL, request.metadataMusicUrl);
+            applyHeader(HEADER_INFO_TYPES::COMMENT, request.metadataComment);
+
+            result.updated = true;
+            result.settings = readSequenceSettings();
+            if (changed) {
+                _frame->GetSequenceElements().IncrementChangeCount(nullptr);
+                result.settings = readSequenceSettings();
+            }
+            return result;
+        });
     }
 
     [[nodiscard]] api::models::LayoutSettingsSummary readLayoutSettings() const {
@@ -1058,6 +1141,101 @@ public:
             modelSummary.depth = static_cast<double>(location.GetMDepth());
             summary.models.push_back(std::move(modelSummary));
         }
+        return summary;
+    }
+
+    [[nodiscard]] api::models::LayoutSubmodelsSummary readLayoutSubmodels() const {
+        api::models::LayoutSubmodelsSummary summary;
+        if (_frame == nullptr) {
+            return summary;
+        }
+
+        for (auto it = _frame->AllModels.begin(); it != _frame->AllModels.end(); ++it) {
+            const auto* model = it->second;
+            if (model == nullptr || model->GetDisplayAs() == DisplayAsType::SubModel) {
+                continue;
+            }
+            for (const auto* child : model->GetSubModels()) {
+                const auto* submodel = dynamic_cast<const SubModel*>(child);
+                if (submodel == nullptr) {
+                    continue;
+                }
+                api::models::LayoutSubmodelSummary row;
+                row.name = submodel->GetName();
+                row.fullName = submodel->GetFullName();
+                row.parentName = model->GetName();
+                row.layoutGroup = submodel->GetLayoutGroup();
+                row.layout = submodel->GetSubModelLayout();
+                row.type = submodel->GetSubModelType();
+                row.bufferStyle = submodel->GetSubModelBufferStyle();
+                row.lines = submodel->GetSubModelLines();
+                row.startChannel = static_cast<int>(submodel->GetFirstChannel()) + 1;
+                row.endChannel = static_cast<int>(submodel->GetLastChannel()) + 1;
+                row.nodeCount = static_cast<int>(submodel->GetNodeCount());
+                row.vertical = submodel->IsVertical();
+                row.ranges = submodel->IsRanges();
+                summary.submodels.push_back(std::move(row));
+            }
+        }
+
+        return summary;
+    }
+
+    [[nodiscard]] api::models::LayoutModelNodesSummary readLayoutModelNodes(const api::models::LayoutModelNodesRequest& request) const {
+        api::models::LayoutModelNodesSummary summary;
+        summary.includeBufferCoords = request.includeBufferCoords;
+        summary.includeWorldCoords = request.includeWorldCoords;
+        summary.includeScreenCoords = request.includeScreenCoords;
+        if (_frame == nullptr || request.name.empty()) {
+            return summary;
+        }
+
+        auto* model = _frame->AllModels.GetModel(request.name);
+        if (model == nullptr) {
+            return summary;
+        }
+
+        summary.found = true;
+        summary.modelName = model->GetName();
+        summary.isCustomModel = model->IsCustom();
+        const auto& location = model->GetModelScreenLocation();
+        const uint32_t nodeCount = model->GetNodeCount();
+        summary.nodes.reserve(nodeCount);
+        for (uint32_t nodeIndex = 0; nodeIndex < nodeCount; ++nodeIndex) {
+            auto* node = model->GetNode(nodeIndex);
+            if (node == nullptr) {
+                continue;
+            }
+
+            api::models::LayoutModelNodeSummary row;
+            row.nodeId = static_cast<int>(nodeIndex + 1);
+            row.stringIndex = static_cast<int>(node->StringNum);
+            row.name = model->GetNodeName(nodeIndex, true);
+            for (const auto& coord : node->Coords) {
+                api::models::LayoutNodeCoordSummary coordRow;
+                if (request.includeBufferCoords) {
+                    coordRow.bufferX = coord.bufX;
+                    coordRow.bufferY = coord.bufY;
+                }
+                if (request.includeWorldCoords) {
+                    float worldX = coord.screenX;
+                    float worldY = coord.screenY;
+                    float worldZ = coord.screenZ;
+                    location.TranslatePoint(worldX, worldY, worldZ);
+                    coordRow.worldX = static_cast<double>(worldX);
+                    coordRow.worldY = static_cast<double>(worldY);
+                    coordRow.worldZ = static_cast<double>(worldZ);
+                }
+                if (request.includeScreenCoords) {
+                    coordRow.screenX = static_cast<double>(coord.screenX);
+                    coordRow.screenY = static_cast<double>(coord.screenY);
+                    coordRow.screenZ = static_cast<double>(coord.screenZ);
+                }
+                row.coords.push_back(std::move(coordRow));
+            }
+            summary.nodes.push_back(std::move(row));
+        }
+
         return summary;
     }
 

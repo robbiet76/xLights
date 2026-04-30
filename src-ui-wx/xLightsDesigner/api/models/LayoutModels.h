@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -24,6 +25,61 @@ struct LayoutModelSummary {
 
 struct LayoutModelsSummary {
     std::vector<LayoutModelSummary> models;
+};
+
+struct LayoutSubmodelSummary {
+    std::string name;
+    std::string fullName;
+    std::string parentName;
+    std::string layoutGroup;
+    std::string layout;
+    std::string type;
+    std::string bufferStyle;
+    std::string lines;
+    int startChannel = 0;
+    int endChannel = 0;
+    int nodeCount = 0;
+    bool vertical = false;
+    bool ranges = false;
+};
+
+struct LayoutSubmodelsSummary {
+    std::vector<LayoutSubmodelSummary> submodels;
+};
+
+struct LayoutModelNodesRequest {
+    std::string name;
+    bool includeBufferCoords = true;
+    bool includeWorldCoords = true;
+    bool includeScreenCoords = false;
+};
+
+struct LayoutNodeCoordSummary {
+    std::optional<int> bufferX;
+    std::optional<int> bufferY;
+    std::optional<double> worldX;
+    std::optional<double> worldY;
+    std::optional<double> worldZ;
+    std::optional<double> screenX;
+    std::optional<double> screenY;
+    std::optional<double> screenZ;
+};
+
+struct LayoutModelNodeSummary {
+    int nodeId = 0;
+    int stringIndex = 0;
+    std::string name;
+    std::vector<LayoutNodeCoordSummary> coords;
+};
+
+struct LayoutModelNodesSummary {
+    bool found = false;
+    std::string modelName;
+    bool isCustomModel = false;
+    bool includeBufferCoords = true;
+    bool includeWorldCoords = true;
+    bool includeScreenCoords = false;
+    std::vector<LayoutModelNodeSummary> nodes;
 };
 
 struct CustomModelNode {

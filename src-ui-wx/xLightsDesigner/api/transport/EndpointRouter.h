@@ -16,6 +16,7 @@ public:
         if (method == "GET" && path == "/xlightsdesigner/api/sequence/open") return "sequence.getOpen";
         if (method == "GET" && path == "/xlightsdesigner/api/sequence/revision") return "sequence.getRevision";
         if (method == "GET" && path == "/xlightsdesigner/api/sequence/settings") return "sequence.getSettings";
+        if (method == "POST" && path == "/xlightsdesigner/api/sequence/settings") return "sequence.setSettings";
         if (method == "POST" && path == "/xlightsdesigner/api/sequence/open") return "sequence.open";
         if (method == "POST" && path == "/xlightsdesigner/api/sequence/create") return "sequence.create";
         if (method == "POST" && path == "/xlightsdesigner/api/sequence/save") return "sequence.save";
@@ -32,6 +33,8 @@ public:
         if (method == "GET" && path == "/xlightsdesigner/api/media/directories") return "media.getDirectories";
 
         if (method == "GET" && path == "/xlightsdesigner/api/layout/models") return "layout.getModels";
+        if (method == "GET" && path == "/xlightsdesigner/api/layout/submodels") return "layout.getSubmodels";
+        if (method == "GET" && path == "/xlightsdesigner/api/layout/model-nodes") return "layout.getModelNodes";
         if (method == "GET" && path == "/xlightsdesigner/api/layout/scene") return "layout.getScene";
         if (method == "GET" && path == "/xlightsdesigner/api/layout/settings") return "layout.getSettings";
         if (method == "GET" && path == "/xlightsdesigner/api/layout/group-members") return "layout.getGroupMembers";

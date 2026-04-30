@@ -65,13 +65,94 @@ public:
             return response;
         }
 
-        response.data["sequencePath"] = settings.path.value_or("");
-        response.data["sequenceType"] = settings.sequenceType.value_or("");
-        response.data["mediaFile"] = settings.mediaFile.value_or("");
-        response.data["durationMs"] = settings.durationMs.value_or(0);
-        response.data["frameMs"] = settings.frameMs.value_or(0);
-        response.data["hasUnsavedChanges"] = settings.hasUnsavedChanges.value_or(false);
+        response.data = serializeSettings(settings);
         return response;
+    }
+
+    [[nodiscard]] transport::ApiResponse handleSetSettings(const transport::ApiRequest& request) const {
+        transport::ApiResponse response;
+        response.command = request.command;
+        response.requestId = request.requestId;
+
+        models::SequenceSettingsUpdateRequest updateRequest;
+        if (auto it = request.params.find("sequenceType"); it != request.params.end()) {
+            updateRequest.sequenceType = it->second;
+        }
+        if (auto it = request.params.find("durationMs"); it != request.params.end()) {
+            updateRequest.durationMs = std::atoi(it->second.c_str());
+        }
+        if (auto it = request.params.find("frameMs"); it != request.params.end()) {
+            updateRequest.frameMs = std::atoi(it->second.c_str());
+        }
+        if (auto it = request.params.find("supportsModelBlending"); it != request.params.end()) {
+            updateRequest.supportsModelBlending = (it->second == "1" || it->second == "true" || it->second == "TRUE" || it->second == "yes" || it->second == "YES");
+        }
+        if (auto it = request.params.find("metadataAuthor"); it != request.params.end()) {
+            updateRequest.metadataAuthor = it->second;
+        }
+        if (auto it = request.params.find("metadataAuthorEmail"); it != request.params.end()) {
+            updateRequest.metadataAuthorEmail = it->second;
+        }
+        if (auto it = request.params.find("metadataWebsite"); it != request.params.end()) {
+            updateRequest.metadataWebsite = it->second;
+        }
+        if (auto it = request.params.find("metadataSong"); it != request.params.end()) {
+            updateRequest.metadataSong = it->second;
+        }
+        if (auto it = request.params.find("metadataArtist"); it != request.params.end()) {
+            updateRequest.metadataArtist = it->second;
+        }
+        if (auto it = request.params.find("metadataAlbum"); it != request.params.end()) {
+            updateRequest.metadataAlbum = it->second;
+        }
+        if (auto it = request.params.find("metadataMusicUrl"); it != request.params.end()) {
+            updateRequest.metadataMusicUrl = it->second;
+        }
+        if (auto it = request.params.find("metadataComment"); it != request.params.end()) {
+            updateRequest.metadataComment = it->second;
+        }
+
+        const auto validation = validateSetSettingsRequest(updateRequest);
+        if (!validation.ok()) {
+            nlohmann::json issues = nlohmann::json::array();
+            for (const auto& issue : validation.issues) {
+                issues.push_back({{"field", issue.field}, {"code", issue.code}, {"message", issue.message}});
+            }
+            response.statusCode = 400;
+            response.error = transport::ApiError{
+                std::string(transport::errors::ValidationError),
+                "Invalid sequence.setSettings request.",
+                nlohmann::json{{"issues", issues}}
+            };
+            return response;
+        }
+
+        const auto jobId = SubmitDesignerApiJob(request.command, request.requestId, [service = _service, request, updateRequest, this]() {
+            transport::ApiResponse jobResponse;
+            jobResponse.command = request.command;
+            jobResponse.requestId = request.requestId;
+            const auto result = service.updateSettings(updateRequest);
+            if (!result.updated || !result.settings.isOpen) {
+                int statusCode = 409;
+                if (result.errorCode.has_value() && result.errorCode.value() == transport::errors::SequenceNotOpen) {
+                    statusCode = 404;
+                } else if (result.errorCode.has_value() && result.errorCode.value() == transport::errors::ValidationError) {
+                    statusCode = 400;
+                }
+                jobResponse.statusCode = statusCode;
+                jobResponse.error = transport::ApiError{
+                    result.errorCode.value_or(std::string(transport::errors::ValidationError)),
+                    result.errorMessage.value_or("Unable to update the current sequence settings."),
+                    nlohmann::json::object()
+                };
+                return jobResponse;
+            }
+            jobResponse.data["updated"] = true;
+            jobResponse.data["settings"] = serializeSettings(result.settings);
+            return jobResponse;
+        });
+
+        return BuildQueuedJobAcceptedResponse(request, jobId);
     }
 
     [[nodiscard]] transport::ApiResponse handleOpen(const transport::ApiRequest& request) const {
@@ -474,6 +555,44 @@ public:
             result.addIssue("durationMs", std::string(transport::errors::ValidationError), "durationMs is required when mediaFile is not provided.");
         }
         return result;
+    }
+
+    [[nodiscard]] validation::ValidationResult validateSetSettingsRequest(const models::SequenceSettingsUpdateRequest& request) const {
+        validation::ValidationResult result;
+        const bool hasAnyField = request.sequenceType.has_value() ||
+            request.durationMs.has_value() ||
+            request.frameMs.has_value() ||
+            request.supportsModelBlending.has_value() ||
+            request.metadataAuthor.has_value() ||
+            request.metadataAuthorEmail.has_value() ||
+            request.metadataWebsite.has_value() ||
+            request.metadataSong.has_value() ||
+            request.metadataArtist.has_value() ||
+            request.metadataAlbum.has_value() ||
+            request.metadataMusicUrl.has_value() ||
+            request.metadataComment.has_value();
+        if (!hasAnyField) {
+            result.addIssue("request", std::string(transport::errors::ValidationError), "At least one sequence setting must be provided.");
+        }
+        if (request.durationMs.has_value() && request.durationMs.value() <= 0) {
+            result.addIssue("durationMs", std::string(transport::errors::ValidationError), "durationMs must be greater than zero.");
+        }
+        if (request.frameMs.has_value() && request.frameMs.value() <= 0) {
+            result.addIssue("frameMs", std::string(transport::errors::ValidationError), "frameMs must be greater than zero.");
+        }
+        return result;
+    }
+
+    [[nodiscard]] nlohmann::json serializeSettings(const models::SequenceSettings& settings) const {
+        return nlohmann::json{
+            {"sequencePath", settings.path.value_or("")},
+            {"sequenceType", settings.sequenceType.value_or("")},
+            {"mediaFile", settings.mediaFile.value_or("")},
+            {"durationMs", settings.durationMs.value_or(0)},
+            {"frameMs", settings.frameMs.value_or(0)},
+            {"supportsModelBlending", settings.supportsModelBlending.value_or(false)},
+            {"hasUnsavedChanges", settings.hasUnsavedChanges.value_or(false)}
+        };
     }
 
 private:

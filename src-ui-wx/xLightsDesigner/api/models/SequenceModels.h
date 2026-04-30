@@ -20,7 +20,23 @@ struct SequenceSettings {
     std::optional<std::string> mediaFile;
     std::optional<int> durationMs;
     std::optional<int> frameMs;
+    std::optional<bool> supportsModelBlending;
     std::optional<bool> hasUnsavedChanges;
+};
+
+struct SequenceSettingsUpdateRequest {
+    std::optional<std::string> sequenceType;
+    std::optional<int> durationMs;
+    std::optional<int> frameMs;
+    std::optional<bool> supportsModelBlending;
+    std::optional<std::string> metadataAuthor;
+    std::optional<std::string> metadataAuthorEmail;
+    std::optional<std::string> metadataWebsite;
+    std::optional<std::string> metadataSong;
+    std::optional<std::string> metadataArtist;
+    std::optional<std::string> metadataAlbum;
+    std::optional<std::string> metadataMusicUrl;
+    std::optional<std::string> metadataComment;
 };
 
 struct SequenceOpenRequest {
@@ -73,6 +89,13 @@ struct SequenceRenderResult {
     bool rendered = false;
     SequenceSummary sequence;
     std::optional<std::string> fseqPath;
+};
+
+struct SequenceSettingsUpdateResult {
+    bool updated = false;
+    std::optional<std::string> errorCode;
+    std::optional<std::string> errorMessage;
+    SequenceSettings settings;
 };
 
 struct SequenceChannelRangeRequest {

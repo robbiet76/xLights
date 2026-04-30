@@ -53,8 +53,14 @@ inline DesignerApiSelfTestResult RunDesignerApiSelfTests() {
               "EndpointRouter should map metadata effects status endpoint.", result);
         Check(router.resolve("GET", "/xlightsdesigner/api/layout/scene") == std::optional<std::string>("layout.getScene"),
               "EndpointRouter should map layout scene endpoint.", result);
+        Check(router.resolve("GET", "/xlightsdesigner/api/layout/submodels") == std::optional<std::string>("layout.getSubmodels"),
+              "EndpointRouter should map layout submodels endpoint.", result);
+        Check(router.resolve("GET", "/xlightsdesigner/api/layout/model-nodes") == std::optional<std::string>("layout.getModelNodes"),
+              "EndpointRouter should map layout model-nodes endpoint.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/layout/models/custom") == std::optional<std::string>("layout.createCustomModel"),
               "EndpointRouter should map custom model creation endpoint.", result);
+        Check(router.resolve("POST", "/xlightsdesigner/api/sequence/settings") == std::optional<std::string>("sequence.setSettings"),
+              "EndpointRouter should map sequence settings mutation endpoint.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/timing/add-marks") == std::optional<std::string>("timing.addMarks"),
               "EndpointRouter should map timing add-marks endpoint.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/sequence/render-samples") == std::optional<std::string>("sequence.getRenderSamples"),
@@ -103,6 +109,8 @@ inline DesignerApiSelfTestResult RunDesignerApiSelfTests() {
         std::optional<api::models::CreateCustomModelRequest> capturedRequest;
         api::services::LayoutService service(
             []() { return api::models::LayoutModelsSummary{}; },
+            []() { return api::models::LayoutSubmodelsSummary{}; },
+            [](const api::models::LayoutModelNodesRequest&) { return api::models::LayoutModelNodesSummary{}; },
             []() { return api::models::LayoutSettingsSummary{}; },
             []() { return api::models::LayoutGroupMembershipsSummary{}; },
             [&capturedRequest](const api::models::CreateCustomModelRequest& request) {

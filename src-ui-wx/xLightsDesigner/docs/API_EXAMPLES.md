@@ -11,6 +11,22 @@ They do not require xLights-owned automation routing.
 {}
 ```
 
+## Sequence Settings
+
+`GET /xlightsdesigner/api/sequence/settings`
+
+```json
+{}
+```
+
+`POST /xlightsdesigner/api/sequence/settings`
+
+```json
+{
+  "supportsModelBlending": true
+}
+```
+
 ## Render Current Sequence
 
 `POST /xlightsdesigner/api/sequence/render-current`

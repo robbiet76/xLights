@@ -1,11 +1,11 @@
 # xLightsDesigner API Current State
 
 Status date:
-- 2026-04-26
+- 2026-04-30
 
 Repository:
-- `/Users/robterry/xLights-2026.06`
-- branch: `xld-2026.06-migration`
+- `/Users/robterry/xLights-2026.07`
+- branch: `xld-2026.07-migration`
 
 Reference points:
 - baseline fork commit: `9bcfba7f44462ed8038dd3532e8739c8a19c4f7d`
@@ -101,6 +101,7 @@ Startup gating:
 - `GET /xlightsdesigner/api/sequence/open`
 - `GET /xlightsdesigner/api/sequence/revision`
 - `GET /xlightsdesigner/api/sequence/settings`
+- `POST /xlightsdesigner/api/sequence/settings`
 - `POST /xlightsdesigner/api/sequence/open`
 - `POST /xlightsdesigner/api/sequence/create`
 - `POST /xlightsdesigner/api/sequence/save`
@@ -174,6 +175,7 @@ Primary read coverage:
 The following routes are job-backed and return `202 Accepted` with a `jobId`:
 - `sequence.open`
 - `sequence.create`
+- `sequence.setSettings`
 - `sequence.save`
 - `timing.addMarks`
 - `effects.addEffect`

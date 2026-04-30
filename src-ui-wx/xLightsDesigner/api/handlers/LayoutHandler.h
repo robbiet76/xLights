@@ -94,6 +94,106 @@ public:
         return response;
     }
 
+    [[nodiscard]] transport::ApiResponse handleGetSubmodels(const transport::ApiRequest& request) const {
+        transport::ApiResponse response;
+        response.command = request.command;
+        response.requestId = request.requestId;
+
+        const auto summary = _service.getSubmodels();
+        response.data["submodels"] = nlohmann::json::array();
+        for (const auto& submodel : summary.submodels) {
+            response.data["submodels"].push_back({
+                {"name", submodel.name},
+                {"fullName", submodel.fullName},
+                {"parentName", submodel.parentName},
+                {"layoutGroup", submodel.layoutGroup},
+                {"layout", submodel.layout},
+                {"type", submodel.type},
+                {"bufferStyle", submodel.bufferStyle},
+                {"lines", submodel.lines},
+                {"startChannel", submodel.startChannel},
+                {"endChannel", submodel.endChannel},
+                {"nodeCount", submodel.nodeCount},
+                {"vertical", submodel.vertical},
+                {"ranges", submodel.ranges}
+            });
+        }
+        return response;
+    }
+
+    [[nodiscard]] transport::ApiResponse handleGetModelNodes(const transport::ApiRequest& request) const {
+        transport::ApiResponse response;
+        response.command = request.command;
+        response.requestId = request.requestId;
+
+        models::LayoutModelNodesRequest nodesRequest;
+        nodesRequest.name = parsing::ReadString(request.params, "name");
+        nodesRequest.includeBufferCoords = parsing::ReadBool(request.params, "includeBufferCoords", true);
+        nodesRequest.includeWorldCoords = parsing::ReadBool(request.params, "includeWorldCoords", true);
+        nodesRequest.includeScreenCoords = parsing::ReadBool(request.params, "includeScreenCoords", false);
+
+        if (nodesRequest.name.empty()) {
+            response.statusCode = 400;
+            response.error = transport::ApiError{"BAD_REQUEST", "layout.getModelNodes requires name.", nlohmann::json::object()};
+            return response;
+        }
+
+        const auto summary = _service.getModelNodes(nodesRequest);
+        if (!summary.found) {
+            response.statusCode = 404;
+            response.error = transport::ApiError{"MODEL_NOT_FOUND", "Model not found.", nlohmann::json{{"name", nodesRequest.name}}};
+            return response;
+        }
+
+        response.data["modelName"] = summary.modelName;
+        response.data["nodes"] = nlohmann::json::array();
+        response.data["source"] = {
+            {"isCustomModel", summary.isCustomModel},
+            {"customModelParsed", summary.isCustomModel}
+        };
+        response.data["requested"] = {
+            {"includeBufferCoords", summary.includeBufferCoords},
+            {"includeWorldCoords", summary.includeWorldCoords},
+            {"includeScreenCoords", summary.includeScreenCoords}
+        };
+        for (const auto& node : summary.nodes) {
+            nlohmann::json nodeJson{
+                {"nodeId", node.nodeId},
+                {"stringIndex", node.stringIndex},
+                {"coords", nlohmann::json::array()}
+            };
+            if (!node.name.empty()) {
+                nodeJson["name"] = node.name;
+            }
+            for (const auto& coord : node.coords) {
+                nlohmann::json coordJson = nlohmann::json::object();
+                if (coord.bufferX.has_value() && coord.bufferY.has_value()) {
+                    coordJson["buffer"] = {
+                        {"x", *coord.bufferX},
+                        {"y", *coord.bufferY}
+                    };
+                }
+                if (coord.worldX.has_value() && coord.worldY.has_value() && coord.worldZ.has_value()) {
+                    coordJson["world"] = {
+                        {"x", *coord.worldX},
+                        {"y", *coord.worldY},
+                        {"z", *coord.worldZ}
+                    };
+                }
+                if (coord.screenX.has_value() && coord.screenY.has_value() && coord.screenZ.has_value()) {
+                    coordJson["screen"] = {
+                        {"x", *coord.screenX},
+                        {"y", *coord.screenY},
+                        {"z", *coord.screenZ}
+                    };
+                }
+                nodeJson["coords"].push_back(std::move(coordJson));
+            }
+            response.data["nodes"].push_back(std::move(nodeJson));
+        }
+        return response;
+    }
+
     [[nodiscard]] transport::ApiResponse handleGetSettings(const transport::ApiRequest& request) const {
         transport::ApiResponse response;
         response.command = request.command;

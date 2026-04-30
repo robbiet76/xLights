@@ -12,6 +12,7 @@ public:
     using ReadSequenceSettingsFn = std::function<models::SequenceSettings()>;
     using OpenSequenceFn = std::function<models::SequenceOpenResult(const models::SequenceOpenRequest&)>;
     using CreateSequenceFn = std::function<models::SequenceCreateResult(const models::SequenceCreateRequest&)>;
+    using UpdateSequenceSettingsFn = std::function<models::SequenceSettingsUpdateResult(const models::SequenceSettingsUpdateRequest&)>;
     using SaveSequenceFn = std::function<models::SequenceSaveResult()>;
     using CloseSequenceFn = std::function<models::SequenceCloseResult()>;
     using RenderSequenceFn = std::function<models::SequenceRenderResult()>;
@@ -21,6 +22,7 @@ public:
                     ReadSequenceSettingsFn readSequenceSettings,
                     OpenSequenceFn openSequence,
                     CreateSequenceFn createSequence,
+                    UpdateSequenceSettingsFn updateSequenceSettings,
                     SaveSequenceFn saveSequence,
                     CloseSequenceFn closeSequence,
                     RenderSequenceFn renderSequence,
@@ -29,6 +31,7 @@ public:
           _readSequenceSettings(std::move(readSequenceSettings)),
           _openSequence(std::move(openSequence)),
           _createSequence(std::move(createSequence)),
+          _updateSequenceSettings(std::move(updateSequenceSettings)),
           _saveSequence(std::move(saveSequence)),
           _closeSequence(std::move(closeSequence)),
           _renderSequence(std::move(renderSequence)),
@@ -54,6 +57,10 @@ public:
         return _createSequence ? _createSequence(request) : models::SequenceCreateResult{};
     }
 
+    [[nodiscard]] models::SequenceSettingsUpdateResult updateSettings(const models::SequenceSettingsUpdateRequest& request) const {
+        return _updateSequenceSettings ? _updateSequenceSettings(request) : models::SequenceSettingsUpdateResult{};
+    }
+
     [[nodiscard]] models::SequenceSaveResult saveSequence() const {
         return _saveSequence ? _saveSequence() : models::SequenceSaveResult{};
     }
@@ -75,6 +82,7 @@ private:
     ReadSequenceSettingsFn _readSequenceSettings;
     OpenSequenceFn _openSequence;
     CreateSequenceFn _createSequence;
+    UpdateSequenceSettingsFn _updateSequenceSettings;
     SaveSequenceFn _saveSequence;
     CloseSequenceFn _closeSequence;
     RenderSequenceFn _renderSequence;

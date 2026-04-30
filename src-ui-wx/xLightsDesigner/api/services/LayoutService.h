@@ -9,15 +9,21 @@ namespace xLightsDesigner::api::services {
 class LayoutService {
 public:
     using ReadModelsFn = std::function<models::LayoutModelsSummary()>;
+    using ReadSubmodelsFn = std::function<models::LayoutSubmodelsSummary()>;
+    using ReadModelNodesFn = std::function<models::LayoutModelNodesSummary(const models::LayoutModelNodesRequest&)>;
     using ReadSettingsFn = std::function<models::LayoutSettingsSummary()>;
     using ReadGroupMembershipsFn = std::function<models::LayoutGroupMembershipsSummary()>;
     using CreateCustomModelFn = std::function<models::CreateCustomModelResult(const models::CreateCustomModelRequest&)>;
 
     LayoutService(ReadModelsFn readModels,
+                  ReadSubmodelsFn readSubmodels,
+                  ReadModelNodesFn readModelNodes,
                   ReadSettingsFn readSettings,
                   ReadGroupMembershipsFn readGroupMemberships,
                   CreateCustomModelFn createCustomModel)
         : _readModels(std::move(readModels)),
+          _readSubmodels(std::move(readSubmodels)),
+          _readModelNodes(std::move(readModelNodes)),
           _readSettings(std::move(readSettings)),
           _readGroupMemberships(std::move(readGroupMemberships)),
           _createCustomModel(std::move(createCustomModel)) {}
@@ -30,6 +36,14 @@ public:
         return _readGroupMemberships ? _readGroupMemberships() : models::LayoutGroupMembershipsSummary{};
     }
 
+    [[nodiscard]] models::LayoutSubmodelsSummary getSubmodels() const {
+        return _readSubmodels ? _readSubmodels() : models::LayoutSubmodelsSummary{};
+    }
+
+    [[nodiscard]] models::LayoutModelNodesSummary getModelNodes(const models::LayoutModelNodesRequest& request) const {
+        return _readModelNodes ? _readModelNodes(request) : models::LayoutModelNodesSummary{};
+    }
+
     [[nodiscard]] models::LayoutSettingsSummary getSettings() const {
         return _readSettings ? _readSettings() : models::LayoutSettingsSummary{};
     }
@@ -40,6 +54,8 @@ public:
 
 private:
     ReadModelsFn _readModels;
+    ReadSubmodelsFn _readSubmodels;
+    ReadModelNodesFn _readModelNodes;
     ReadSettingsFn _readSettings;
     ReadGroupMembershipsFn _readGroupMemberships;
     CreateCustomModelFn _createCustomModel;

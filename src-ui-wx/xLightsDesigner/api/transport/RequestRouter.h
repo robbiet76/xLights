@@ -53,6 +53,9 @@ public:
         if (request.command == "sequence.getSettings") {
             return _sequenceHandler.handleGetSettings(request);
         }
+        if (request.command == "sequence.setSettings") {
+            return _sequenceHandler.handleSetSettings(request);
+        }
         if (request.command == "sequence.open") {
             return _sequenceHandler.handleOpen(request);
         }
@@ -91,6 +94,12 @@ public:
         }
         if (request.command == "layout.getModels") {
             return _layoutHandler.handleGetModels(request);
+        }
+        if (request.command == "layout.getSubmodels") {
+            return _layoutHandler.handleGetSubmodels(request);
+        }
+        if (request.command == "layout.getModelNodes") {
+            return _layoutHandler.handleGetModelNodes(request);
         }
         if (request.command == "layout.getScene") {
             return _layoutHandler.handleGetScene(request);

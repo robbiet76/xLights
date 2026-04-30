@@ -221,6 +221,7 @@ inline std::optional<api::transport::ApiResponse> HandleDesignerApiRequest(
         [host]() { return host->readSequenceSettings(); },
         [host](const api::models::SequenceOpenRequest& request) { return host->openSequence(request); },
         [host](const api::models::SequenceCreateRequest& request) { return host->createSequence(request); },
+        [host](const api::models::SequenceSettingsUpdateRequest& request) { return host->updateSequenceSettings(request); },
         [host]() { return host->saveSequence(); },
         [host]() { return host->closeSequence(); },
         [host]() { return host->renderCurrentSequence(); },
@@ -235,6 +236,8 @@ inline std::optional<api::transport::ApiResponse> HandleDesignerApiRequest(
         [host]() { return host->readMediaDirectories(); });
     api::services::LayoutService layoutService(
         [host]() { return host->readLayoutModels(); },
+        [host]() { return host->readLayoutSubmodels(); },
+        [host](const api::models::LayoutModelNodesRequest& request) { return host->readLayoutModelNodes(request); },
         [host]() { return host->readLayoutSettings(); },
         [host]() { return host->readLayoutGroupMemberships(); },
         [host](const api::models::CreateCustomModelRequest& request) { return host->createCustomModel(request); });
