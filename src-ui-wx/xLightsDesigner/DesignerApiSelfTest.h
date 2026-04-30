@@ -57,6 +57,8 @@ inline DesignerApiSelfTestResult RunDesignerApiSelfTests() {
               "EndpointRouter should map layout submodels endpoint.", result);
         Check(router.resolve("GET", "/xlightsdesigner/api/layout/model-nodes") == std::optional<std::string>("layout.getModelNodes"),
               "EndpointRouter should map layout model-nodes endpoint.", result);
+        Check(router.resolve("POST", "/xlightsdesigner/api/media/show-directory") == std::optional<std::string>("media.setShowDirectory"),
+              "EndpointRouter should map media show-directory mutation endpoint.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/layout/models/custom") == std::optional<std::string>("layout.createCustomModel"),
               "EndpointRouter should map custom model creation endpoint.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/sequence/settings") == std::optional<std::string>("sequence.setSettings"),

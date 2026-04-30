@@ -1110,6 +1110,105 @@ public:
         return summary;
     }
 
+    [[nodiscard]] api::models::MediaShowDirectoryResult setShowDirectory(const api::models::MediaShowDirectoryRequest& request) const {
+        api::models::MediaShowDirectoryResult result;
+        result.showDirectory = request.showDirectory;
+        if (_frame == nullptr || request.showDirectory.empty()) {
+            result.errorCode = "VALIDATION_ERROR";
+            result.errorMessage = "showDirectory is required.";
+            return result;
+        }
+
+        result.previousShowDirectory = _frame->CurrentDir.ToStdString();
+        const wxString targetShowDir = wxString::FromUTF8(request.showDirectory);
+        if (!wxFileName::DirExists(targetShowDir)) {
+            result.errorCode = "SHOW_DIRECTORY_NOT_FOUND";
+            result.errorMessage = "Show directory does not exist.";
+            return result;
+        }
+
+        if (_frame->CurrentDir == targetShowDir) {
+            result.changed = false;
+            result.showDirectory = _frame->CurrentDir.ToStdString();
+            return result;
+        }
+
+        if (_frame->CurrentSeqXmlFile != nullptr && !request.force) {
+            result.errorCode = "SEQUENCE_OPEN";
+            result.errorMessage = "A sequence is open. Pass force=true to close it and switch show directories.";
+            return result;
+        }
+
+        if ((_frame->UnsavedRgbEffectsChanges || _frame->UnsavedNetworkChanges) && !request.force) {
+            result.errorCode = "UNSAVED_CHANGES";
+            result.errorMessage = "The current show directory has unsaved layout or network changes. Pass force=true to discard them and switch show directories.";
+            return result;
+        }
+
+        if (!detail::ObtainOwnedApiAccessToPath(request.showDirectory, true)) {
+            result.errorCode = "SHOW_DIRECTORY_ACCESS_DENIED";
+            result.errorMessage = "Unable to obtain write access to the requested show directory.";
+            return result;
+        }
+
+        auto switchOnMainThread = [this, request, targetShowDir]() {
+            api::models::MediaShowDirectoryResult callbackResult;
+            callbackResult.previousShowDirectory = _frame != nullptr ? _frame->CurrentDir.ToStdString() : std::string();
+            callbackResult.showDirectory = request.showDirectory;
+            if (_frame == nullptr) {
+                callbackResult.errorCode = "VALIDATION_ERROR";
+                callbackResult.errorMessage = "xLights frame is not available.";
+                return callbackResult;
+            }
+
+            const bool hadSequence = _frame->CurrentSeqXmlFile != nullptr;
+            const bool previousRenderMode = _frame->_renderMode;
+            const bool previousPromptBatchRenderIssues = _frame->_promptBatchRenderIssues;
+            if (request.force) {
+                _frame->_renderMode = true;
+                _frame->_promptBatchRenderIssues = false;
+                if (_frame->CurrentSeqXmlFile != nullptr) {
+                    _frame->mSavedChangeCount = _frame->GetSequenceElements().GetChangeCount();
+                }
+                _frame->UnsavedRgbEffectsChanges = false;
+                _frame->UnsavedNetworkChanges = false;
+            }
+
+            const bool switched = _frame->SetDir(targetShowDir, request.permanent);
+
+            if (request.force) {
+                _frame->_renderMode = previousRenderMode;
+                _frame->_promptBatchRenderIssues = previousPromptBatchRenderIssues;
+            }
+
+            callbackResult.sequenceClosed = hadSequence && _frame->CurrentSeqXmlFile == nullptr;
+            callbackResult.showDirectory = _frame->CurrentDir.ToStdString();
+            callbackResult.changed = switched && _frame->CurrentDir == targetShowDir;
+            if (!callbackResult.changed) {
+                callbackResult.errorCode = "SHOW_DIRECTORY_SWITCH_FAILED";
+                callbackResult.errorMessage = "xLights did not switch to the requested show directory.";
+            }
+            return callbackResult;
+        };
+
+        if (wxIsMainThread()) {
+            return switchOnMainThread();
+        }
+
+        auto promise = std::make_shared<std::promise<api::models::MediaShowDirectoryResult>>();
+        auto future = promise->get_future();
+        xLightsFrame* frame = _frame;
+        frame->CallAfter([promise, switchOnMainThread]() mutable {
+            promise->set_value(switchOnMainThread());
+        });
+        if (future.wait_for(std::chrono::seconds(90)) != std::future_status::ready) {
+            result.errorCode = "SHOW_DIRECTORY_SWITCH_TIMEOUT";
+            result.errorMessage = "Timed out waiting for xLights to switch show directories.";
+            return result;
+        }
+        return future.get();
+    }
+
     [[nodiscard]] api::models::LayoutModelsSummary readLayoutModels() const {
         api::models::LayoutModelsSummary summary;
         if (_frame == nullptr) {

@@ -233,7 +233,8 @@ inline std::optional<api::transport::ApiResponse> HandleDesignerApiRequest(
         [host](const api::models::AddTimingMarksRequest& request) { return host->addTimingMarks(request); });
     api::services::MediaService mediaService(
         [host]() { return host->readCurrentMedia(); },
-        [host]() { return host->readMediaDirectories(); });
+        [host]() { return host->readMediaDirectories(); },
+        [host](const api::models::MediaShowDirectoryRequest& request) { return host->setShowDirectory(request); });
     api::services::LayoutService layoutService(
         [host]() { return host->readLayoutModels(); },
         [host]() { return host->readLayoutSubmodels(); },

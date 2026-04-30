@@ -92,6 +92,9 @@ public:
         if (request.command == "media.getDirectories") {
             return _mediaHandler.handleGetDirectories(request);
         }
+        if (request.command == "media.setShowDirectory") {
+            return _mediaHandler.handleSetShowDirectory(request);
+        }
         if (request.command == "layout.getModels") {
             return _layoutHandler.handleGetModels(request);
         }

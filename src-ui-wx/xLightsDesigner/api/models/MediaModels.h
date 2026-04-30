@@ -17,4 +17,19 @@ struct MediaDirectoriesSummary {
     std::vector<std::string> directories;
 };
 
+struct MediaShowDirectoryRequest {
+    std::string showDirectory;
+    bool force = false;
+    bool permanent = false;
+};
+
+struct MediaShowDirectoryResult {
+    bool changed = false;
+    bool sequenceClosed = false;
+    std::optional<std::string> previousShowDirectory;
+    std::optional<std::string> showDirectory;
+    std::optional<std::string> errorCode;
+    std::optional<std::string> errorMessage;
+};
+
 } // namespace xLightsDesigner::api::models
