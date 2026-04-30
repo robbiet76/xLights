@@ -732,13 +732,20 @@ bool xLightsApp::OnInit()
             sequenceFiles.Clear();
         }
 
-        if (!parser.Found("cs") && !parser.Found("r") && !parser.Found("o") && !info.empty() && readOnlyZipFile == "" && !xLightsDesigner::IsNonInteractiveLaunch())
-        {
-            wxMessageBox(info, "Information", wxICON_INFORMATION | wxOK); // pre-frame: callback not yet registered
+        if (!parser.Found("cs") && !parser.Found("r") && !parser.Found("o") && !info.empty() && readOnlyZipFile == "") {
+            if (xLightsDesigner::IsNonInteractiveLaunch()) {
+                spdlog::info("Suppressing pre-frame command line info dialog during noninteractive launch: {}", (const char*)info.c_str());
+            } else {
+                wxMessageBox(info, "Information", wxICON_INFORMATION | wxOK); // pre-frame: callback not yet registered
+            }
         }
         break;
     default:
-        wxMessageBox(_("Unrecognized command line parameters"), "Error", wxICON_ERROR | wxOK); // pre-frame: callback not yet registered
+        if (xLightsDesigner::IsNonInteractiveLaunch()) {
+            spdlog::error("Unrecognized command line parameters during noninteractive launch.");
+        } else {
+            wxMessageBox(_("Unrecognized command line parameters"), "Error", wxICON_ERROR | wxOK); // pre-frame: callback not yet registered
+        }
         return false;
     }
 
