@@ -47,12 +47,14 @@
 //#pragma comment(lib, "mfreadwrite.lib") // mfreadwrite.dll - media foundation read and write
     // MFCreateSourceReaderFromURL
     typedef DWORD (*MFCreateSourceReaderFromURL_ptr)(LPCWSTR, IMFAttributes*, IMFSourceReader**);
+#if !defined(XLIGHTS_CMAKE_BUILD)
 #pragma comment(lib, "mfuuid.lib")
-//#pragma comment(lib, "d3d11.lib") // d3d11.dll - direct 3d v11 
+#pragma comment(lib, "propsys.lib")
+#pragma comment(lib, "wmcodecdspuuid.lib")
+#endif
+//#pragma comment(lib, "d3d11.lib") // d3d11.dll - direct 3d v11
     // D3D11CreateDevice
     typedef DWORD (*D3D11CreateDevice_ptr)(IDXGIAdapter*, D3D_DRIVER_TYPE, HMODULE Software, UINT Flags, const D3D_FEATURE_LEVEL*, UINT, UINT, ID3D11Device**, D3D_FEATURE_LEVEL*, ID3D11DeviceContext**);
-#pragma comment(lib, "propsys.lib") // propsys.dll microsoft property system
-#pragma comment(lib, "wmcodecdspuuid.lib")
 
 
 #define TIME_DIV 10000

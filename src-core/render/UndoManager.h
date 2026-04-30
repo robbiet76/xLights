@@ -121,13 +121,27 @@ class UndoManager
         void CaptureEffectToBeMoved( const std::string &element_name, int layer_index, int id, int startTimeMS, int endTimeMS );
         void CaptureModifiedEffect( const std::string &element_name, int layer_index, int id, const std::string &settings, const std::string &palette );
         void CaptureModifiedEffect( const std::string &element_name, int layer_index, Effect *ef);
+
+        // Memory-cap support (iPad memory-pressure mitigation).
+        // When `maxSteps > 0`, every push onto `mUndoSteps` triggers a
+        // trim that drops the oldest steps until the vector fits. 0
+        // disables the cap (the default). The redo list isn't capped
+        // separately — it's bounded by the undo history that
+        // feeds it.
+        void SetMaxSteps(size_t maxSteps) { mMaxSteps = maxSteps; EnforceMaxSteps(); }
+        size_t GetMaxSteps() const { return mMaxSteps; }
     protected:
         void ProcessUndoStep(std::vector<UndoStep*> &fromList, std::vector<UndoStep*> &toList);
+        // Drop the oldest `mUndoSteps` entries while the vector
+        // exceeds `mMaxSteps`. Called from the end of every push-
+        // back path. No-op when `mMaxSteps == 0`.
+        void EnforceMaxSteps();
 
     private:
         std::vector<UndoStep*> mUndoSteps;
         std::vector<UndoStep*> mRedoSteps;
         SequenceElements* mParentSequence;
         bool mCaptureUndo;
+        size_t mMaxSteps = 0;
 
 };

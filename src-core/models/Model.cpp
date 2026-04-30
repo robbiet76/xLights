@@ -2012,9 +2012,9 @@ void Model::InitRenderBufferNodes(const std::string& tp, const std::string& came
             int maxDimension = ((ModelGroup*)this)->GetGridSize();
             if (maxDimension != 0 && (maxX - minX > maxDimension || maxY - minY > maxDimension)) {
                 // we need to resize all the points by this amount
-                spdlog::warn("Model Group ({}), Actual Grid Size of {} exceeded the Max Grid Size of {}.",
-                    (const char*)GetFullName().c_str(), 
-                    ((maxX - minX) > (maxY - minY) ? (maxX - minX) : (maxY - minY)), 
+                spdlog::warn("Model Group ({}), Actual Grid Size of {:.0f} exceeded the Max Grid Size of {}.",
+                    (const char*)GetFullName().c_str(),
+                    ((maxX - minX) > (maxY - minY) ? (maxX - minX) : (maxY - minY)),
                     maxDimension);
                 factor = std::max(((float)(maxX - minX)) / (float)maxDimension, ((float)(maxY - minY)) / (float)maxDimension);
                 // But if it is already smaller we dont want to make it bigger
@@ -2992,6 +2992,30 @@ void Model::DisplayModelOnWindow(IModelPreview* preview, xlGraphicsContext* ctx,
         uiCaches[cacheKey] = nullptr;
         cache = nullptr;
     }
+
+    // Depth sort applies to 3D previews with non-SQUARE pixel styles. The sort axis is
+    // the 3rd row of (ViewMatrix * ModelMatrix) — for any node at local (x, y, z) the
+    // camera-space Z is axis.dot(x, y, z) + const, so sorting nodes by that dot product
+    // gives back-to-front order for the current camera orientation.
+    const bool depthSort = is_3d && _pixelStyle != PIXEL_STYLE::PIXEL_STYLE_SQUARE;
+    glm::vec3 currentSortAxis(0.0f);
+    if (depthSort) {
+        glm::mat4 mv = preview->GetViewMatrix() * screenLocation.GetModelMatrix();
+        currentSortAxis = glm::vec3(mv[0][2], mv[1][2], mv[2][2]);
+    }
+    // Rebuild the cache if the camera has rotated enough that the baked node order no
+    // longer composites correctly. cos(~14°) ≈ 0.97 — a small enough threshold that drift
+    // during a rotation drag is hard to see, large enough to avoid rebuilding every frame.
+    if (cache != nullptr && depthSort &&
+        glm::dot(cache->viewSortAxis, cache->viewSortAxis) > 0.0f) {
+        float d = glm::dot(glm::normalize(cache->viewSortAxis),
+                           glm::normalize(currentSortAxis));
+        if (d < 0.97f) {
+            delete cache;
+            uiCaches[cacheKey] = nullptr;
+            cache = nullptr;
+        }
+    }
     if (cache == nullptr) {
         screenLocation.UpdateBoundingBox(Nodes);
         cache = new PreviewGraphicsCacheInfo();
@@ -3043,37 +3067,74 @@ void Model::DisplayModelOnWindow(IModelPreview* preview, xlGraphicsContext* ctx,
             modelPixelSize = 2.0f * (float)pixelSize * (float)preview->getBackingScaleFactor() / std::abs(length);
         }
 
-        int first = 0;
-        int last = NodeCount;
-        int buffFirst = -1;
-        int buffLast = -1;
-        bool left = true;
         int nodeRenderOrder = NodeRenderOrder();
-        // int lastChan = -999;
-        while (first < last) {
-            int n;
-            if (left) {
-                n = first;
-                first++;
-                if (nodeRenderOrder == 1) {
-                    if (buffFirst == -1) {
-                        buffFirst = Nodes[n]->Coords[0].bufX;
-                    }
-                    if (first < (int)NodeCount && buffFirst != Nodes[first]->Coords[0].bufX) {
-                        left = false;
-                    }
+        std::vector<int> nodeOrder;
+        nodeOrder.reserve(NodeCount);
+        if (depthSort) {
+            // Precompute a finite sort key per node. Doing the comparator-time work
+            // up front keeps std::sort's comparator a trivial float compare, so no
+            // NaN or pointer-chasing inside the comparator can violate strict-weak
+            // ordering (which would make libc++ read past the range and crash).
+            // Nodes with empty Coords contribute no geometry; skip them entirely.
+            const glm::vec3 axis = currentSortAxis;
+            std::vector<std::pair<float, int>> keys;
+            keys.reserve(NodeCount);
+            for (int n = 0; n < (int)NodeCount; ++n) {
+                if (Nodes[n]->Coords.empty()) {
+                    continue;
                 }
-            } else {
-                last--;
-                n = last;
-                if (buffLast == -1) {
-                    buffLast = Nodes[n]->Coords[0].bufX;
+                const auto& c = Nodes[n]->Coords[0];
+                float z = axis.x * c.screenX + axis.y * c.screenY + axis.z * c.screenZ;
+                if (!std::isfinite(z)) {
+                    z = 0.0f;
                 }
-                if (last > 0 && buffLast != Nodes[last - 1]->Coords[0].bufX) {
-                    left = true;
-                }
+                keys.emplace_back(z, n);
             }
+            // Sort ascending by camera-space Z so the farthest node (most negative Z in the
+            // OpenGL convention) renders first — i.e. back-to-front.
+            std::sort(keys.begin(), keys.end(),
+                      [](const std::pair<float, int>& a, const std::pair<float, int>& b) {
+                          return a.first < b.first;
+                      });
+            for (const auto& kv : keys) {
+                nodeOrder.push_back(kv.second);
+            }
+            cache->viewSortAxis = currentSortAxis;
+        } else {
+            int first = 0;
+            int last = NodeCount;
+            int buffFirst = -1;
+            int buffLast = -1;
+            bool left = true;
+            while (first < last) {
+                int n;
+                if (left) {
+                    n = first;
+                    first++;
+                    if (nodeRenderOrder == 1) {
+                        if (buffFirst == -1) {
+                            buffFirst = Nodes[n]->Coords[0].bufX;
+                        }
+                        if (first < (int)NodeCount && buffFirst != Nodes[first]->Coords[0].bufX) {
+                            left = false;
+                        }
+                    }
+                } else {
+                    last--;
+                    n = last;
+                    if (buffLast == -1) {
+                        buffLast = Nodes[n]->Coords[0].bufX;
+                    }
+                    if (last > 0 && buffLast != Nodes[last - 1]->Coords[0].bufX) {
+                        left = true;
+                    }
+                }
+                nodeOrder.push_back(n);
+            }
+        }
 
+        bool firstCoord = true;
+        for (int n : nodeOrder) {
             size_t CoordCount = GetCoordCount(n);
             for (size_t c2 = 0; c2 < CoordCount; ++c2) {
                 // draw node on screen
@@ -3081,13 +3142,14 @@ void Model::DisplayModelOnWindow(IModelPreview* preview, xlGraphicsContext* ctx,
                 float sy = Nodes[n]->Coords[c2].screenY;
                 float sz = Nodes[n]->Coords[c2].screenZ;
 
-                if (n == 0 && c2 == 0) {
+                if (firstCoord) {
                     cache->boundingBox[0] = sx;
                     cache->boundingBox[1] = sy;
                     cache->boundingBox[2] = sz;
                     cache->boundingBox[3] = sx;
                     cache->boundingBox[4] = sy;
                     cache->boundingBox[5] = sz;
+                    firstCoord = false;
                 } else {
                     cache->boundingBox[0] = std::min(sx, cache->boundingBox[0]);
                     cache->boundingBox[1] = std::min(sy, cache->boundingBox[1]);
@@ -3106,8 +3168,6 @@ void Model::DisplayModelOnWindow(IModelPreview* preview, xlGraphicsContext* ctx,
                     cache->vica->AddCircleAsTriangles(sx, sy, sz, ((float)modelPixelSize) / 2.0f, n, eidx, pixelSize);
                 }
             }
-
-            // lastChan = Nodes[n]->ActChan;
         }
         cache->program->addStep([=, this](xlGraphicsContext* ctx) {
             if (_pixelStyle == PIXEL_STYLE::PIXEL_STYLE_SOLID_CIRCLE || _pixelStyle == PIXEL_STYLE::PIXEL_STYLE_BLENDED_CIRCLE) {
@@ -3224,9 +3284,17 @@ void Model::GetScreenLocation(float& sx, float& sy, const NodeBaseClass::CoordSt
         } else {
             sy -= GetModelScreenLocation().RenderHt / 2.0;
         }
+        sy = ((sy * scale) + (h / 2));
+        sx = (sx * scale) + (w / 2);
+    } else {
+        // Must match DisplayEffectOnWindow's Translate(w/2 - ml*scale, h/2 - mb*scale)
+        float ml, mb;
+        GetMinScreenXY(ml, mb);
+        ml += GetModelScreenLocation().RenderWi / 2;
+        mb += GetModelScreenLocation().RenderHt / 2;
+        sx = ((sx - ml) * scale) + (w / 2);
+        sy = ((sy - mb) * scale) + (h / 2);
     }
-    sy = ((sy * scale) + (h / 2));
-    sx = (sx * scale) + (w / 2);
 }
 
 std::string Model::GetNodeNear(IModelPreview* preview, xlPoint pt, bool flip)
@@ -3544,14 +3612,20 @@ void Model::DisplayEffectOnWindow(IModelPreview* preview, double pointSize)
             // cache has the model in model coordinates
             // we need to scale/translate/etc.... to world
             ctx->PushMatrix();
-            ctx->Translate(w / 2.0f - ml * scale,
-                           h / 2.0f - mb * scale, 0.0f);
-            ctx->Scale(scale, scale, 1.0);
             if (!GetModelScreenLocation().IsCenterBased()) {
+                // Non-center-based models (e.g. polylines) have screenX/Y in [0, RenderWi/RenderHt].
+                // The inner translate centers the model at origin, so the outer translate is just
+                // the panel center — no ml/mb offset needed (ml would shift it to lower-left).
+                ctx->Translate(w / 2.0f, h / 2.0f, 0.0f);
+                ctx->Scale(scale, scale, 1.0);
                 ctx->Translate(-GetModelScreenLocation().RenderWi / 2.0,
                                GetModelScreenLocation().GetVScaleFactor() < 0 ? GetModelScreenLocation().RenderHt / 2.0 : -GetModelScreenLocation().RenderHt / 2.0,
                                0.0f);
                 ctx->Scale(1.0, GetModelScreenLocation().GetVScaleFactor(), 1.0);
+            } else {
+                ctx->Translate(w / 2.0f - ml * scale,
+                               h / 2.0f - mb * scale, 0.0f);
+                ctx->Scale(scale, scale, 1.0);
             }
             cache->program->runSteps(ctx);
             ctx->PopMatrix();
@@ -4292,7 +4366,7 @@ void Model::SaveDisplayDimensions()
 
 void Model::RestoreDisplayDimensions()
 {
-    if (!IsDmxDisplayType(DisplayAs) && DisplayAs != DisplayAsType::Image) {
+    if (!IsDmxDisplayType(DisplayAs) && DisplayAs != DisplayAsType::Image && DisplayAs != DisplayAsType::Label) {
         SetWidth(_savedWidth, true);
         // We dont want to set the height of three point models
         if (dynamic_cast<const ThreePointScreenLocation*>(&(GetModelScreenLocation())) == nullptr) {

@@ -37,7 +37,9 @@
 
 #ifdef _WIN32
 #include <winsock2.h>
+#if !defined(XLIGHTS_CMAKE_BUILD)
 #pragma comment(lib, "ws2_32.lib")
+#endif
 #else
 #include <unistd.h>
 #endif
@@ -76,8 +78,8 @@ bool OutputManager::ConvertStartChannel(const std::string sc, std::string& newsc
     auto parts = Split(sc, ':');
     if (parts.size() == 2 && parts[0].size() > 0) {
         if (isdigit(parts[0][0])) {
-            int const on = std::stoi(parts[0]);
-            int scc = std::stoi(parts[1]);
+            int const on = (int)std::strtol(parts[0].c_str(), nullptr, 10);
+            int scc = (int)std::strtol(parts[1].c_str(), nullptr, 10);
 
             if (on > 0) {
                 auto it = _conversionOutputs.begin();
@@ -112,7 +114,7 @@ bool OutputManager::ConvertStartChannel(const std::string sc, std::string& newsc
         else if (parts[0][0] == '!') {
             // output name may need to be updated
             auto const on = parts[0].substr(1);
-            int const scc = std::stoi(parts[1]);
+            int const scc = (int)std::strtol(parts[1].c_str(), nullptr, 10);
 
             for (const auto& it : _conversionOutputs) {
                 if (it.first->GetDescription_CONVERT() == on) {
@@ -1342,7 +1344,8 @@ void OutputManager::SetManyChannels(int32_t channel, unsigned char* data, size_t
     // get an iterator to the output which contains our first channel
     auto outputs = GetAllOutputs();
     auto it = outputs.begin();
-    while (*it != o && it != outputs.end()) ++it;
+    while (it != outputs.end() && *it != o) ++it;
+    if (it == outputs.end()) return;
 
     size_t left = size;
     while (left > 0 && o != nullptr) {

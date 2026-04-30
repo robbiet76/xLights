@@ -1,15 +1,18 @@
 
 #import <Foundation/Foundation.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <ImageIO/ImageIO.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
-#include "ServiceManager.h"
-#include <wx/propgrid/propgrid.h>
-#include <wx/choice.h>
-#include <wx/stattext.h>
-#include <wx/bitmap.h>
-#include <wx/sizer.h>
+#include <wx/version.h>
+#include <wx/platinfo.h>
+#include <wx/utils.h>
 
 #include <nlohmann/json.hpp>
+
+#include "ai/aiBase.h"
+#include "ai/ServiceProperty.h"
+#include "ai/ServiceManager.h"
 
 #include "utils/string_utils.h"
 #include "xLights-Swift.h"
@@ -49,20 +52,27 @@ void AppleIntelligence::LoadSettings() {
     }
 }
 
-void AppleIntelligence::PopulateLLMSettings(wxPropertyGrid* page) {
-    page->Append(new wxPropertyCategory("Apple Intelligence"));
+std::vector<ServiceProperty> AppleIntelligence::GetProperties() const {
+    std::vector<ServiceProperty> props;
+    props.push_back({ ServiceProperty::Kind::Category, {}, "Apple Intelligence", "AppleIntelligence", {}, {}, {} });
     for (auto t : GetTypes()) {
-        auto p = page->Append(new wxBoolProperty(wxString("Enable ") + aiType::TypeName(t),
-                                                  wxString("AppleIntelligence.Enable_") + aiType::TypeSettingsSuffix(t),
-                                                  IsEnabledForType(t)));
-        p->SetEditor("CheckBox");
+        props.push_back({
+            ServiceProperty::Kind::Bool,
+            std::string("AppleIntelligence.Enable_") + aiType::TypeSettingsSuffix(t),
+            std::string("Enable ") + aiType::TypeName(t),
+            "AppleIntelligence",
+            {},
+            {},
+            IsEnabledForType(t)
+        });
     }
+    return props;
 }
 
-void AppleIntelligence::SetSetting(const std::string& key, const wxVariant& value) {
+void AppleIntelligence::SetProperty(const std::string& id, bool value) {
     for (auto t : GetTypes()) {
-        if (key == std::string("AppleIntelligence.Enable_") + aiType::TypeSettingsSuffix(t)) {
-            SetEnabledForType(t, value.GetBool());
+        if (id == std::string("AppleIntelligence.Enable_") + aiType::TypeSettingsSuffix(t)) {
+            SetEnabledForType(t, value);
             return;
         }
     }
@@ -76,10 +86,10 @@ std::pair<std::string, bool> AppleIntelligence::CallLLM(const std::string& promp
 
 aiBase::AIColorPalette AppleIntelligence::GenerateColorPalette(const std::string &prompt) const {
     aiBase::AIColorPalette ret;
-    
+
     std::string res = xLights::RunAppleIntelligenceGeneratePalette(prompt);
     if (!res.empty()) {
-        
+
         try {
             // Check if the response is valid JSON
             nlohmann::json const root = nlohmann::json::parse(res);
@@ -98,23 +108,73 @@ aiBase::AIColorPalette AppleIntelligence::GenerateColorPalette(const std::string
                 }
             }
         } catch (const std::exception& ex) {
-            
+
         }
     }
     return ret;
 }
 
 
+// Encode a CGImage to an in-memory PNG byte buffer.
+static std::vector<uint8_t> CGImageToPNGBytes(CGImageRef image) {
+    std::vector<uint8_t> bytes;
+    if (!image) return bytes;
 
+    CFMutableDataRef data = CFDataCreateMutable(nullptr, 0);
+    if (!data) return bytes;
+
+    if (@available(macOS 11.0, *)) {
+        CGImageDestinationRef dest = CGImageDestinationCreateWithData(data, (__bridge CFStringRef)UTTypePNG.identifier, 1, nullptr);
+        if (!dest) {
+            CFRelease(data);
+            return bytes;
+        }
+        
+        CGImageDestinationAddImage(dest, image, nullptr);
+        if (CGImageDestinationFinalize(dest)) {
+            const uint8_t* p = CFDataGetBytePtr(data);
+            CFIndex len = CFDataGetLength(data);
+            bytes.assign(p, p + len);
+        }
+        CFRelease(dest);
+    } else {
+        // Fallback on earlier versions
+    }
+    CFRelease(data);
+    return bytes;
+}
+
+
+namespace {
+
+constexpr const char* kAppleStyleId = "AppleIntelligence.Style";
+constexpr const char* kAppleStyleCategory = "Apple Intelligence Image";
 
 class AppleIntelligenceImageGenerator : public aiBase::AIImageGenerator {
 public:
-    virtual ~AppleIntelligenceImageGenerator() {}
-    
-    virtual void generateImage(const std::string &prompt,
-                                const std::function<void(const wxBitmap &, const std::string &)> &cb) override {
-        callback = cb;
-                
+    ~AppleIntelligenceImageGenerator() override = default;
+
+    std::vector<ServiceProperty> GetProperties() const override {
+        ServiceProperty p;
+        p.kind = ServiceProperty::Kind::Choice;
+        p.id = kAppleStyleId;
+        p.label = "Style";
+        p.category = kAppleStyleCategory;
+        p.choices = { "animation", "illustration", "sketch", "emoji" };
+        p.value = style;
+        return { p };
+    }
+
+    void SetProperty(const std::string& id, const std::string& value) override {
+        if (id == kAppleStyleId) {
+            style = Lower(value);
+        }
+    }
+
+    void generateImage(const std::string &prompt,
+                       std::function<void(aiBase::AIImageResult)> cb) override {
+        callback = std::move(cb);
+
         std::string full = prompt + R"(
         MANDATORY OUTPUT REQUIREMENTS: Background: Black background (#000000) with no watermarks or border.
         The design features bold, clean outlines, simple cell-shading, and a limited vibrant color palette with clean edges and no gradients.
@@ -123,36 +183,27 @@ public:
 
         NSString *p = @(prompt.c_str());
         ImagesAsyncCaller *caller = [[ImagesAsyncCaller alloc] init];
-        
+
         [caller generateImagesWithPrompt:p fullInstructions:@(full.c_str()) style:@(style.c_str()) completionHandler:^(CGImage *result, NSString *errString) {
-            std::string err = std::string([errString UTF8String]);
+            aiBase::AIImageResult res;
+            std::string err = errString ? std::string([errString UTF8String]) : std::string();
             if (!err.empty()) {
-                callback(wxBitmap(), err);
-            } else {                
-                callback(wxBitmap(result), "");
+                res.error = err;
+            } else {
+                res.pngBytes = CGImageToPNGBytes(result);
+                if (res.pngBytes.empty()) {
+                    res.error = "Failed to encode generated image to PNG";
+                }
             }
+            if (callback) callback(std::move(res));
         }];
     }
-    virtual void addControls(wxDialog *parent, wxSizer *sizer) override {
-        wxStaticText *StaticText2 = new wxStaticText(parent, wxNewId(), _T("Style"), wxDefaultPosition, wxDefaultSize, 0, _T("ID_STATICTEXT3"));
-        sizer->Add(StaticText2, 1, wxALL|wxALIGN_CENTER_HORIZONTAL|wxALIGN_CENTER_VERTICAL, 5);
-        wxChoice *Choice1 = new wxChoice(parent, wxNewId(), wxDefaultPosition, wxDefaultSize, 0, 0, 0, wxDefaultValidator, _T("ID_CHOICE1"));
 
-        Choice1->Append(_T("Animation"));
-        Choice1->Append(_T("Illustration"));
-        Choice1->Append(_T("Sketch"));
-        Choice1->Append(_T("Emoji"));
-        sizer->Add(Choice1, 1, wxALL|wxALIGN_LEFT|wxALIGN_CENTER_VERTICAL, 5);
-        
-        Choice1->Bind(wxEVT_COMMAND_CHOICE_SELECTED, [this](wxCommandEvent& event) {
-            style = Lower(event.GetString().ToStdString());
-        });
-
-    }
-    
-    std::function<void(const wxBitmap &, const std::string &err)> callback;
+    std::function<void(aiBase::AIImageResult)> callback;
     std::string style = "animation";
 };
+
+} // namespace
 
 aiBase::AIImageGenerator *AppleIntelligence::createAIImageGenerator() const {
     return new AppleIntelligenceImageGenerator();

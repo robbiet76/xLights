@@ -10,7 +10,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include "ui/shared/utils/wxUtilities.h"
+#include "shared/utils/wxUtilities.h"
 
 namespace xLightsDesigner::api::services {
 

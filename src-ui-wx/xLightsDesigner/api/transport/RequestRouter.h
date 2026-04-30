@@ -101,6 +101,9 @@ public:
         if (request.command == "layout.getGroupMembers") {
             return _layoutHandler.handleGetGroupMembers(request);
         }
+        if (request.command == "layout.createCustomModel") {
+            return _layoutHandler.handleCreateCustomModel(request);
+        }
         if (request.command == "elements.getSummary") {
             return _elementHandler.handleGetSummary(request);
         }

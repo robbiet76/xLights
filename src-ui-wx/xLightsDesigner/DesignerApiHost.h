@@ -17,8 +17,10 @@
 #include "FSEQFile.h"
 #include "SequenceFile.h"
 #include "xLightsMain.h"
+#include "models/CustomModel.h"
 #include "models/DisplayAsType.h"
 #include "models/ModelGroup.h"
+#include "models/OutputModelManager.h"
 #include "ExternalHooks.h"
 #include "DesignerDiagnostics.h"
 #include "DesignerApiRuntime.h"
@@ -92,6 +94,21 @@ inline wxString BuildDesignerRenderedFseqPath(xLightsFrame* frame) {
     wxFileName output(frame->CurrentSeqXmlFile->GetFullPath());
     output.SetExt("fseq");
     return output.GetFullPath();
+}
+
+inline bool WaitDesignerRenderComplete(xLightsFrame* frame) {
+    if (frame == nullptr) {
+        return false;
+    }
+
+    // RenderAll schedules asynchronous render work. The owned API must not
+    // write the FSEQ until that work has populated sequence data for all frames.
+    constexpr int maxAttempts = 2400; // 60 seconds at 25ms per attempt.
+    for (int attempt = 0; attempt < maxAttempts && frame->ProgressBar != nullptr && frame->ProgressBar->IsShown(); ++attempt) {
+        wxMilliSleep(25);
+        wxYieldIfNeeded();
+    }
+    return frame->ProgressBar == nullptr || !frame->ProgressBar->IsShown();
 }
 
 inline wxString FindDesignerShowDirectoryForSequence(const std::string& sequenceFile) {
@@ -816,6 +833,9 @@ public:
 
         auto performRender = [this]() {
             _frame->RenderAll();
+            if (!detail::WaitDesignerRenderComplete(_frame)) {
+                return false;
+            }
             if (_frame->CurrentSeqXmlFile == nullptr) {
                 return false;
             }
@@ -1092,6 +1112,126 @@ public:
             summary.groups.push_back(std::move(groupSummary));
         }
         return summary;
+    }
+
+    [[nodiscard]] api::models::CreateCustomModelResult createCustomModel(const api::models::CreateCustomModelRequest& request) const {
+        return RunOnMainThread<api::models::CreateCustomModelResult>([this, request]() {
+            api::models::CreateCustomModelResult result;
+            result.modelName = request.name;
+            result.width = request.width;
+            result.height = request.height;
+            result.depth = request.depth;
+            result.nodeCount = static_cast<int>(request.nodes.size());
+
+            if (_frame == nullptr) {
+                result.errorMessage = "xLights frame is unavailable.";
+                return result;
+            }
+            if (request.name.empty()) {
+                result.errorMessage = "layout.createCustomModel requires a model name.";
+                return result;
+            }
+            if (request.width <= 0 || request.height <= 0 || request.depth <= 0) {
+                result.errorMessage = "layout.createCustomModel requires positive width, height, and depth.";
+                return result;
+            }
+            if (request.stringCount <= 0) {
+                result.errorMessage = "layout.createCustomModel requires a positive stringCount.";
+                return result;
+            }
+            if (request.nodes.empty()) {
+                result.errorMessage = "layout.createCustomModel requires at least one node.";
+                return result;
+            }
+            if (_frame->AllModels.GetModel(request.name) != nullptr && !request.overwrite) {
+                result.errorMessage = "A model with that name already exists. Set overwrite=true to replace it.";
+                return result;
+            }
+
+            std::vector<std::vector<std::vector<int>>> modelData(
+                static_cast<size_t>(request.depth),
+                std::vector<std::vector<int>>(
+                    static_cast<size_t>(request.height),
+                    std::vector<int>(static_cast<size_t>(request.width), 0)));
+            std::set<int> nodeNumbers;
+
+            for (const auto& node : request.nodes) {
+                if (node.x < 0 || node.x >= request.width ||
+                    node.y < 0 || node.y >= request.height ||
+                    node.z < 0 || node.z >= request.depth) {
+                    result.errorMessage = "Custom model node coordinate is outside the declared dimensions.";
+                    return result;
+                }
+                if (node.node <= 0) {
+                    result.errorMessage = "Custom model node numbers must be positive.";
+                    return result;
+                }
+                if (node.string <= 0 || node.string > request.stringCount) {
+                    result.errorMessage = "Custom model node string values must be between 1 and stringCount.";
+                    return result;
+                }
+                auto& cell = modelData[static_cast<size_t>(node.z)][static_cast<size_t>(node.y)][static_cast<size_t>(node.x)];
+                if (cell != 0) {
+                    result.errorMessage = "Custom model contains more than one node in the same cell.";
+                    return result;
+                }
+                cell = node.node;
+                nodeNumbers.insert(node.node);
+            }
+
+            if (nodeNumbers.size() != request.nodes.size()) {
+                result.errorMessage = "Custom model node numbers must be unique.";
+                return result;
+            }
+
+            const bool replacing = _frame->AllModels.GetModel(request.name) != nullptr;
+            if (request.dryRun) {
+                return result;
+            }
+
+            std::unique_ptr<Model> model(_frame->AllModels.CreateDefaultModel("Custom", request.startChannel.empty() ? "1" : request.startChannel));
+            auto* customModel = dynamic_cast<CustomModel*>(model.get());
+            if (customModel == nullptr) {
+                result.errorMessage = "xLights did not create a CustomModel instance.";
+                return result;
+            }
+
+            customModel->SetName(request.name);
+            customModel->SetStartChannel(request.startChannel.empty() ? "1" : request.startChannel);
+            customModel->SetNumStrings(std::max(1, request.stringCount));
+            customModel->UpdateModel(request.width, request.height, request.depth, modelData);
+            customModel->SetLayoutGroup(request.layoutGroup.empty() ? "Default" : request.layoutGroup);
+            customModel->SetPosition(request.positionX, request.positionY);
+            customModel->GetModelScreenLocation().SetMWidth(static_cast<float>(request.width));
+            customModel->GetModelScreenLocation().SetMHeight(static_cast<float>(request.height));
+            customModel->GetModelScreenLocation().SetMDepth(static_cast<float>(request.depth));
+
+            if (replacing && !_frame->AllModels.Delete(request.name)) {
+                result.errorMessage = "Existing model could not be replaced.";
+                return result;
+            }
+
+            _frame->AllModels.AddModel(model.release());
+            _frame->MarkModelsAsNeedingRender();
+            if (_frame->GetOutputModelManager() != nullptr) {
+                _frame->GetOutputModelManager()->AddASAPWork(
+                    OutputModelManager::WORK_MODELS_REWORK_STARTCHANNELS |
+                    OutputModelManager::WORK_CALCULATE_START_CHANNELS |
+                    OutputModelManager::WORK_RGBEFFECTS_CHANGE |
+                    OutputModelManager::WORK_MODELS_CHANGE_REQUIRING_RERENDER |
+                    OutputModelManager::WORK_RELOAD_MODELLIST |
+                    OutputModelManager::WORK_RELOAD_ALLMODELS |
+                    OutputModelManager::WORK_REDRAW_LAYOUTPREVIEW,
+                    "xLightsDesigner::createCustomModel",
+                    nullptr,
+                    nullptr,
+                    request.name);
+            }
+
+            result.created = !replacing;
+            result.updated = replacing;
+            return result;
+        });
     }
 
     [[nodiscard]] api::models::ElementsSummary readElements() const {

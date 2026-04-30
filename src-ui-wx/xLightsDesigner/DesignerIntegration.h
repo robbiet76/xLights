@@ -236,7 +236,8 @@ inline std::optional<api::transport::ApiResponse> HandleDesignerApiRequest(
     api::services::LayoutService layoutService(
         [host]() { return host->readLayoutModels(); },
         [host]() { return host->readLayoutSettings(); },
-        [host]() { return host->readLayoutGroupMemberships(); });
+        [host]() { return host->readLayoutGroupMemberships(); },
+        [host](const api::models::CreateCustomModelRequest& request) { return host->createCustomModel(request); });
     api::services::ElementService elementService(
         [host]() { return host->readElements(); },
         [host]() { return host->readDisplayElementOrder(); },

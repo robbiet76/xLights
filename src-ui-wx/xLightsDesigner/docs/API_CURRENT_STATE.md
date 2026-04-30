@@ -123,6 +123,7 @@ Startup gating:
 - `GET /xlightsdesigner/api/layout/scene`
 - `GET /xlightsdesigner/api/layout/settings`
 - `GET /xlightsdesigner/api/layout/group-members`
+- `POST /xlightsdesigner/api/layout/models/custom`
 
 `layout/settings` currently reports:
 - layout dirty flags
@@ -273,6 +274,16 @@ Validated:
 - `effects.addEffect`
 - `effects.getWindow`
 - `effects.applyBatch`
+
+### Layout routes
+Validated:
+- `layout.getModels`
+- `layout.getScene`
+- `layout.createCustomModel`
+
+Important contract:
+- `layout.createCustomModel` accepts body `dryRun: true`
+- dry-run requests validate and echo model metadata without mutating the layout
 
 Scale check completed:
 - `effects.applyBatch` was validated with a `100`-effect batch in one request and one job

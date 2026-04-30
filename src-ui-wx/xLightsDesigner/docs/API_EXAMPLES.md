@@ -45,6 +45,30 @@ Call `sequence/render-current` first after sequence edits so samples reflect the
 {}
 ```
 
+## Create Custom Model
+
+`POST /xlightsdesigner/api/layout/models/custom`
+
+```json
+{
+  "name": "CustomProbe",
+  "startChannel": "30001",
+  "layoutGroup": "Default",
+  "width": 1,
+  "height": 1,
+  "depth": 1,
+  "stringCount": 1,
+  "positionX": 0,
+  "positionY": 0,
+  "dryRun": true,
+  "nodes": [
+    { "x": 0, "y": 0, "z": 0, "node": 1, "string": 1 }
+  ]
+}
+```
+
+Set `dryRun` to `false` or omit it to create the model. With `dryRun: true`, the route validates the request and returns model metadata without mutating the layout.
+
 ## Timing Tracks
 
 `GET /xlightsdesigner/api/timing/tracks`

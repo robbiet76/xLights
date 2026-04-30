@@ -167,9 +167,9 @@ public:
     [[nodiscard]] virtual FaceStateData const& GetStateInfo() const { return stateInfo; };
     [[nodiscard]] virtual FaceStateNodes const& GetStateInfoNodes() const { return stateInfoNodes; };
 
-    virtual void SetFaceInfo(FaceStateData const& info) { faceInfo = info; };
+    virtual void SetFaceInfo(FaceStateData const& info) { faceInfo = info; UpdateFaceInfoNodes(); };
     virtual void SetFaceInfoNodes(FaceStateNodes const& nodes) { faceInfoNodes = nodes; };
-    virtual void SetStateInfo(FaceStateData const& info) { stateInfo = info; };
+    virtual void SetStateInfo(FaceStateData const& info) { stateInfo = info; UpdateStateInfoNodes(); };
     virtual void SetStateInfoNodes(FaceStateNodes const& nodes) { stateInfoNodes = nodes; };
 
     // Add face with data structure-based method
@@ -817,6 +817,10 @@ protected:
         bool isTransparent = false;
         float boundingBox[6] = { 0 };
         float backingScaleFactor = 1.0f;
+        // Local-space sort axis (unnormalized 3rd row of ViewMatrix*ModelMatrix)
+        // used when building the 3D depth-sorted node order. An all-zero vector
+        // means this cache was not built with depth sorting.
+        glm::vec3 viewSortAxis{ 0.0f, 0.0f, 0.0f };
     };
     std::map<std::string, PreviewGraphicsCacheInfo*> uiCaches;
     virtual void deleteUIObjects();

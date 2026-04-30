@@ -35,6 +35,7 @@ public:
         if (method == "GET" && path == "/xlightsdesigner/api/layout/scene") return "layout.getScene";
         if (method == "GET" && path == "/xlightsdesigner/api/layout/settings") return "layout.getSettings";
         if (method == "GET" && path == "/xlightsdesigner/api/layout/group-members") return "layout.getGroupMembers";
+        if (method == "POST" && path == "/xlightsdesigner/api/layout/models/custom") return "layout.createCustomModel";
         if (method == "GET" && path == "/xlightsdesigner/api/elements/summary") return "elements.getSummary";
         if (method == "GET" && path == "/xlightsdesigner/api/elements/display-order") return "elements.getDisplayOrder";
         if (method == "POST" && path == "/xlightsdesigner/api/elements/display-order") return "elements.setDisplayOrder";

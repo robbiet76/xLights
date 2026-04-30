@@ -102,6 +102,8 @@ class ValueCurve
     bool _active;
     bool _wrap;
     bool _realValues;
+    bool _hasPreloadedValues = false; // true when Random values were loaded from serialized form, skip regeneration
+    bool _hasStartEndLevel = false;   // true when P3/P4 Start/End Level was explicitly set by the user or loaded from serialized form
     std::string _audioTrackName; // "" = main; "Track1"/"Drums"/etc = alt
     static AudioManager* __audioManager;
     static std::map<std::string, AudioManager*> __altAudioManagers;
@@ -133,6 +135,8 @@ public:
 
     void SetAudioTrack(const std::string& name) { _audioTrackName = name; }
     std::string GetAudioTrack() const { return _audioTrackName; }
+    void SetStartEndLevelActive(bool v) { _hasStartEndLevel = v; }
+    bool IsStartEndLevelActive() const { return _hasStartEndLevel; }
 
     ValueCurve() { _divisor = 1; _min = MINVOIDF; _max = MAXVOIDF; SetDefault(); }
     ValueCurve(const std::string& serialised);
@@ -178,10 +182,10 @@ public:
     std::string GetFilterLabelText() const { return _filterLabelText; }
     bool IsFilterLabelRegex() const { return _isFilterLabelRegex; }
     std::string GetTimingTrack() const { return _timingTrack; }
-    void SetParameter1(float parameter1) { _parameter1 = SafeParameter(1, parameter1); RenderType(); }
-    void SetParameter2(float parameter2) { _parameter2 = SafeParameter(2, parameter2); RenderType(); }
-    void SetParameter3(float parameter3) { _parameter3 = SafeParameter(3, parameter3); RenderType(); }
-    void SetParameter4(float parameter4) { _parameter4 = SafeParameter(4, parameter4); RenderType(); }
+    void SetParameter1(float parameter1) { _hasPreloadedValues = false; _parameter1 = SafeParameter(1, parameter1); RenderType(); }
+    void SetParameter2(float parameter2) { _hasPreloadedValues = false; _parameter2 = SafeParameter(2, parameter2); RenderType(); }
+    void SetParameter3(float parameter3) { _hasPreloadedValues = false; _parameter3 = SafeParameter(3, parameter3); RenderType(); }
+    void SetParameter4(float parameter4) { _hasPreloadedValues = false; _parameter4 = SafeParameter(4, parameter4); RenderType(); }
     void SetTimeOffset(int timeOffset) { _timeOffset = timeOffset; RenderType(); }
     void SetWrap(bool wrap);
     int GetTimeOffset() const { return _timeOffset; }

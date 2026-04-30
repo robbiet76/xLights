@@ -44,8 +44,6 @@ xlCrashHandler::xlCrashHandler(std::string const& appName) :
 
 void xlCrashHandler::HandleCrash(bool const isFatalException, std::string const& msg)
 {
-    
-
     if (!isFatalException) {
         spdlog::warn("Non fatal exception: {}", msg);
     } else {
@@ -141,25 +139,11 @@ void xlCrashHandler::HandleCrash(bool const isFatalException, std::string const&
             report.AddText("backtrace.txt", backtrace_txt, "Backtrace");
             spdlog::critical("{}", backtrace_txt.ToStdString());
 
-            std::string const logFileName = m_appName + "_spdlog.log";
-#ifdef __WXMSW__
-            wxString dir;
-            wxGetEnv("APPDATA", &dir);
-            std::string const logFilePath = std::string(dir.c_str()) + "/" + logFileName;
-#endif
-#ifdef __WXOSX__
-            wxFileName home;
-            home.AssignHomeDir();
-            wxString const dir = home.GetFullPath();
-            std::string const logFilePath = std::string(dir.c_str()) + "/Library/Logs/" + logFileName;
-#endif
-#ifdef __LINUX__
-            std::string const logFilePath = "/tmp/" + logFileName;
-#endif
-
+            std::string const logFilePath = GetLogFilePath().string();
+            std::string const logFileName = GetLogFileName();
             xlFrame* const topFrame = GetTopWindow();
             if (FileExists(logFilePath)) {
-                report.AddFile(logFilePath, logFileName.c_str());
+                report.AddFile(logFilePath, logFileName);
             } else if ((topFrame != nullptr) && FileExists(wxFileName(topFrame->GetCurrentDir(), logFileName.c_str()).GetFullPath())) {
                 report.AddFile(wxFileName(topFrame->GetCurrentDir(), logFileName.c_str()).GetFullPath(), logFileName.c_str());
             } else if (FileExists(wxFileName(wxGetCwd(), logFileName.c_str()).GetFullPath())) {

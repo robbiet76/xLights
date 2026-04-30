@@ -15,6 +15,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 
 #include <log.h>
 
@@ -41,18 +42,33 @@ MediaCacheEntry::MediaCacheEntry(MediaType type, const std::string& path, const 
 MediaCacheEntry::~MediaCacheEntry() {}
 
 void MediaCacheEntry::LoadRawFromFile(const std::string& filepath) {
-    ObtainAccessToURL(filepath);
-    FileExists(filepath, true);
+    bool accessOK = ObtainAccessToURL(filepath);
+    bool exists = FileExists(filepath, true);
     std::ifstream stream(filepath, std::ios::binary | std::ios::ate);
     if (stream.is_open()) {
         auto size = stream.tellg();
-        if (size <= 0) return;
+        if (size <= 0) {
+            spdlog::warn("MediaCacheEntry::LoadRawFromFile: 0-byte file '{}'", filepath);
+            return;
+        }
         stream.seekg(0);
         std::vector<uint8_t> buffer(static_cast<size_t>(size));
         stream.read(reinterpret_cast<char*>(buffer.data()), size);
-        if (!stream) return;
+        if (!stream) {
+            spdlog::warn("MediaCacheEntry::LoadRawFromFile: read failed for '{}'", filepath);
+            return;
+        }
         _embeddedData = Base64::Encode(buffer.data(), buffer.size());
         RecordFileTimestamp();
+    } else {
+        // Surface the failure so sandbox / path-resolution regressions
+        // are visible in the log instead of showing up only as the
+        // red-pixel fallback from PicturesEffect. Logs the flags we
+        // care about so we can tell whether the problem was access
+        // (sandbox), existence (path wrong), or something else.
+        spdlog::warn("MediaCacheEntry::LoadRawFromFile: could not open '{}' "
+                     "(ObtainAccessToURL={}, FileExists={}, errno={})",
+                     filepath, accessOK, exists, errno);
     }
 }
 
@@ -141,7 +157,6 @@ void MediaCacheEntry::ReloadIfChanged() {
 // ImageCacheEntry Implementation
 // =====================================================================
 
-AnimationLoaderFunc ImageCacheEntry::_gifLoader;
 AnimationLoaderFunc ImageCacheEntry::_webpLoader;
 
 ImageCacheEntry::ImageCacheEntry() : MediaCacheEntry(MediaType::Image) {
@@ -213,7 +228,7 @@ void ImageCacheEntry::ReloadIfChanged() {
 void ImageCacheEntry::LoadFromData(const std::string& data) {
     std::vector<uint8_t> buffer = Base64::Decode(data);
     if (buffer.size() >= 4 && buffer[0] == 'G' && buffer[1] == 'I' && buffer[2] == 'F') {
-        loadAnimated(buffer, _gifLoader);
+        storeAnimated(LoadAnimatedGIFFromMemory(buffer.data(), buffer.size()));
     } else if (buffer.size() >= 12 && buffer[0] == 'R' && buffer[1] == 'I' && buffer[2] == 'F' && buffer[3] == 'F'
                && buffer[8] == 'W' && buffer[9] == 'E' && buffer[10] == 'B' && buffer[11] == 'P') {
         loadAnimated(buffer, _webpLoader);
@@ -316,12 +331,7 @@ int ImageCacheEntry::GetExifOrientation(const uint8_t* data, size_t maxLen) {
     return 1; // default
 }
 
-void ImageCacheEntry::loadAnimated(const std::vector<uint8_t> &data, const AnimationLoaderFunc &loader) {
-    if (!loader) {
-        spdlog::warn("Animation loader not registered, cannot load: {}", _filePath);
-        return;
-    }
-    auto result = loader(data.data(), data.size(), _filePath);
+void ImageCacheEntry::storeAnimated(AnimatedImageData result) {
     if (result.frames.empty()) return;
 
     _imageCount = (int)result.frames.size();
@@ -349,6 +359,14 @@ void ImageCacheEntry::loadAnimated(const std::vector<uint8_t> &data, const Anima
         _frameTimes[0] = 0;
     }
     _frameBasedAnimation = _imageCount <= 1;
+}
+
+void ImageCacheEntry::loadAnimated(const std::vector<uint8_t> &data, const AnimationLoaderFunc &loader) {
+    if (!loader) {
+        spdlog::warn("Animation loader not registered, cannot load: {}", _filePath);
+        return;
+    }
+    storeAnimated(loader(data.data(), data.size(), _filePath));
 }
 
 void ImageCacheEntry::loadImage(const std::vector<uint8_t> &data) {
@@ -560,17 +578,15 @@ std::shared_ptr<ImageCacheEntry> SequenceMedia::GetImage(const std::string& file
         return ret;
     }
 
-    // For relative paths, resolve to an absolute path using FileUtils::FixFile so the
-    // entry can be loaded from disk.  The cache key stays as the relative path.
-    std::string loadPath = filepath;
-    if (!std::filesystem::path(filepath).is_absolute()) {
-        std::string resolved = FileUtils::FixFile("", filepath);
-        if (!resolved.empty())
-            loadPath = resolved;
-    }
+    // Resolve to an absolute (and existing) path using FileUtils::FixFile so
+    // the entry can be loaded from disk. Absolute paths go through FixFile too
+    // -- sequences moved between machines keep their saved absolute paths, and
+    // FixFile re-resolves them against the current show/media folders. The
+    // cache key stays as the original path.
+    std::string loadPath = ResolvePath(filepath);
     // Check if the resolved path matches an existing entry
     for (auto& [key, entry] : _imageCache) {
-        if (entry->GetFilePath() == loadPath || (!std::filesystem::path(key).is_absolute() ? FileUtils::FixFile("", key) : key) == loadPath) {
+        if (entry->GetFilePath() == loadPath || ResolvePath(key) == loadPath) {
             if (!entry->isLoaded()) {
                 lock.unlock();
                 entry->Load();
@@ -584,6 +600,17 @@ std::shared_ptr<ImageCacheEntry> SequenceMedia::GetImage(const std::string& file
     lock.unlock();
 
     np->Load();
+    // Surface resolution failures in the log — the pictures effect
+    // otherwise just shows a red frame with no indication why.
+    // Desktop historically relied on the file-picker + user vetting,
+    // so this path is quiet; on iPad the path can mis-resolve
+    // (sandbox, missing bookmark, desktop-saved absolute path with no
+    // matching file in the show folder) and we need visibility.
+    if (!np->IsOk()) {
+        spdlog::warn("SequenceMedia::GetImage: not OK after load. "
+                     "requested='{}' resolved='{}'",
+                     filepath, loadPath);
+    }
     return np;
 }
 
@@ -600,15 +627,9 @@ void SequenceMedia::RemoveImage(const std::string& filepath)
 }
 
 void SequenceMedia::AddAnimatedImage(const std::string& filepath, int msFrameTime) {
-    // Resolve relative paths the same way GetImage does, so FileExists and
-    // LoadFile operate on a valid absolute path.
-    std::string loadPath = filepath;
-    if (!std::filesystem::path(filepath).is_absolute()) {
-        std::string resolved = FileUtils::FixFile("", filepath);
-        if (!resolved.empty()) {
-            loadPath = resolved;
-        }
-    }
+    // Resolve paths the same way GetImage does, so FileExists and LoadFile
+    // operate on a valid absolute path.
+    std::string loadPath = ResolvePath(filepath);
     std::filesystem::path loadFsPath(loadPath);
     std::string extension = loadFsPath.extension().string();
     std::string stemStr = loadFsPath.stem().string();
@@ -643,6 +664,38 @@ void SequenceMedia::Clear()
     _shaderCache.clear();
     _binaryCache.clear();
     _videoCache.clear();
+    _audioCache.clear();
+}
+
+void SequenceMedia::PurgePreviewCaches()
+{
+    std::scoped_lock lock(_cacheMutex);
+    // Every MediaCacheEntry holds `_previewFrames` — the scaled
+    // thumbnails built by `GeneratePreview` for the media picker
+    // and effect panels. Those dominate the UI-side memory; drop
+    // them first. On rebuild, the media picker re-requests with
+    // the current layout bounds.
+    for (auto& [path, entry] : _imageCache) {
+        if (entry) {
+            entry->ClearPreview();
+            entry->ClearScaledImageCache();
+        }
+    }
+    for (auto& [path, entry] : _textCache) {
+        if (entry) entry->ClearPreview();
+    }
+    for (auto& [path, entry] : _svgCache) {
+        if (entry) entry->ClearPreview();
+    }
+    for (auto& [path, entry] : _shaderCache) {
+        if (entry) entry->ClearPreview();
+    }
+    for (auto& [path, entry] : _binaryCache) {
+        if (entry) entry->ClearPreview();
+    }
+    for (auto& [path, entry] : _videoCache) {
+        if (entry) entry->ClearPreview();
+    }
 }
 
 void SequenceMedia::EmbedImage(const std::string& filepath)
@@ -757,6 +810,42 @@ bool SequenceMedia::RenameImage(const std::string& oldPath, const std::string& n
     return true;
 }
 
+bool SequenceMedia::RenameMedia(const std::string& oldPath, const std::string& newPath)
+{
+    if (oldPath == newPath) return true;
+    std::scoped_lock lock(_cacheMutex);
+
+    // Generic re-key across every cache. Mirrors RenameImage's
+    // shape — keep the entry alive, swap the map key, update the
+    // entry's stored file path. Same collision check as the
+    // image-specific version: refuse if newPath already has an
+    // entry of any type. That avoids merging two distinct entries
+    // into one.
+    auto rekey = [&](auto& cache) -> int {
+        auto it = cache.find(oldPath);
+        if (it == cache.end()) return 0; // not in this cache
+        auto entry = it->second;
+        entry->SetFilePath(newPath);
+        cache.erase(it);
+        cache.emplace(newPath, entry);
+        return 1;
+    };
+
+    if (HasMedia(newPath)) return false;
+
+    // Try each cache; first hit wins. HasMedia above guarantees
+    // newPath collides in none of them, so we don't need to
+    // double-check per cache.
+    if (rekey(_imageCache))  return true;
+    if (rekey(_svgCache))    return true;
+    if (rekey(_shaderCache)) return true;
+    if (rekey(_textCache))   return true;
+    if (rekey(_binaryCache)) return true;
+    if (rekey(_videoCache))  return true;
+    if (rekey(_audioCache))  return true;
+    return false;
+}
+
 // --- pugixml implementations ---
 
 bool SequenceMedia::LoadFromXml(const pugi::xml_node& node)
@@ -772,6 +861,7 @@ bool SequenceMedia::LoadFromXml(const pugi::xml_node& node)
     _shaderCache.clear();
     _binaryCache.clear();
     _videoCache.clear();
+    _audioCache.clear();
 
     for (auto child : node.children()) {
         std::string name = child.name();
@@ -807,6 +897,11 @@ bool SequenceMedia::LoadFromXml(const pugi::xml_node& node)
             if (entry->LoadFromXml(child)) {
                 _videoCache[entry->GetFilePath()] = entry;
             }
+        } else if (name == "Audio") {
+            auto entry = std::make_shared<AudioMediaCacheEntry>();
+            if (entry->LoadFromXml(child)) {
+                _audioCache[entry->GetFilePath()] = entry;
+            }
         }
     }
 
@@ -835,6 +930,13 @@ void SequenceMedia::SaveToXml(pugi::xml_node& parent) const
 
     // Videos are path-only (not embedded) — only save used entries
     for (const auto& pair : _videoCache) {
+        if (pair.second->IsUsed()) {
+            pair.second->SaveToXml(node);
+        }
+    }
+
+    // Audio files are path-only — only save used entries
+    for (const auto& pair : _audioCache) {
         if (pair.second->IsUsed()) {
             pair.second->SaveToXml(node);
         }
@@ -889,6 +991,9 @@ void SequenceMedia::MarkAllUnused() {
         pair.second->MarkIsUsed(false);
     }
     for (const auto& pair : _videoCache) {
+        pair.second->MarkIsUsed(false);
+    }
+    for (const auto& pair : _audioCache) {
         pair.second->MarkIsUsed(false);
     }
 }
@@ -1205,14 +1310,12 @@ VideoMediaCacheEntry::VideoMediaCacheEntry(const std::string& filePath)
 void VideoMediaCacheEntry::Load() {
     std::scoped_lock lock(_cacheMutex);
     if (!_loadingDone) {
-        // Videos are path-only: resolve to absolute path for VideoReader
-        _resolvedPath = _filePath;
-        if (!std::filesystem::path(_filePath).is_absolute()) {
-            std::string resolved = FileUtils::FixFile("", _filePath);
-            if (!resolved.empty()) {
-                _resolvedPath = resolved;
-            }
-        }
+        // Videos are path-only: resolve to an absolute (and existing) path
+        // for VideoReader. Absolute paths go through FixFile too so sequences
+        // saved on another machine get their paths re-resolved against the
+        // current show/media folders.
+        std::string resolved = FileUtils::FixFile("", _filePath);
+        _resolvedPath = resolved.empty() ? _filePath : resolved;
         RecordFileTimestamp();
         _loadingDone = true;
     }
@@ -1248,6 +1351,28 @@ std::shared_ptr<xlImage> VideoMediaCacheEntry::GetThumbnail(int maxWidth, int ma
     return _thumbnail;
 }
 
+int VideoMediaCacheEntry::GetDurationMS() {
+    int cached = _durationMS.load();
+    if (cached >= 0) return cached;
+
+    std::string path;
+    {
+        std::scoped_lock lock(_cacheMutex);
+        path = _resolvedPath;
+    }
+    if (path.empty() || !FileExists(path)) {
+        _durationMS.store(0);
+        return 0;
+    }
+    // Static VideoReader probe — doesn't open decoders, just reads
+    // the container header. Much cheaper than constructing a full
+    // VideoReader when duration is the only thing needed.
+    long ms = VideoReader::GetVideoLength(path);
+    int val = (ms > 0 && ms < std::numeric_limits<int>::max()) ? (int)ms : 0;
+    _durationMS.store(val);
+    return val;
+}
+
 void VideoMediaCacheEntry::GeneratePreview(int maxWidth, int maxHeight) {
     {
         std::scoped_lock lock(_cacheMutex);
@@ -1274,6 +1399,9 @@ void VideoMediaCacheEntry::GeneratePreview(int maxWidth, int maxHeight) {
 
     // Extract first 1 second of frames at 50ms intervals
     int lengthMS = reader.GetLengthMS();
+    // Free side-effect: cache the full duration here so a subsequent
+    // `GetDurationMS()` doesn't have to reopen the file.
+    _durationMS.store(lengthMS > 0 ? lengthMS : 0);
     int maxMS = std::min(lengthMS, 1000);
     int frameTimeMS = 50;
 
@@ -1314,13 +1442,46 @@ void VideoMediaCacheEntry::SaveToXml(pugi::xml_node& parent) const {
 }
 
 // =====================================================================
+// AudioMediaCacheEntry Implementation
+// =====================================================================
+
+AudioMediaCacheEntry::AudioMediaCacheEntry()
+    : MediaCacheEntry(MediaType::Audio) {}
+
+AudioMediaCacheEntry::AudioMediaCacheEntry(const std::string& filePath)
+    : MediaCacheEntry(MediaType::Audio, filePath) {}
+
+void AudioMediaCacheEntry::Load() {
+    // Audio data is loaded by AudioManager in SequenceFile, not here.
+    // Just mark loading done so IsOk() returns true for path-valid entries.
+    _loadingDone = true;
+}
+
+bool AudioMediaCacheEntry::LoadFromXml(const pugi::xml_node& node) {
+    if (!node || strcmp(node.name(), "Audio") != 0) return false;
+    _filePath = node.attribute("path").as_string("");
+    return !_filePath.empty();
+}
+
+void AudioMediaCacheEntry::SaveToXml(pugi::xml_node& parent) const {
+    // Audio files are never embedded — track by path only
+    auto node = parent.append_child("Audio");
+    node.append_attribute("path") = _filePath;
+}
+
+// =====================================================================
 // SequenceMedia — New type-specific retrieval methods
 // =====================================================================
 
 std::string SequenceMedia::ResolvePath(const std::string& filepath) {
-    if (!std::filesystem::path(filepath).is_absolute()) {
-        std::string resolved = FileUtils::FixFile("", filepath);
-        if (!resolved.empty()) return resolved;
+    // Absolute paths also go through FixFile so sequences saved on a different
+    // machine (e.g. desktop-saved sequence opened on iPad) get their embedded
+    // absolute paths re-resolved against the current show/media folders.
+    // FixFile's fast path is FileExists(file, false) → early return, so
+    // untouched paths stay cheap on desktop.
+    std::string resolved = FileUtils::FixFile("", filepath);
+    if (!resolved.empty()) {
+        return resolved;
     }
     return filepath;
 }
@@ -1468,6 +1629,35 @@ std::shared_ptr<VideoMediaCacheEntry> SequenceMedia::GetVideo(const std::string&
     return np;
 }
 
+std::shared_ptr<AudioMediaCacheEntry> SequenceMedia::GetAudio(const std::string& filepath) {
+    if (filepath.empty()) return nullptr;
+    std::unique_lock lock(_cacheMutex);
+    auto it = _audioCache.find(filepath);
+    if (it != _audioCache.end()) {
+        auto ret = it->second;
+        if (!ret->isLoaded()) {
+            lock.unlock();
+            ret->Load();
+        }
+        ret->ReloadIfChanged();
+        return ret;
+    }
+    // Check if the resolved path matches an existing entry
+    std::string resolved = ResolvePath(filepath);
+    for (auto& [key, entry] : _audioCache) {
+        if (entry->GetFilePath() == resolved || ResolvePath(key) == resolved) {
+            if (!entry->isLoaded()) { lock.unlock(); entry->Load(); }
+            entry->ReloadIfChanged();
+            return entry;
+        }
+    }
+    auto np = std::make_shared<AudioMediaCacheEntry>(filepath);
+    _audioCache.emplace(filepath, np);
+    lock.unlock();
+    np->Load();
+    return np;
+}
+
 // =====================================================================
 // SequenceMedia — Cross-type queries
 // =====================================================================
@@ -1476,7 +1666,8 @@ bool SequenceMedia::HasMedia(const std::string& filepath) const {
     std::scoped_lock lock(_cacheMutex);
     return _imageCache.count(filepath) || _textCache.count(filepath) ||
            _svgCache.count(filepath) || _shaderCache.count(filepath) ||
-           _binaryCache.count(filepath) || _videoCache.count(filepath);
+           _binaryCache.count(filepath) || _videoCache.count(filepath) ||
+           _audioCache.count(filepath);
 }
 
 std::pair<bool, bool> SequenceMedia::GetMediaEmbedState(const std::string& filepath) const {
@@ -1493,6 +1684,7 @@ std::pair<bool, bool> SequenceMedia::GetMediaEmbedState(const std::string& filep
     if (auto r = checkCache(_shaderCache)) return *r;
     if (auto r = checkCache(_binaryCache)) return *r;
     if (auto r = checkCache(_videoCache)) return *r;
+    if (auto r = checkCache(_audioCache)) return *r;
     return { false, false };
 }
 
@@ -1504,6 +1696,7 @@ void SequenceMedia::RemoveMedia(const std::string& filepath) {
     _shaderCache.erase(filepath);
     _binaryCache.erase(filepath);
     _videoCache.erase(filepath);
+    _audioCache.erase(filepath);
 }
 
 bool SequenceMedia::ReloadMedia(const std::string& filepath) {
@@ -1548,26 +1741,34 @@ bool SequenceMedia::ReloadMedia(const std::string& filepath) {
         GetVideo(filepath);
         return true;
     }
+    if (found(_audioCache)) {
+        _audioCache.erase(filepath);
+        GetAudio(filepath);
+        return true;
+    }
     return false;
 }
 
 size_t SequenceMedia::GetMediaCount() const {
     std::scoped_lock lock(_cacheMutex);
     return _imageCache.size() + _textCache.size() + _svgCache.size() +
-           _shaderCache.size() + _binaryCache.size() + _videoCache.size();
+           _shaderCache.size() + _binaryCache.size() + _videoCache.size() +
+           _audioCache.size();
 }
 
 std::vector<std::pair<std::string, MediaType>> SequenceMedia::GetAllMediaPaths() const {
     std::scoped_lock lock(_cacheMutex);
     std::vector<std::pair<std::string, MediaType>> paths;
     paths.reserve(_imageCache.size() + _textCache.size() + _svgCache.size() +
-                   _shaderCache.size() + _binaryCache.size() + _videoCache.size());
+                   _shaderCache.size() + _binaryCache.size() + _videoCache.size() +
+                   _audioCache.size());
     for (const auto& p : _imageCache) paths.emplace_back(p.first, MediaType::Image);
     for (const auto& p : _svgCache) paths.emplace_back(p.first, MediaType::SVG);
     for (const auto& p : _shaderCache) paths.emplace_back(p.first, MediaType::Shader);
     for (const auto& p : _textCache) paths.emplace_back(p.first, MediaType::TextFile);
     for (const auto& p : _binaryCache) paths.emplace_back(p.first, MediaType::BinaryFile);
     for (const auto& p : _videoCache) paths.emplace_back(p.first, MediaType::Video);
+    for (const auto& p : _audioCache) paths.emplace_back(p.first, MediaType::Audio);
     return paths;
 }
 

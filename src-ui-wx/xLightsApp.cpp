@@ -1,4 +1,4 @@
-/***************************************************************
+ /***************************************************************
  * This source files comes from the xLights project
  * https://www.xlights.org
  * https://github.com/xLightsSequencer/xLights
@@ -39,11 +39,11 @@
 #include "xLightsDesigner/DesignerIntegration.h"
 #include "xLightsDesigner/DesignerLaunchPolicy.h"
 #include "UtilFunctions.h"
-#include "ui/shared/utils/wxUtilities.h"
+#include "shared/utils/wxUtilities.h"
 #include "settings/XLightsConfigAdapter.h"
 #include "utils/TraceLog.h"
 #include "utils/ExternalHooks.h"
-#include "ui/shared/utils/BitmapCache.h"
+#include "shared/utils/BitmapCache.h"
 #include "utils/CurlManager.h"
 #include "render/SequencePackage.h"
 #include "utils/AppCallbacks.h"
@@ -62,7 +62,7 @@
 #include <GL/glut.h>
 #endif
 
-#ifdef _MSC_VER
+#if defined(_MSC_VER) && !defined(XLIGHTS_CMAKE_BUILD)
 #ifdef _DEBUG
     #pragma comment(lib, "wxbase" WXWIDGETS_VERSION "ud.lib")
     #pragma comment(lib, "wxbase" WXWIDGETS_VERSION "ud_net.lib")
@@ -151,21 +151,13 @@ void InitialiseLogging(bool fromMain)
     static bool loggingInitialised = false;
 
     if (!loggingInitialised) {
-        std::string const logFileName = "xLights_spdlog.log";
-#ifdef __WXMSW__
-        wxString dir;
-        wxGetEnv("APPDATA", &dir);
-        std::string const logFilePath = std::string(dir.c_str()) + "\\" + logFileName;
-#endif
-#ifdef __WXOSX__
-        wxFileName home;
-        home.AssignHomeDir();
-        wxString const dir = home.GetFullPath();
-        std::string const logFilePath = std::string(dir.c_str()) + "/Library/Logs/" + logFileName;
-#endif
-#ifdef __LINUX__
-        std::string const logFilePath = "/tmp/" + logFileName;
-#endif
+        // Stash the exe directory so SpecialOptions can find special.options
+        // next to the binary even before the show folder is chosen.
+        SpecialOptions::StashExeDir(
+            wxFileName(wxStandardPaths::Get().GetExecutablePath()).GetPath().ToStdString());
+
+        std::string const logFilePath = GetLogFilePath().string();
+
 
         // wxStandardPaths::Get().Get()
 
@@ -213,21 +205,17 @@ void InitialiseLogging(bool fromMain)
 
 void ApplyLoggingSpecialOptions()
 {
-    static bool levelsApplied = false;
-    if (!levelsApplied) {
-        levelsApplied = true;
-        auto applyLevel = [](const std::string& name, const std::string& option, const std::string& defaultLevel) {
-            std::string level = SpecialOptions::GetOption(option, defaultLevel);
-            spdlog::get(name)->set_level(spdlog::level::from_str(level));
-            spdlog::info("Logger '{}' level set to '{}'", name, level);
-        };
-        applyLevel("xLights", "xLights_logger", "info");
-        applyLevel("render", "render_logger", "warn");
-        applyLevel("curl",   "curl_logger",   "info");
-        applyLevel("opengl", "opengl_logger", "info");
-        applyLevel("job",    "job_logger",    "info");
-        applyLevel("work",   "work_logger",   "info");
-    }
+    auto applyLevel = [](const std::string& name, const std::string& option, const std::string& defaultLevel) {
+        std::string level = SpecialOptions::GetOption(option, defaultLevel);
+        spdlog::get(name)->set_level(spdlog::level::from_str(level));
+        spdlog::info("Logger '{}' level set to '{}'", name, level);
+    };
+    applyLevel("xLights", "xLights_logger", "info");
+    applyLevel("render", "render_logger", "warn");
+    applyLevel("curl",   "curl_logger",   "info");
+    applyLevel("opengl", "opengl_logger", "info");
+    applyLevel("job",    "job_logger",    "info");
+    applyLevel("work",   "work_logger",   "info");
 
     if (SpecialOptions::GetOption("console_logger", "false") != "true") return;
 
@@ -567,6 +555,18 @@ bool xLightsApp::OnInit()
     InitializeXLightsConfig();
     DumpConfig();
 
+    // Stash the remembered show folder so show-folder special.options is applied
+    // before the frame is constructed. InitialiseLogging() only knew the exe folder;
+    // this re-applies logger levels now that the show folder is known.
+    {
+        wxString lastDir;
+        if (GetXLightsConfig()->Read("LastDir", &lastDir) && !lastDir.IsEmpty()) {
+            SpecialOptions::StashShowDir(lastDir.ToStdString());
+            SpecialOptions::GetOption("", ""); // reset cache to pick up show folder
+            ApplyLoggingSpecialOptions();
+        }
+    }
+
     int id = (int)wxThread::GetCurrentId();
     spdlog::info("Main thread id: 0x{:x} or {}", id, id);
 
@@ -682,9 +682,13 @@ bool xLightsApp::OnInit()
         if (parser.Found("s", &showDir)) {
             spdlog::info("-s: Show directory set to {}.", (const char*)showDir.c_str());
             wxString lastDir;
-            wxConfigBase::Get()->Read("LastDir", &lastDir);
+            GetXLightsConfig()->Read("LastDir", &lastDir);
             if (lastDir != showDir) {
                 info += _("Setting show directory to ") + showDir + "\n";
+                // re-apply logging with the command-line show dir overriding LastDir
+                SpecialOptions::StashShowDir(showDir.ToStdString());
+                SpecialOptions::GetOption("", "");
+                ApplyLoggingSpecialOptions();
             }
         }
 
@@ -732,13 +736,20 @@ bool xLightsApp::OnInit()
             sequenceFiles.Clear();
         }
 
-        if (!parser.Found("cs") && !parser.Found("r") && !parser.Found("o") && !info.empty() && readOnlyZipFile == "" && !xLightsDesigner::IsNonInteractiveLaunch())
-        {
-            wxMessageBox(info, "Information", wxICON_INFORMATION | wxOK); // pre-frame: callback not yet registered
+        if (!parser.Found("cs") && !parser.Found("r") && !parser.Found("o") && !info.empty() && readOnlyZipFile == "") {
+            if (xLightsDesigner::IsNonInteractiveLaunch()) {
+                spdlog::info("Suppressing pre-frame command line info dialog during noninteractive launch: {}", (const char*)info.c_str());
+            } else {
+                wxMessageBox(info, "Information", wxICON_INFORMATION | wxOK); // pre-frame: callback not yet registered
+            }
         }
         break;
     default:
-        wxMessageBox(_("Unrecognized command line parameters"), "Error", wxICON_ERROR | wxOK); // pre-frame: callback not yet registered
+        if (xLightsDesigner::IsNonInteractiveLaunch()) {
+            spdlog::error("Unrecognized command line parameters during noninteractive launch.");
+        } else {
+            wxMessageBox(_("Unrecognized command line parameters"), "Error", wxICON_ERROR | wxOK); // pre-frame: callback not yet registered
+        }
         return false;
     }
 

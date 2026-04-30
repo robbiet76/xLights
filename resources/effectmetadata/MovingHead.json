@@ -77,7 +77,26 @@
             "description": "Encoded definition string for the movement path. Defines waypoints and curves that the moving head beam follows over time.",
             "type": "string",
             "controlType": "text",
+            "platform": "desktop",
             "default": ""
+        },
+        {
+            "id": "MHFixtures",
+            "label": "",
+            "type": "string",
+            "controlType": "custom",
+            "platform": "ipad",
+            "default": "",
+            "description": "iPad-only fixture selection: eight toggles for Moving Head slots 1-8. Each toggle flips the matching MH*_Settings entry between active and empty. Position slider changes (Pan / Tilt / Offsets / Groupings / Cycles) automatically re-sync into every active fixture. Colour / Dimmer / Path authoring still requires desktop's Effect Assist panel."
+        },
+        {
+            "id": "MHIpadInfo",
+            "label": "",
+            "type": "string",
+            "controlType": "custom",
+            "platform": "ipad",
+            "default": "",
+            "description": "iPad-only explanatory banner for the Moving Head inspector."
         },
         {
             "id": "MHPathScale",
@@ -133,6 +152,7 @@
             "description": "Per-fixture override settings for moving head fixture 1. Stores individual pan, tilt, and other parameters that differ from the group defaults.",
             "type": "string",
             "controlType": "text",
+            "platform": "desktop",
             "default": ""
         },
         {
@@ -141,6 +161,7 @@
             "description": "Per-fixture override settings for moving head fixture 2.",
             "type": "string",
             "controlType": "text",
+            "platform": "desktop",
             "default": ""
         },
         {
@@ -149,6 +170,7 @@
             "description": "Per-fixture override settings for moving head fixture 3.",
             "type": "string",
             "controlType": "text",
+            "platform": "desktop",
             "default": ""
         },
         {
@@ -157,6 +179,7 @@
             "description": "Per-fixture override settings for moving head fixture 4.",
             "type": "string",
             "controlType": "text",
+            "platform": "desktop",
             "default": ""
         },
         {
@@ -165,6 +188,7 @@
             "description": "Per-fixture override settings for moving head fixture 5.",
             "type": "string",
             "controlType": "text",
+            "platform": "desktop",
             "default": ""
         },
         {
@@ -173,6 +197,7 @@
             "description": "Per-fixture override settings for moving head fixture 6.",
             "type": "string",
             "controlType": "text",
+            "platform": "desktop",
             "default": ""
         },
         {
@@ -181,6 +206,7 @@
             "description": "Per-fixture override settings for moving head fixture 7.",
             "type": "string",
             "controlType": "text",
+            "platform": "desktop",
             "default": ""
         },
         {
@@ -189,6 +215,7 @@
             "description": "Per-fixture override settings for moving head fixture 8.",
             "type": "string",
             "controlType": "text",
+            "platform": "desktop",
             "default": ""
         }
     ],
@@ -215,6 +242,8 @@
                 {
                     "label": "Position",
                     "properties": [
+                        "MHIpadInfo",
+                        "MHFixtures",
                         "MHPan",
                         "MHTilt",
                         "MHPanOffset",

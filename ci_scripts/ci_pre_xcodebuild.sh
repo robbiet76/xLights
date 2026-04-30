@@ -30,6 +30,18 @@ ls -lart
 #install zstd so we can decompress the deps
 brew install zstd
 
+# Fetch the prebuilt dependency tarball (XCFrameworks, libs, headers)
+# into macOS/dependencies/. This MUST run before xcodebuild begins:
+# Xcode validates XCFramework references during CreateBuildDescription,
+# which happens before any target's build phases execute, so a cold-slate
+# CI VM would fail with "There is no XCFramework found at ..." before the
+# xLights-Apple-core build phase that normally handles the download could
+# run. Local developers still get the auto-download via that build phase;
+# the script is idempotent so calling it from both places is safe.
+# CI_DERIVED_DATA_PATH on Xcode Cloud points at the DerivedData dir, not
+# the macOS/ source dir, so cd to the source macOS/ before invoking.
+(cd $CI_PRIMARY_REPOSITORY_PATH/macOS && scripts/download_deps)
+
 # ccache for compiler caching against the remote backend.
 # CCACHE_REMOTE_URL is provided as a secret environment variable in the
 # Xcode Cloud workflow. When unset (e.g. on a branch that doesn't have the

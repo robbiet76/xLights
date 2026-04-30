@@ -150,6 +150,7 @@ void UndoManager::CreateUndoStep()
     RemoveUnusedMarkers();
     UndoStep* action = new UndoStep(UNDO_MARKER);
     mUndoSteps.push_back(action);
+    EnforceMaxSteps();
 }
 
 void UndoManager::CaptureEffectToBeDeleted( const std::string &element_name, int layer_index, const std::string &name, const std::string &settings,
@@ -158,6 +159,7 @@ void UndoManager::CaptureEffectToBeDeleted( const std::string &element_name, int
     DeletedEffectInfo* effect_undo_action = new DeletedEffectInfo( element_name, layer_index, name, settings, palette, startTimeMS, endTimeMS, Selected, Protected );
     UndoStep* action = new UndoStep(UNDO_EFFECT_DELETED, effect_undo_action);
     mUndoSteps.push_back(action);
+    EnforceMaxSteps();
 }
 
 void UndoManager::CaptureAddedEffect( const std::string &element_name, int layer_index, int id )
@@ -165,6 +167,7 @@ void UndoManager::CaptureAddedEffect( const std::string &element_name, int layer
     AddedEffectInfo* effect_undo_action = new AddedEffectInfo( element_name, layer_index, id );
     UndoStep* action = new UndoStep(UNDO_EFFECT_ADDED, effect_undo_action);
     mUndoSteps.push_back(action);
+    EnforceMaxSteps();
 }
 
 void UndoManager::CaptureEffectToBeMoved( const std::string &element_name, int layer_index, int id, int startTimeMS, int endTimeMS )
@@ -172,6 +175,7 @@ void UndoManager::CaptureEffectToBeMoved( const std::string &element_name, int l
     MovedEffectInfo* effect_undo_action = new MovedEffectInfo( element_name, layer_index, id, startTimeMS, endTimeMS );
     UndoStep* action = new UndoStep(UNDO_EFFECT_MOVED, effect_undo_action);
     mUndoSteps.push_back(action);
+    EnforceMaxSteps();
 }
 
 void UndoManager::CaptureModifiedEffect( const std::string &element_name, int layer_index, int id, const std::string &settings, const std::string &palette )
@@ -179,6 +183,7 @@ void UndoManager::CaptureModifiedEffect( const std::string &element_name, int la
     ModifiedEffectInfo* effect_undo_action = new ModifiedEffectInfo( element_name, layer_index, id, settings, palette );
     UndoStep* action = new UndoStep(UNDO_EFFECT_MODIFIED, effect_undo_action);
     mUndoSteps.push_back(action);
+    EnforceMaxSteps();
 }
 
 void UndoManager::CaptureModifiedEffect( const std::string &element_name, int layer_index, Effect *ef )
@@ -186,6 +191,16 @@ void UndoManager::CaptureModifiedEffect( const std::string &element_name, int la
     ModifiedEffectInfo* effect_undo_action = new ModifiedEffectInfo( element_name, layer_index, ef );
     UndoStep* action = new UndoStep(UNDO_EFFECT_MODIFIED, effect_undo_action);
     mUndoSteps.push_back(action);
+    EnforceMaxSteps();
+}
+
+void UndoManager::EnforceMaxSteps()
+{
+    if (mMaxSteps == 0) return;  // cap disabled
+    while (mUndoSteps.size() > mMaxSteps) {
+        delete mUndoSteps.front();
+        mUndoSteps.erase(mUndoSteps.begin());
+    }
 }
 void UndoManager::CancelLastStep() {
     if (!mUndoSteps.empty()) {

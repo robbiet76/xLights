@@ -196,7 +196,10 @@ void PicturesEffect::adjustSettings(const std::string &version, Effect *effect, 
                 media.AddAnimatedImage(NewPictureName, effect->GetParentEffectLayer()->GetParentElement()->GetSequenceElements()->GetFrameMS());
             }
         }
-        effect->GetParentEffectLayer()->GetParentElement()->GetSequenceElements()->GetSequenceMedia().GetImage(settings["E_TEXTCTRL_Pictures_Filename"]);
+        auto a = effect->GetParentEffectLayer()->GetParentElement()->GetSequenceElements()->GetSequenceMedia().GetImage(settings["E_TEXTCTRL_Pictures_Filename"]);
+        if (!a->IsOk()) {
+            spdlog::warn("Could not load image file: {}", settings["E_TEXTCTRL_Pictures_Filename"]);
+        }
     }
 }
 
@@ -443,8 +446,18 @@ void PicturesEffect::Render(RenderBuffer& buffer,
             buffer.needToInit = false;
             scale_image = true;
 
-            if (!buffer.GetSequenceMedia()->HasImage(NewPictureName) && !FileExists(NewPictureName)) {
+            // `FileExists(NewPictureName)` is tested on the raw stored
+            // path — desktop-saved sequences store absolute paths that
+            // don't resolve on iPad (or any machine other than the one
+            // they were saved on). Resolve through FixFile first so the
+            // existence check uses the actual target path the loader
+            // will use; otherwise this guard short-circuits to red and
+            // `GetImage` never gets a chance to run its own FixFile.
+            std::string resolvedName = FileUtils::FixFile("", NewPictureName);
+            if (!buffer.GetSequenceMedia()->HasImage(NewPictureName) &&
+                !FileExists(resolvedName, false)) {
                 noImageFile = true;
+                spdlog::warn("No image for: {}", resolvedName);
             } else {
                 cache->PictureName = NewPictureName;
                 cache->imageCache = buffer.GetSequenceMedia()->GetImage(NewPictureName);

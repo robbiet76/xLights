@@ -33,7 +33,8 @@ enum class MediaType {
     Shader,
     TextFile,
     BinaryFile,
-    Video
+    Video,
+    Audio
 };
 
 /**
@@ -174,13 +175,12 @@ public:
     void SetFrameData(std::vector<std::string> data) { _frameData = std::move(data); }
 
     // Set animation loaders (called once during app init)
-    static void SetGIFLoader(AnimationLoaderFunc loader) { _gifLoader = std::move(loader); }
     static void SetWebPLoader(AnimationLoaderFunc loader) { _webpLoader = std::move(loader); }
-    static const AnimationLoaderFunc& GetGIFLoader() { return _gifLoader; }
 
 private:
     void LoadFromFile(const std::string& filepath);
     void LoadFromData(const std::string& base64Data);
+    void storeAnimated(AnimatedImageData result);
     void loadAnimated(const std::vector<uint8_t> &data, const AnimationLoaderFunc &loader);
     void loadImage(const std::vector<uint8_t> &data);
     int GetExifOrientation(const uint8_t* data, size_t len);
@@ -201,7 +201,6 @@ private:
     // Scaled image cache
     mutable std::map<ScaledImageCacheKey, std::shared_ptr<xlImage>> _scaledImageCache;
 
-    static AnimationLoaderFunc _gifLoader;
     static AnimationLoaderFunc _webpLoader;
 };
 
@@ -327,6 +326,12 @@ public:
 
     void GeneratePreview(int maxWidth, int maxHeight) override;
 
+    // Total duration in milliseconds. Lazily probed on first call
+    // (via `VideoReader::GetVideoLength`) and cached for the entry's
+    // lifetime — subsequent calls are free. Returns 0 when the file
+    // can't be opened.
+    int GetDurationMS();
+
     void Load() override;
     bool LoadFromXml(const pugi::xml_node& node) override;
     void SaveToXml(pugi::xml_node& parent) const override;
@@ -335,6 +340,29 @@ private:
     std::string _resolvedPath;
     std::shared_ptr<xlImage> _thumbnail;
     int _thumbW = 0, _thumbH = 0;
+    // -1 sentinel: not yet probed. 0: probed and failed. >0: duration.
+    std::atomic<int> _durationMS{-1};
+};
+
+/**
+ * AudioMediaCacheEntry - Path-only entry for audio files (too large to embed)
+ *
+ * Audio files are never embedded in the sequence — they are always referenced
+ * by path. Loading the actual audio data is handled separately by AudioManager
+ * in SequenceFile; this entry exists purely for inventory and file management
+ * purposes within the media panel.
+ */
+class AudioMediaCacheEntry : public MediaCacheEntry
+{
+public:
+    AudioMediaCacheEntry();
+    explicit AudioMediaCacheEntry(const std::string& filePath);
+
+    bool IsEmbeddable() const override { return false; }
+
+    void Load() override;
+    bool LoadFromXml(const pugi::xml_node& node) override;
+    void SaveToXml(pugi::xml_node& parent) const override;
 };
 
 /**
@@ -375,10 +403,17 @@ public:
     std::shared_ptr<ShaderMediaCacheEntry> GetShader(const std::string& filepath);
     std::shared_ptr<BinaryMediaCacheEntry> GetBinaryFile(const std::string& filepath, const std::string& subtype = "");
     std::shared_ptr<VideoMediaCacheEntry> GetVideo(const std::string& filepath);
+    std::shared_ptr<AudioMediaCacheEntry> GetAudio(const std::string& filepath);
 
     // === Cross-type queries ===
     bool HasMedia(const std::string& filepath) const;
     void RemoveMedia(const std::string& filepath);
+    // Re-key a cache entry across any media type. Only touches the
+    // in-memory cache — callers are responsible for any on-disk
+    // move + walking effect settings to rewrite references. No-op
+    // if `oldPath` isn't found or `newPath` already exists.
+    // Returns true on successful rename.
+    bool RenameMedia(const std::string& oldPath, const std::string& newPath);
     // Reload a non-embedded entry from disk (erases and re-creates the cache entry)
     bool ReloadMedia(const std::string& filepath);
     size_t GetMediaCount() const;
@@ -400,6 +435,14 @@ public:
     void MarkAllUnused();
     void RemoveUnusedMedia();
 
+    // Memory-pressure helpers. `PurgePreviewCaches` drops every
+    // entry's preview-frame strip (the thumbnail arrays built for
+    // the media picker / effect panels) and, for image entries,
+    // the unbounded `_scaledImageCache`. Entries themselves stay —
+    // only the render-time / UI-time derivatives are freed. Cheap
+    // to call; previews rebuild on next access.
+    void PurgePreviewCaches();
+
     // === Serialization ===
     bool LoadFromXml(const pugi::xml_node& node);
     void SaveToXml(pugi::xml_node& parent) const;
@@ -415,6 +458,7 @@ private:
     std::map<std::string, std::shared_ptr<ShaderMediaCacheEntry>> _shaderCache;
     std::map<std::string, std::shared_ptr<BinaryMediaCacheEntry>> _binaryCache;
     std::map<std::string, std::shared_ptr<VideoMediaCacheEntry>> _videoCache;
+    std::map<std::string, std::shared_ptr<AudioMediaCacheEntry>> _audioCache;
 
     mutable std::recursive_mutex _cacheMutex;
 };

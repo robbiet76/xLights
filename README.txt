@@ -10,6 +10,118 @@ Issue Tracker is found here: www.github.com/xLightsSequencer/xLights/issues
 
 XLIGHTS/NUTCRACKER RELEASE NOTES
 ---------------------------------
+2026.07  April 28, 2026
+    -enh (MrPierreB)            Add node animation playback to SubModels dialog.
+    -enh (dkulp)                Media-compatibility "Convert Now" now special-cases animated GIFs that were used as
+                                Video effects and turns them into normal Pictures effects that properly handle animated GIFs
+    -enh (dkulp)                Waveform (macOS 12+): four new "Stem — Drums / Bass / Other / Vocals (ML)" right-click
+                                filters run Apple CoreML inference against HTDemucs to split the audio into its constituent
+                                parts. Both the waveform and the playback signal follow the picked stem — so "Stem — Drums"
+                                lets you see and hear just the drum line for timing work. First activation prompts to
+                                download the model (~65 MB) into an `ai-models/` subdir of the show folder or any media
+                                folder; subsequent picks are instant cache hits. Inference runs on a background thread
+                                with a progress dialog so the UI stays responsive.
+    -enh (dkulp)                AI services backend moved to wx-free core (src-core/ai/). Services now expose their
+                                settings as a declarative ServiceProperty schema; secrets go through an injectable
+                                IServiceSettingsStore so platform secure storage can be plugged in.
+    -enh (dkulp)                Waveform: new "View as spectrogram" right-click entry replaces the peak polygons with an
+                                STFT magnitude view (log-frequency y-axis, dB-scaled magenta→yellow colormap). Computation
+                                happens once per track; zoom/scroll just resample the cached buffer into a new texture.
+    -enh (dkulp)                Timing tracks: new "Audio Chords" option in the "Add Timing Track" dialog (after the FPP
+                                entries, before VAMP plugins). Builds a chromagram, matches against 24 major/minor templates,
+                                estimates key via Krumhansl–Schmuckler, and drops a variable timing track whose back-to-back
+                                marks are labelled with the detected chord names.
+    -enh (dkulp)                Waveform: new "Vocals waveform (center extract)" filter emphasises centre-panned content
+                                via M - α|S| — a lightweight counterpart to the existing "Non Vocals" filter.
+    -enh (dkulp)                Waveform: new "Show Pitch Contour" right-click toggle overlays a colour-coded pitch-vs-time
+                                polyline (colour = pitch class) scaled to a log-frequency y-axis. Useful for vocal / melody
+                                timing work; unvoiced frames break the polyline.
+    -enh (dkulp)                Timing tracks: new "Audio Tempo" option in the "Add Timing Track" dialog runs
+                                autocorrelation on the audio's onset envelope, confirms the detected BPM, and drops a fixed
+                                timing track with back-to-back marks at each beat.
+    -enh (dkulp)                Waveform (macOS): "Classify Audio…" right-click entry runs Apple's SNClassifySoundRequest
+                                offline and lets you pick a detected class (drums, vocals, guitar, …); the waveform then
+                                scales to show amplitude only where that class is present. Linux/Windows builds exclude
+                                this via ifdef since the classifier framework is Apple-only.
+    -enh (dkulp)                Waveform: new "Perceptual (LUFS)" filter renders the BS.1770 K-weighted momentary-loudness
+                                envelope so timing marks line up with what the ear actually hears on heavily-compressed
+                                tracks where raw amplitude plateaus.
+    -enh (dkulp)                Waveform: new "Show Onsets" right-click entry overlays faint amber verticals at detected
+                                percussive onsets. The "Add Timing Track" dialog gains an "Audio Onsets" option that drops
+                                a new variable timing track with back-to-back marks between detected onsets. Spectral-flux
+                                detection runs entirely on-device.
+    -enh (dkulp)                Waveform: overlay the RMS energy band on top of the peak polygon so compressed sections
+                                read as "loud" even when their peaks plateau.
+    -enh (dkulp)                Shape effect: Effect panel now organises its 27 properties into Shape / Size / Motion /
+                                Triggers tabs instead of a flat scroll, matching the grouped layout other large effects use.
+    -enh (MrPierreB)            Value curve Exponential, Logarithmic, and Parabolic types now support Start/End.
+    -enh (scott)                Add "Show Names" and "Show Start Channel" checkboxes to Layout tab to display model names
+                                and controller/port or start channel in the layout preview
+    -enh (derwin12)             Add timing track trigger for Shockwave effect
+    -enh (derwin12)             Include fonts in a Package Sequence (#3503)
+    -enh (derwin12)             Better cube visualizion for dumb rgb (#4652)
+    -enh (derwin12)             Windows now preserves audio pitch at various speeds (#2149)
+    -enh (derwin12)             Show losso box when selecting props in 3D (#3841)
+    -enh (derwin12)             Show warning if you set String property when Controller color order is available (#5441)
+    -enh (derwin12)             Up the pixielink port count capability (#4079)
+    -enh (derwin12)             Add new Label text model (#5145)
+    -enh (derwin12)             Add optional image to custom models (#3825)
+    -enh (derwin12)             Picture effect auto-sets scaling to "Scale To Fit" when appropriate
+    -enh (derwin12)             Add Speed as a Warp effect type (#4596)
+    -enh (derwin12)             Add more variability to Lines Effect. Now using float values (#4532)
+    -enh (AGFazio)              Include Line Count in Submodel dialog (#5359)
+    -enh (dkulp)                Render: RenderProgressInfo now self-signals completion via an atomic flag
+    -enh (dkulp)                Shader effect: dynamic uniforms emit JSON matching the effect-panel schema; JsonEffectPanel
+                                gains a reusable point2d control type, so iPad and desktop build the dynamic rows from the
+                                same description.
+    -bug (dkulp)                Replaced throwing std::stoi calls in OutputManager / xxxSerialOutput / HinksPix with
+                                non-throwing std::strtol so corrupt config or controller responses no longer crash.
+    -bug (dkulp)                State / Faces / Shockwave / VUMeter / Lyric / MatrixModel: added div-by-zero and
+                                map.at() guards on render-thread paths that could crash on edge-case inputs.
+    -bug (dkulp)                Faces / xlFontInfo / SpecialOptions / FileUtils / ip_utils / AudioManager: added
+                                missing locks around static / shared caches that were mutated concurrently from
+                                render workers and could corrupt or crash under heavy parallel rendering.
+    -bug (dkulp)                E1.31 / ArtNet / DDP SetManyChannels: bounds-check the starting channel before
+                                memcpy so an out-of-range channel can't overflow the packet buffer.
+    -bug (dkulp)                AlphaPix / WLED / HinksPix: free curl_slist headers (and the WLED CURL handle) on
+                                every exit path; firmware-upload filename copy now uses bounded strncpy.
+    -bug (dkulp)                AudioManager: widened sample-loop counters to long so pcm conversion no longer
+                                overflows on multi-hour audio; added missing int16 clamp on the NONVOCALS / VOCALS
+                                mono fallback.
+    -bug (dkulp)                Render engine: AggregatorRenderer::setPreviousFrameDone bounds-checks the frame
+                                index before indexing the per-frame counter array.
+    -bug (derwin12)             Fix state/face definitions copied in layout not rendering in sequence until restart (#6239)
+    -bug (derwin12)             Layout was sizing groups and model names too quickly (#6236)
+    -bug (derwin12)             Fix ON effect was resetting the intensity values (#6233)
+    -bug (derwin12)             Fix visualizer clearing all models (#6227)
+    -bug (derwin12)             Twinkly was blocking the render when devices were offline (#4101)
+    -bug (derwin12)             Fix copy-paste model not assigning the next available start channel
+    -bug (dkulp)                Metal render: drain autoreleased MTLCommandEncoders per frame instead of
+                                per render-job (large memory growth during long renders), fix sparkleBuffer
+                                use-after-free, and release retained Metal objects at shutdown
+    -bug (dkup/derwin)          Handle various codec issues in avi conversions (#6142, #6153)
+    -bug (derwin12)             Fix Use State as Outline for Face Effect default (#6148)
+    -bug (derwin12)             New polyline with default drop pattern did not render (#6156)
+    -bug (derwin12)             ESPixelStick: clear unused ports when uploading with FullxLights Control (#5689)
+    -bug (derwin12)             Fix base show folder merge not detecting child element changes (#4265)
+    -bug (derwin12)             Preserve Layer Blending and Settings when using Random Effects (#6136)
+    -bug (AGFazio)              Honour 2D to 3D Layout changing (#6133)
+    -bug (AGFazio)              Fix pixel sizing appearing zoomed in (#6139)
+    -bug (derwin12)             Downloadeded models now placed where you drop them (#5912)
+    -bug (derwin12)             Random Value Curve now holds the value properly (#4803)
+    -bug (scott)                Fix some values not being stored in (new) settings file (#6134)
+    -bug (dkulp)                Fix layout render glitches by sorting pixels back-to-front by camera-space Z (#6126)
+    -bug (charlie)              Restore performance of House Preview Export to Video
+    -change (dkulp)             Package Sequence: rewritten to walk SequenceMedia + every model/view-object's file
+                                references + Matrix face images so shaders, custom images, videos, meshes, and
+                                face/state assets are actually included. Show-relative paths preserved where possible;
+                                external files relocated under typed subdirs (Images/ Videos/ Shaders/ Glediators/
+                                Meshes/ Faces/) with folder-based disambiguation on basename collisions so packaged
+                                filenames can't mimic PicturesEffect's animation-sequence detection. No more _lost/
+                                dumping;
+    -change (dkulp)             Packaging preferences: "Exclude Presets" renamed to "Exclude Videos" — the old option
+                                stripped a rgbeffects element that no longer carries presets, so it was a no-op;
+
 2026.06  April 16, 2026
     -enh (dkulp)                Media-compatibility warning on sequence load now offers "Convert Videos Now" —
                                     transcodes flagged files to .mov next to the originals (rawvideo/rgb24 if
@@ -68,7 +180,6 @@ XLIGHTS/NUTCRACKER RELEASE NOTES
     -bug (derwin12)             Improve Shape effect emoji rendering on Windows and Direction (#5636)
     -bug (derwin12)             Fix 3D Spiral gradient flip when Rotation value curve crosses zero (#4807)
     -bug (AGFazio)              Fix Square and Smooth Circle model appearances not scaling with zoom in the layout view (#5849)
-    -bug (dkulp)                Fix Pinwheel Rotation default mismatch between renderer and panel
     -bug (derwin12)             Fix crash after using Join in the SubModels dialog. (#6064)
     -bug (dkulp)                Fix Guitar BaseWaveFactor/StringWaveFactor losing user values after JSON panel migration.
                                     Old E_SLIDER_*WaveFactor int values are migrated forward to E_TEXTCTRL_*WaveFactor floats.

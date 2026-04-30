@@ -10,17 +10,28 @@ struct FolderConfigView: View {
 
     @State private var showFolderPath: String?
     @State private var mediaFolderPaths: [String]
+    @State private var fseqEnabled: Bool
+    @State private var fseqFolderPath: String?
     @State private var pickerMode: PickerMode?
 
     enum PickerMode: Identifiable {
         case showFolder
         case addMediaFolder
-        var id: Int { self == .showFolder ? 0 : 1 }
+        case fseqFolder
+        var id: Int {
+            switch self {
+            case .showFolder: return 0
+            case .addMediaFolder: return 1
+            case .fseqFolder: return 2
+            }
+        }
     }
 
     init() {
         _showFolderPath = State(initialValue: FolderConfig.showFolder)
         _mediaFolderPaths = State(initialValue: FolderConfig.mediaFolders)
+        _fseqEnabled = State(initialValue: FolderConfig.fseqEnabled)
+        _fseqFolderPath = State(initialValue: FolderConfig.fseqFolder)
     }
 
     var body: some View {
@@ -69,6 +80,37 @@ struct FolderConfigView: View {
                 } footer: {
                     Text("Media folders are searched for audio, shaders, and other assets referenced by sequences.")
                 }
+
+                Section {
+                    Toggle("Save FSEQ on save", isOn: $fseqEnabled)
+                    if fseqEnabled {
+                        if let path = fseqFolderPath {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(displayName(path))
+                                Text(path)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                            Button("Change FSEQ Folder…") {
+                                pickerMode = .fseqFolder
+                            }
+                            Button("Use sequence's folder", role: .destructive) {
+                                fseqFolderPath = nil
+                            }
+                        } else {
+                            Text("Next to sequence file")
+                                .foregroundStyle(.secondary)
+                            Button("Choose FSEQ Folder…") {
+                                pickerMode = .fseqFolder
+                            }
+                        }
+                    }
+                } header: {
+                    Text("FSEQ Files")
+                } footer: {
+                    Text("FSEQ files are pre-rendered playback files used by Falcon Player and other controllers. When no folder is chosen, the FSEQ is written next to the sequence file.")
+                }
             }
             .navigationTitle("Folders")
             .navigationBarTitleDisplayMode(.inline)
@@ -95,6 +137,8 @@ struct FolderConfigView: View {
                         if !mediaFolderPaths.contains(path) {
                             mediaFolderPaths.append(path)
                         }
+                    case .fseqFolder:
+                        fseqFolderPath = path
                     }
                     pickerMode = nil
                 }
@@ -110,6 +154,8 @@ struct FolderConfigView: View {
         guard let path = showFolderPath else { return }
         FolderConfig.showFolder = path
         FolderConfig.mediaFolders = mediaFolderPaths
+        FolderConfig.fseqEnabled = fseqEnabled
+        FolderConfig.fseqFolder = fseqEnabled ? fseqFolderPath : nil
         viewModel.loadShowFolder(path: path, mediaFolders: mediaFolderPaths)
     }
 }
