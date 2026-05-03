@@ -11,6 +11,9 @@
  **************************************************************/
 
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 
 namespace xLightsDesigner {
@@ -47,6 +50,93 @@ inline bool ShouldUseAutosaveBackup()
 inline bool ShouldSuppressPrompt()
 {
     return IsNonInteractiveLaunch();
+}
+
+inline std::filesystem::path ResolveLaunchAccessTarget(const std::string& path)
+{
+    std::error_code ec;
+    const std::filesystem::path fsPath(path);
+    if (path.empty()) {
+        return std::filesystem::path();
+    }
+    if (std::filesystem::exists(fsPath, ec)) {
+        return std::filesystem::weakly_canonical(fsPath, ec);
+    }
+    const auto parent = fsPath.parent_path();
+    if (parent.empty() || !std::filesystem::exists(parent, ec)) {
+        return std::filesystem::path();
+    }
+    return std::filesystem::weakly_canonical(parent, ec) / fsPath.filename();
+}
+
+inline bool IsLaunchPathWithinRoot(const std::filesystem::path& target, const std::filesystem::path& root)
+{
+    auto targetIt = target.begin();
+    auto rootIt = root.begin();
+    for (; rootIt != root.end(); ++rootIt, ++targetIt) {
+        if (targetIt == target.end() || *targetIt != *rootIt) {
+            return false;
+        }
+    }
+    return true;
+}
+
+inline bool IsLaunchTrustedRootPath(const std::string& path)
+{
+    const auto target = ResolveLaunchAccessTarget(path);
+    if (target.empty()) {
+        return false;
+    }
+
+    const char* rawRoots = std::getenv("XLIGHTS_DESIGNER_TRUSTED_ROOTS");
+    if (rawRoots == nullptr || *rawRoots == '\0') {
+        return false;
+    }
+
+    std::stringstream stream(rawRoots);
+    std::string rootEntry;
+    while (std::getline(stream, rootEntry, ':')) {
+        if (rootEntry.empty()) {
+            continue;
+        }
+        const auto root = ResolveLaunchAccessTarget(rootEntry);
+        if (!root.empty() && IsLaunchPathWithinRoot(target, root)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline bool HasLaunchTrustedRootAccess(const std::string& path, bool enforceWritable)
+{
+    if (!IsNonInteractiveLaunch() || path.empty() || !IsLaunchTrustedRootPath(path)) {
+        return false;
+    }
+
+    std::error_code ec;
+    const std::filesystem::path fsPath(path);
+    const auto existingTarget = std::filesystem::exists(fsPath, ec) ? fsPath : fsPath.parent_path();
+    if (ec || existingTarget.empty() || !std::filesystem::exists(existingTarget, ec)) {
+        return false;
+    }
+
+    if (!enforceWritable) {
+        return true;
+    }
+
+    const auto probeDir = std::filesystem::is_directory(existingTarget, ec) ? existingTarget : existingTarget.parent_path();
+    if (ec || probeDir.empty() || !std::filesystem::exists(probeDir, ec)) {
+        return false;
+    }
+
+    const auto probe = probeDir / ".xld-owned-write-test";
+    std::ofstream out(probe.string(), std::ios::out | std::ios::trunc);
+    if (!out.is_open()) {
+        return false;
+    }
+    out.close();
+    std::filesystem::remove(probe, ec);
+    return true;
 }
 
 } // namespace xLightsDesigner

@@ -26,6 +26,7 @@
 #include "ExternalHooks.h"
 #include "DesignerDiagnostics.h"
 #include "DesignerApiRuntime.h"
+#include "DesignerLaunchPolicy.h"
 #include "api/models/EffectModels.h"
 #include "api/models/ElementModels.h"
 #include "api/models/LayoutModels.h"
@@ -130,55 +131,15 @@ inline wxString FindDesignerShowDirectoryForSequence(const std::string& sequence
 }
 
 inline std::filesystem::path ResolveOwnedAccessTarget(const std::string& path) {
-    std::error_code ec;
-    const std::filesystem::path fsPath(path);
-    if (fsPath.empty()) {
-        return std::filesystem::path();
-    }
-    if (std::filesystem::exists(fsPath, ec)) {
-        return std::filesystem::weakly_canonical(fsPath, ec);
-    }
-    const auto parent = fsPath.parent_path();
-    if (parent.empty() || !std::filesystem::exists(parent, ec)) {
-        return std::filesystem::path();
-    }
-    return std::filesystem::weakly_canonical(parent, ec) / fsPath.filename();
+    return xLightsDesigner::ResolveLaunchAccessTarget(path);
 }
 
 inline bool IsPathWithinRoot(const std::filesystem::path& target, const std::filesystem::path& root) {
-    auto targetIt = target.begin();
-    auto rootIt = root.begin();
-    for (; rootIt != root.end(); ++rootIt, ++targetIt) {
-        if (targetIt == target.end() || *targetIt != *rootIt) {
-            return false;
-        }
-    }
-    return true;
+    return xLightsDesigner::IsLaunchPathWithinRoot(target, root);
 }
 
 inline bool IsOwnedTrustedRootPath(const std::string& path) {
-    const auto target = ResolveOwnedAccessTarget(path);
-    if (target.empty()) {
-        return false;
-    }
-
-    const char* rawRoots = std::getenv("XLIGHTS_DESIGNER_TRUSTED_ROOTS");
-    if (rawRoots == nullptr || *rawRoots == '\0') {
-        return false;
-    }
-
-    std::stringstream stream(rawRoots);
-    std::string rootEntry;
-    while (std::getline(stream, rootEntry, ':')) {
-        if (rootEntry.empty()) {
-            continue;
-        }
-        const auto root = ResolveOwnedAccessTarget(rootEntry);
-        if (!root.empty() && IsPathWithinRoot(target, root)) {
-            return true;
-        }
-    }
-    return false;
+    return xLightsDesigner::IsLaunchTrustedRootPath(path);
 }
 
 inline void CollectDesignerWindowButtonLabels(wxWindow* window, nlohmann::json& labels) {
@@ -244,34 +205,7 @@ inline nlohmann::json BuildDesignerModalStateJson(xLightsFrame* frame) {
 }
 
 inline bool HasOwnedTrustedRootAccess(const std::string& path, bool enforceWritable) {
-    if (path.empty() || !IsOwnedTrustedRootPath(path)) {
-        return false;
-    }
-
-    std::error_code ec;
-    const std::filesystem::path fsPath(path);
-    const auto existingTarget = std::filesystem::exists(fsPath, ec) ? fsPath : fsPath.parent_path();
-    if (ec || existingTarget.empty() || !std::filesystem::exists(existingTarget, ec)) {
-        return false;
-    }
-
-    if (!enforceWritable) {
-        return true;
-    }
-
-    const auto probeDir = std::filesystem::is_directory(existingTarget, ec) ? existingTarget : existingTarget.parent_path();
-    if (ec || probeDir.empty() || !std::filesystem::exists(probeDir, ec)) {
-        return false;
-    }
-
-    const auto probe = probeDir / ".xld-owned-write-test";
-    std::ofstream out(probe.string(), std::ios::out | std::ios::trunc);
-    if (!out.is_open()) {
-        return false;
-    }
-    out.close();
-    std::filesystem::remove(probe, ec);
-    return true;
+    return xLightsDesigner::HasLaunchTrustedRootAccess(path, enforceWritable);
 }
 
 inline bool ObtainOwnedApiAccessToPath(const std::string& path, bool enforceWritable = false) {
