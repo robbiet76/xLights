@@ -234,7 +234,8 @@ inline std::optional<api::transport::ApiResponse> HandleDesignerApiRequest(
     api::services::MediaService mediaService(
         [host]() { return host->readCurrentMedia(); },
         [host]() { return host->readMediaDirectories(); },
-        [host](const api::models::MediaShowDirectoryRequest& request) { return host->setShowDirectory(request); });
+        [host](const api::models::MediaShowDirectoryRequest& request) { return host->setShowDirectory(request); },
+        [host](const api::models::MediaShowDirectoryRequest& request) { return host->requestShowDirectoryAccess(request); });
     api::services::LayoutService layoutService(
         [host]() { return host->readLayoutModels(); },
         [host]() { return host->readLayoutSubmodels(); },

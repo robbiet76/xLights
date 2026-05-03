@@ -40,6 +40,15 @@ public:
     }
 
     [[nodiscard]] transport::ApiResponse handleSetShowDirectory(const transport::ApiRequest& request) const {
+        return handleShowDirectoryMutation(request, false);
+    }
+
+    [[nodiscard]] transport::ApiResponse handleRequestShowDirectoryAccess(const transport::ApiRequest& request) const {
+        return handleShowDirectoryMutation(request, true);
+    }
+
+private:
+    [[nodiscard]] transport::ApiResponse handleShowDirectoryMutation(const transport::ApiRequest& request, bool requestAccess) const {
         transport::ApiResponse response;
         response.command = request.command;
         response.requestId = request.requestId;
@@ -68,11 +77,14 @@ public:
             return response;
         }
 
-        const auto result = _service.setShowDirectory(showRequest);
+        const auto result = requestAccess
+            ? _service.requestShowDirectoryAccess(showRequest)
+            : _service.setShowDirectory(showRequest);
         if (result.errorCode.has_value()) {
             const auto code = result.errorCode.value();
             response.statusCode = (code == "VALIDATION_ERROR") ? 400 :
                 (code == "SHOW_DIRECTORY_ACCESS_DENIED") ? 403 :
+                (code == "SHOW_DIRECTORY_ACCESS_CANCELLED" || code == "SHOW_DIRECTORY_ACCESS_MISMATCH") ? 409 :
                 (code == "SHOW_DIRECTORY_NOT_FOUND") ? 404 :
                 (code == "SEQUENCE_OPEN" || code == "UNSAVED_CHANGES") ? 409 :
                 500;
@@ -94,7 +106,6 @@ public:
         return response;
     }
 
-private:
     services::MediaService _service;
 };
 

@@ -8,6 +8,7 @@
 #include <wx/base64.h>
 #include <wx/button.h>
 #include <wx/dialog.h>
+#include <wx/dirdlg.h>
 #include <wx/toplevel.h>
 #include <memory>
 #include <cmath>
@@ -1138,6 +1139,117 @@ public:
         if (future.wait_for(std::chrono::seconds(90)) != std::future_status::ready) {
             result.errorCode = "SHOW_DIRECTORY_SWITCH_TIMEOUT";
             result.errorMessage = "Timed out waiting for xLights to switch show directories.";
+            return result;
+        }
+        return future.get();
+    }
+
+    [[nodiscard]] api::models::MediaShowDirectoryResult requestShowDirectoryAccess(const api::models::MediaShowDirectoryRequest& request) const {
+        api::models::MediaShowDirectoryResult result;
+        result.showDirectory = request.showDirectory;
+        if (_frame == nullptr || request.showDirectory.empty()) {
+            result.errorCode = "VALIDATION_ERROR";
+            result.errorMessage = "showDirectory is required.";
+            return result;
+        }
+
+        result.previousShowDirectory = _frame->CurrentDir.ToStdString();
+        const wxString targetShowDir = wxString::FromUTF8(request.showDirectory);
+        if (!wxFileName::DirExists(targetShowDir)) {
+            result.errorCode = "SHOW_DIRECTORY_NOT_FOUND";
+            result.errorMessage = "Show directory does not exist.";
+            return result;
+        }
+
+        auto promptOnMainThread = [this, request, targetShowDir]() {
+            api::models::MediaShowDirectoryResult callbackResult;
+            callbackResult.previousShowDirectory = _frame != nullptr ? _frame->CurrentDir.ToStdString() : std::string();
+            callbackResult.showDirectory = request.showDirectory;
+            if (_frame == nullptr) {
+                callbackResult.errorCode = "VALIDATION_ERROR";
+                callbackResult.errorMessage = "xLights frame is not available.";
+                return callbackResult;
+            }
+
+            wxDirDialog dialog(_frame,
+                               _("Select the project show folder for xLightsDesigner"),
+                               targetShowDir,
+                               wxDD_DEFAULT_STYLE,
+                               wxDefaultPosition,
+                               wxDefaultSize,
+                               _T("wxDirDialog"));
+            if (dialog.ShowModal() != wxID_OK) {
+                callbackResult.errorCode = "SHOW_DIRECTORY_ACCESS_CANCELLED";
+                callbackResult.errorMessage = "Show directory access request was cancelled.";
+                return callbackResult;
+            }
+
+            const wxString selectedDir = dialog.GetPath();
+            std::error_code normalizeError;
+            const auto selectedNormalized = std::filesystem::weakly_canonical(
+                std::filesystem::path(selectedDir.ToStdString()),
+                normalizeError);
+            std::error_code targetNormalizeError;
+            const auto targetNormalized = std::filesystem::weakly_canonical(
+                std::filesystem::path(targetShowDir.ToStdString()),
+                targetNormalizeError);
+            if (normalizeError || targetNormalizeError || selectedNormalized.empty() || targetNormalized.empty()) {
+                callbackResult.errorCode = "SHOW_DIRECTORY_ACCESS_MISMATCH";
+                callbackResult.errorMessage = "The selected folder could not be matched to the project show folder.";
+                callbackResult.showDirectory = selectedDir.ToStdString();
+                return callbackResult;
+            }
+            if (selectedNormalized != targetNormalized) {
+                callbackResult.errorCode = "SHOW_DIRECTORY_ACCESS_MISMATCH";
+                callbackResult.errorMessage = "The selected folder did not match the project show folder.";
+                callbackResult.showDirectory = selectedDir.ToStdString();
+                return callbackResult;
+            }
+
+            ObtainAccessToURL(selectedDir, true);
+            const bool hadSequence = _frame->CurrentSeqXmlFile != nullptr;
+            const bool previousRenderMode = _frame->_renderMode;
+            const bool previousPromptBatchRenderIssues = _frame->_promptBatchRenderIssues;
+            if (request.force) {
+                _frame->_renderMode = true;
+                _frame->_promptBatchRenderIssues = false;
+                if (_frame->CurrentSeqXmlFile != nullptr) {
+                    _frame->mSavedChangeCount = _frame->GetSequenceElements().GetChangeCount();
+                }
+                _frame->UnsavedRgbEffectsChanges = false;
+                _frame->UnsavedNetworkChanges = false;
+            }
+
+            const bool switched = _frame->SetDir(targetShowDir, request.permanent);
+
+            if (request.force) {
+                _frame->_renderMode = previousRenderMode;
+                _frame->_promptBatchRenderIssues = previousPromptBatchRenderIssues;
+            }
+
+            callbackResult.sequenceClosed = hadSequence && _frame->CurrentSeqXmlFile == nullptr;
+            callbackResult.showDirectory = _frame->CurrentDir.ToStdString();
+            callbackResult.changed = switched && _frame->CurrentDir == targetShowDir;
+            if (!callbackResult.changed) {
+                callbackResult.errorCode = "SHOW_DIRECTORY_SWITCH_FAILED";
+                callbackResult.errorMessage = "xLights did not switch to the requested show directory.";
+            }
+            return callbackResult;
+        };
+
+        if (wxIsMainThread()) {
+            return promptOnMainThread();
+        }
+
+        auto promise = std::make_shared<std::promise<api::models::MediaShowDirectoryResult>>();
+        auto future = promise->get_future();
+        xLightsFrame* frame = _frame;
+        frame->CallAfter([promise, promptOnMainThread]() mutable {
+            promise->set_value(promptOnMainThread());
+        });
+        if (future.wait_for(std::chrono::minutes(5)) != std::future_status::ready) {
+            result.errorCode = "SHOW_DIRECTORY_ACCESS_TIMEOUT";
+            result.errorMessage = "Timed out waiting for show directory access.";
             return result;
         }
         return future.get();

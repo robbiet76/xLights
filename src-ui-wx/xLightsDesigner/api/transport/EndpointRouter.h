@@ -32,6 +32,7 @@ public:
         if (method == "GET" && path == "/xlightsdesigner/api/media/current") return "media.getCurrent";
         if (method == "GET" && path == "/xlightsdesigner/api/media/directories") return "media.getDirectories";
         if (method == "POST" && path == "/xlightsdesigner/api/media/show-directory") return "media.setShowDirectory";
+        if (method == "POST" && path == "/xlightsdesigner/api/media/request-show-directory-access") return "media.requestShowDirectoryAccess";
 
         if (method == "GET" && path == "/xlightsdesigner/api/layout/models") return "layout.getModels";
         if (method == "GET" && path == "/xlightsdesigner/api/layout/submodels") return "layout.getSubmodels";
