@@ -114,20 +114,25 @@ find_package(OpenGL REQUIRED)
 
 # ─── FFmpeg ─────────────────────────────────────────────────────────────────
 # vcpkg's FFmpeg port does not ship FFMPEGConfig.cmake so find_package(FFMPEG)
-# in config mode fails. Use find_path / find_library for both paths — the vcpkg
-# toolchain adds installed/ to CMAKE_PREFIX_PATH so the vcpkg-installed headers
-# and libs are found automatically without extra hints.
+# in config mode fails. Use find_path / find_library for both paths. When
+# XLIGHTS_USE_VCPKG is enabled, prefer the explicit vcpkg installed root because
+# GitHub Actions can configure with manifest install disabled after a classic
+# vcpkg install.
 if(XLIGHTS_USE_VCPKG)
+    set(_VCPKG_FFMPEG_ROOT "$ENV{VCPKG_ROOT}/installed/${VCPKG_TARGET_TRIPLET}")
     find_path(FFMPEG_INCLUDE_DIR libavcodec/avcodec.h
+        HINTS "${_VCPKG_FFMPEG_ROOT}"
         PATH_SUFFIXES include)
     if(NOT FFMPEG_INCLUDE_DIR)
-        message(FATAL_ERROR "FFmpeg headers not found — run: vcpkg install ffmpeg")
+        message(FATAL_ERROR "FFmpeg headers not found — run: vcpkg install ffmpeg (${_VCPKG_FFMPEG_ROOT})")
     endif()
     foreach(_ff avcodec avformat avutil avfilter swscale swresample)
         string(TOUPPER ${_ff} _FF_UPPER)
-        find_library(${_FF_UPPER}_LIB NAMES ${_ff})
+        find_library(${_FF_UPPER}_LIB NAMES ${_ff}
+            HINTS "${_VCPKG_FFMPEG_ROOT}"
+            PATH_SUFFIXES lib)
         if(NOT ${_FF_UPPER}_LIB)
-            message(FATAL_ERROR "FFmpeg lib '${_ff}' not found — run: vcpkg install ffmpeg")
+            message(FATAL_ERROR "FFmpeg lib '${_ff}' not found — run: vcpkg install ffmpeg (${_VCPKG_FFMPEG_ROOT})")
         endif()
         list(APPEND FFMPEG_LIBS ${${_FF_UPPER}_LIB})
     endforeach()
