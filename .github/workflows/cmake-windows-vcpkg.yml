@@ -11,6 +11,8 @@ name: Windows CMake + vcpkg
 # the feature list if a GPU-enabled runner is available.
 
 on:
+  schedule:
+    - cron: '0 5 * * *' # run at 5 AM UTC
   workflow_dispatch:
 
 concurrency:
