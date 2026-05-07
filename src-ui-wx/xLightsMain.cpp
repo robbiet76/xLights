@@ -3724,11 +3724,24 @@ void xLightsFrame::OnMenuItem_File_Export_VideoSelected(wxCommandEvent& event)
     ExportVideoPreview(pExportDlg.GetPath());
 }
 
-bool xLightsFrame::ExportVideoPreview(wxString const& path)
+bool xLightsFrame::ExportVideoPreview(wxString const& path, bool showErrorDialog)
 {
     int frameCount = _seqData.NumFrames();
 
     if (CurrentSeqXmlFile == nullptr || frameCount == 0) {
+        return false;
+    }
+    if (path.empty()) {
+        return false;
+    }
+
+    wxFileName outputFile(path);
+    const wxString outputDir = outputFile.GetPath();
+    if (!outputDir.empty() && !wxDirExists(outputDir) && !outputFile.Mkdir(outputDir, wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL)) {
+        spdlog::error("Error exporting video: unable to create output directory '{}'.", outputDir.ToStdString());
+        if (showErrorDialog && !xLightsDesigner::ShouldSuppressPrompt()) {
+            DisplayError("Exporting house preview video failed. Unable to create output directory " + outputDir, this);
+        }
         return false;
     }
 
@@ -3823,7 +3836,11 @@ bool xLightsFrame::ExportVideoPreview(wxString const& path)
         float elapsedTime = sw.Time() / 1000.0; // msec => sec
         SetStatusText(wxString::Format("'%s' exported in %4.3f sec.", path.c_str(), elapsedTime));
     } else {
-        DisplayError("Exporting house preview video failed.  " + emsg, this);
+        if (!showErrorDialog || xLightsDesigner::ShouldSuppressPrompt()) {
+            spdlog::error("Exporting house preview video failed. {}", emsg);
+        } else {
+            DisplayError("Exporting house preview video failed.  " + emsg, this);
+        }
     }
     return exportStatus;
 }

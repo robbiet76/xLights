@@ -66,12 +66,13 @@ public:
    void setQueryForCancelCallback( QueryForCancelCb fn ) { _queryForCancel = fn; }
    void setProgressReportCallback( ProgressReportCb fn ) { _progressReporter = fn; }
 
-   void initialize();
+   bool initialize();
    void exportFrames( int videoFrameCount );
    void completeExport();
 
    const Params& inputParams() const { return _inParams; }
    const Params& outputParams() const { return _outParams; }
+   const std::string& lastError() const { return _lastError; }
 
 protected:
    bool initializeVideo( const AVCodec* codec );
@@ -104,6 +105,7 @@ protected:
    ProgressReportCb        _progressReporter = nullptr;
    uint32_t                _curVideoFrame = 0;
    int64_t                 _curPts = 0LL;
+   std::string             _lastError;
 
    // Optional hardware acceleration context (used for VideoToolbox on Apple).
    // When populated, _videoCodecContext->pix_fmt is AV_PIX_FMT_VIDEOTOOLBOX and
@@ -129,4 +131,3 @@ protected:
     wxWindow * const    _parent;
     unsigned int        _frameCount = 0u;
 };
-
