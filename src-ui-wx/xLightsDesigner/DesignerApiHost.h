@@ -888,6 +888,63 @@ public:
         return future.get();
     }
 
+    [[nodiscard]] api::models::SequencePreviewVideoExportResult exportPreviewVideo(const api::models::SequencePreviewVideoExportRequest& request) const {
+        return RunOnMainThread<api::models::SequencePreviewVideoExportResult>([this, request]() {
+            api::models::SequencePreviewVideoExportResult result;
+            result.file = request.file;
+            result.sequence = readOpenSequence();
+            if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr || !result.sequence.isOpen) {
+                result.errorCode = std::string(api::transport::errors::SequenceNotOpen);
+                result.errorMessage = "No sequence is open.";
+                return result;
+            }
+            if (request.file.empty()) {
+                result.errorCode = std::string(api::transport::errors::ValidationError);
+                result.errorMessage = "sequence.exportPreviewVideo requires a target file path.";
+                return result;
+            }
+
+            wxFileName outputFile(wxString::FromUTF8(request.file));
+            if (outputFile.GetExt().empty()) {
+                outputFile.SetExt("mp4");
+            }
+            const std::string outputPath = outputFile.GetFullPath().ToStdString();
+            result.file = outputPath;
+            const wxString outputDir = outputFile.GetPath();
+            if (outputDir.empty() || !wxDirExists(outputDir)) {
+                result.errorCode = std::string(api::transport::errors::ValidationError);
+                result.errorMessage = "Preview video output directory does not exist.";
+                return result;
+            }
+            const std::string accessPath = outputDir.ToStdString();
+            if (!detail::ObtainOwnedApiAccessToPath(accessPath, true)) {
+                result.errorCode = "SEQUENCE_ACCESS_DENIED";
+                result.errorMessage = "Unable to obtain write access to the requested preview video path.";
+                return result;
+            }
+
+            if (request.renderFirst) {
+                _frame->RenderAll();
+                if (!detail::WaitDesignerRenderComplete(_frame)) {
+                    result.errorCode = "SEQUENCE_RENDER_TIMEOUT";
+                    result.errorMessage = "Timed out waiting for xLights to render before preview video export.";
+                    return result;
+                }
+            }
+
+            const bool exported = _frame->ExportVideoPreview(outputFile.GetFullPath(), false);
+            result.sequence = readOpenSequence();
+            if (!exported || !wxFileExists(outputFile.GetFullPath())) {
+                result.errorCode = "PREVIEW_VIDEO_EXPORT_FAILED";
+                result.errorMessage = "xLights failed to export the requested preview video.";
+                return result;
+            }
+
+            result.exported = true;
+            return result;
+        });
+    }
+
     [[nodiscard]] api::models::SequenceRenderSamplesResult readRenderedSamples(const api::models::SequenceRenderSamplesRequest& request) const {
         api::models::SequenceRenderSamplesResult result;
         result.sequence = readOpenSequence();

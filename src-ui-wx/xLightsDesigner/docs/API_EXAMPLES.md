@@ -35,6 +35,19 @@ They do not require xLights-owned automation routing.
 {}
 ```
 
+## Export Preview Video
+
+`POST /xlightsdesigner/api/sequence/export-preview-video`
+
+Use an xLights-writable staging path on sandboxed macOS launches, then copy the MP4 into project artifact storage from the caller.
+
+```json
+{
+  "file": "/Users/robterry/Library/Containers/org.xlights/Data/tmp/xld-preview-video/sequence-preview.mp4",
+  "renderFirst": true
+}
+```
+
 ## Rendered Sequence Samples
 
 `POST /xlightsdesigner/api/sequence/render-samples`
