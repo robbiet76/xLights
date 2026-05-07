@@ -189,10 +189,11 @@ Still active cleanup:
 
 The current app integration depends on the owned render-feedback path:
 - `POST /sequence/render-current`
+- `POST /sequence/export-preview-video`
 - `POST /sequence/render-samples`
 - `GET /layout/scene`
 
-These routes must remain smoke-covered and documented because native Review apply uses them for backup, render, observation, critique, and revision evidence.
+These routes must remain smoke-covered and documented because native Review apply uses them for backup, render, whole-display video observation, critique, and revision evidence.
 
 ## Boundary rule
 

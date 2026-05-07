@@ -107,6 +107,7 @@ Startup gating:
 - `POST /xlightsdesigner/api/sequence/save`
 - `POST /xlightsdesigner/api/sequence/close`
 - `POST /xlightsdesigner/api/sequence/render-current`
+- `POST /xlightsdesigner/api/sequence/export-preview-video`
 - `POST /xlightsdesigner/api/sequence/render-samples`
 
 ### Timing
@@ -137,6 +138,8 @@ Startup gating:
 `layout/scene` returns model/group geometry and channel ranges for render-feedback sampling. It is the preferred layout read for sequence-agent observation and critique.
 
 `sequence/render-samples` reads packed channel samples from the most recent rendered `.fseq`. Call `sequence/render-current` first when the current sequence has changed; otherwise the endpoint can return `409 RENDER_SAMPLES_UNAVAILABLE`.
+
+`sequence/export-preview-video` exports the current House Preview as MP4 using xLights' native preview video exporter. It accepts `file` and optional `renderFirst`; automation suppresses export failure dialogs and reports failures through the owned API job result.
 
 ### Elements
 - `GET /xlightsdesigner/api/elements/summary`

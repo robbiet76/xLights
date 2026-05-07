@@ -16,6 +16,7 @@ public:
     using SaveSequenceFn = std::function<models::SequenceSaveResult()>;
     using CloseSequenceFn = std::function<models::SequenceCloseResult()>;
     using RenderSequenceFn = std::function<models::SequenceRenderResult()>;
+    using ExportPreviewVideoFn = std::function<models::SequencePreviewVideoExportResult(const models::SequencePreviewVideoExportRequest&)>;
     using ReadRenderedSamplesFn = std::function<models::SequenceRenderSamplesResult(const models::SequenceRenderSamplesRequest&)>;
 
     SequenceService(ReadOpenSequenceFn readOpenSequence,
@@ -26,6 +27,7 @@ public:
                     SaveSequenceFn saveSequence,
                     CloseSequenceFn closeSequence,
                     RenderSequenceFn renderSequence,
+                    ExportPreviewVideoFn exportPreviewVideo,
                     ReadRenderedSamplesFn readRenderedSamples)
         : _readOpenSequence(std::move(readOpenSequence)),
           _readSequenceSettings(std::move(readSequenceSettings)),
@@ -35,6 +37,7 @@ public:
           _saveSequence(std::move(saveSequence)),
           _closeSequence(std::move(closeSequence)),
           _renderSequence(std::move(renderSequence)),
+          _exportPreviewVideo(std::move(exportPreviewVideo)),
           _readRenderedSamples(std::move(readRenderedSamples)) {}
 
     [[nodiscard]] models::SequenceSummary getOpenSequence() const {
@@ -73,6 +76,10 @@ public:
         return _renderSequence ? _renderSequence() : models::SequenceRenderResult{};
     }
 
+    [[nodiscard]] models::SequencePreviewVideoExportResult exportPreviewVideo(const models::SequencePreviewVideoExportRequest& request) const {
+        return _exportPreviewVideo ? _exportPreviewVideo(request) : models::SequencePreviewVideoExportResult{};
+    }
+
     [[nodiscard]] models::SequenceRenderSamplesResult getRenderedSamples(const models::SequenceRenderSamplesRequest& request) const {
         return _readRenderedSamples ? _readRenderedSamples(request) : models::SequenceRenderSamplesResult{};
     }
@@ -86,6 +93,7 @@ private:
     SaveSequenceFn _saveSequence;
     CloseSequenceFn _closeSequence;
     RenderSequenceFn _renderSequence;
+    ExportPreviewVideoFn _exportPreviewVideo;
     ReadRenderedSamplesFn _readRenderedSamples;
 };
 

@@ -4,6 +4,7 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace xLightsDesigner::api::models {
 
@@ -89,6 +90,19 @@ struct SequenceRenderResult {
     bool rendered = false;
     SequenceSummary sequence;
     std::optional<std::string> fseqPath;
+};
+
+struct SequencePreviewVideoExportRequest {
+    std::string file;
+    bool renderFirst = false;
+};
+
+struct SequencePreviewVideoExportResult {
+    bool exported = false;
+    std::optional<std::string> file;
+    std::optional<std::string> errorCode;
+    std::optional<std::string> errorMessage;
+    SequenceSummary sequence;
 };
 
 struct SequenceSettingsUpdateResult {

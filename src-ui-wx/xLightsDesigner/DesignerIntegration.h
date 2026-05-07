@@ -225,6 +225,7 @@ inline std::optional<api::transport::ApiResponse> HandleDesignerApiRequest(
         [host]() { return host->saveSequence(); },
         [host]() { return host->closeSequence(); },
         [host]() { return host->renderCurrentSequence(); },
+        [host](const api::models::SequencePreviewVideoExportRequest& request) { return host->exportPreviewVideo(request); },
         [host](const api::models::SequenceRenderSamplesRequest& request) { return host->readRenderedSamples(request); });
     api::services::TimingService timingService(
         [host]() { return host->readTimingTracks(); },

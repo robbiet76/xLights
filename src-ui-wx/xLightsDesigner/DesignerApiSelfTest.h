@@ -69,6 +69,8 @@ inline DesignerApiSelfTestResult RunDesignerApiSelfTests() {
               "EndpointRouter should map timing add-marks endpoint.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/sequence/render-samples") == std::optional<std::string>("sequence.getRenderSamples"),
               "EndpointRouter should map render samples endpoint.", result);
+        Check(router.resolve("POST", "/xlightsdesigner/api/sequence/export-preview-video") == std::optional<std::string>("sequence.exportPreviewVideo"),
+              "EndpointRouter should map preview video export endpoint.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/sequencing/apply-window-plan") == std::optional<std::string>("sequencing.applyWindowPlan"),
               "EndpointRouter should map sequencing apply-window-plan endpoint.", result);
         Check(router.resolve("GET", "/xlightsdesigner/api/elements/display-order") == std::optional<std::string>("elements.getDisplayOrder"),

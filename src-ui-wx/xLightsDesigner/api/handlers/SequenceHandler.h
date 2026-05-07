@@ -399,6 +399,65 @@ public:
         return BuildQueuedJobAcceptedResponse(request, jobId);
     }
 
+    [[nodiscard]] transport::ApiResponse handleExportPreviewVideo(const transport::ApiRequest& request) const {
+        transport::ApiResponse response;
+        response.command = request.command;
+        response.requestId = request.requestId;
+
+        models::SequencePreviewVideoExportRequest exportRequest;
+        if (auto it = request.params.find("file"); it != request.params.end()) {
+            exportRequest.file = it->second;
+        }
+        if (auto it = request.params.find("renderFirst"); it != request.params.end()) {
+            exportRequest.renderFirst = (it->second == "1" || it->second == "true" || it->second == "TRUE" || it->second == "yes" || it->second == "YES");
+        }
+
+        const auto validation = validatePreviewVideoExportRequest(exportRequest);
+        if (!validation.ok()) {
+            nlohmann::json issues = nlohmann::json::array();
+            for (const auto& issue : validation.issues) {
+                issues.push_back({{"field", issue.field}, {"code", issue.code}, {"message", issue.message}});
+            }
+            response.statusCode = 400;
+            response.error = transport::ApiError{
+                std::string(transport::errors::ValidationError),
+                "Invalid sequence.exportPreviewVideo request.",
+                nlohmann::json{{"issues", issues}}
+            };
+            return response;
+        }
+
+        const auto jobId = SubmitDesignerApiJob(request.command, request.requestId, [service = _service, request, exportRequest]() {
+            transport::ApiResponse jobResponse;
+            jobResponse.command = request.command;
+            jobResponse.requestId = request.requestId;
+            const auto result = service.exportPreviewVideo(exportRequest);
+            if (!result.exported || !result.sequence.isOpen) {
+                int statusCode = 409;
+                if (result.errorCode.has_value() && result.errorCode.value() == transport::errors::SequenceNotOpen) {
+                    statusCode = 404;
+                } else if (result.errorCode.has_value() && result.errorCode.value() == transport::errors::ValidationError) {
+                    statusCode = 400;
+                } else if (result.errorCode.has_value() && result.errorCode.value() == "SEQUENCE_ACCESS_DENIED") {
+                    statusCode = 403;
+                }
+                jobResponse.statusCode = statusCode;
+                jobResponse.error = transport::ApiError{
+                    result.errorCode.value_or(std::string(transport::errors::ValidationError)),
+                    result.errorMessage.value_or("Unable to export the current sequence preview video."),
+                    nlohmann::json{{"file", exportRequest.file}, {"renderFirst", exportRequest.renderFirst}}
+                };
+                return jobResponse;
+            }
+            jobResponse.data["exported"] = true;
+            jobResponse.data["file"] = result.file.value_or(exportRequest.file);
+            jobResponse.data["sequence"] = nlohmann::json{{"path", result.sequence.path.value_or("")}, {"revisionToken", result.sequence.revisionToken.value_or("")}};
+            return jobResponse;
+        });
+
+        return BuildQueuedJobAcceptedResponse(request, jobId);
+    }
+
     [[nodiscard]] transport::ApiResponse handleGetRenderSamples(const transport::ApiRequest& request) const {
         transport::ApiResponse response;
         response.command = request.command;
@@ -553,6 +612,14 @@ public:
         }
         if (request.mediaFile.empty() && request.durationMs <= 0) {
             result.addIssue("durationMs", std::string(transport::errors::ValidationError), "durationMs is required when mediaFile is not provided.");
+        }
+        return result;
+    }
+
+    [[nodiscard]] validation::ValidationResult validatePreviewVideoExportRequest(const models::SequencePreviewVideoExportRequest& request) const {
+        validation::ValidationResult result;
+        if (request.file.empty()) {
+            result.addIssue("file", std::string(transport::errors::ValidationError), "file is required.");
         }
         return result;
     }
