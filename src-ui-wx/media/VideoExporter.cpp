@@ -132,8 +132,9 @@ GenericVideoExporter::~GenericVideoExporter()
 #endif
 }
 
-void GenericVideoExporter::initialize()
+bool GenericVideoExporter::initialize()
 {
+    _lastError.clear();
     /*
     void *cio = nullptr;
     const AVCodec *ci = ::av_codec_iterate(&cio);
@@ -239,8 +240,13 @@ void GenericVideoExporter::initialize()
 
     // Open file for output and write header
     status = ::avio_open(&_formatContext->pb, _path.c_str(), AVIO_FLAG_WRITE);
-    if (status < 0)
-        throw std::runtime_error("VideoExporter - Error opening output file");
+    if (status < 0) {
+        char err[AV_ERROR_MAX_STRING_SIZE] = { 0 };
+        ::av_strerror(status, err, sizeof(err));
+        _lastError = std::string("VideoExporter - Error opening output file: ") + err;
+        spdlog::error("{} '{}'", _lastError, _path);
+        return false;
+    }
 
     // prepare to write... don't trust ::avformat_init_output() telling you that
     // a call to ::avformat_write_header() is unnecessary. If you don't call it,
@@ -248,10 +254,16 @@ void GenericVideoExporter::initialize()
     // time_base appears to be updated within this call.
     status = ::avformat_write_header(_formatContext, &av_opts);
     av_dict_free(&av_opts);
-    if (status < 0)
-        throw std::runtime_error("VideoExporter - Error writing file header");
+    if (status < 0) {
+        char err[AV_ERROR_MAX_STRING_SIZE] = { 0 };
+        ::av_strerror(status, err, sizeof(err));
+        _lastError = std::string("VideoExporter - Error writing file header: ") + err;
+        spdlog::error("{} '{}'", _lastError, _path);
+        return false;
+    }
 
     _ptsIncrement = av_rescale_q(1, _videoCodecContext->time_base, _formatContext->streams[0]->time_base);
+    return true;
 }
 
 bool GenericVideoExporter::initializeVideo(const AVCodec* codec)
@@ -801,18 +813,25 @@ bool VideoExporter::Export(wxAppProgressIndicator* appIndicator)
     setProgressReportCallback(progressLambda);
 
     try {
-        initialize();
+        if (!initialize()) {
+            status = false;
+            if (!lastError().empty()) {
+                spdlog::error("Exception caught in VideoExporter - '{}'", lastError());
+            }
+        }
         auto ip = inputParams();
         auto op = outputParams();
         spdlog::info("VideoExporter - exporting {} x {} video from {} x {}", op.width, op.height, ip.width, ip.height);
 
-        exportFrames(_frameCount);
-        bool canceled = dlg.WasCancelled();
-        if (canceled)
-            spdlog::info("VideoExporter - exporting was canceled");
+        if (status) {
+            exportFrames(_frameCount);
+            bool canceled = dlg.WasCancelled();
+            if (canceled)
+                spdlog::info("VideoExporter - exporting was canceled");
 
-        if (!canceled)
-            completeExport();
+            if (!canceled)
+                completeExport();
+        }
     } catch (const std::runtime_error& re) {
         spdlog::error("Exception caught in VideoExporter - '{}'", (const char*)re.what());
         status = false;

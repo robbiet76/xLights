@@ -791,12 +791,12 @@ bool xLightsFrame::ProcessAutomation(std::vector<std::string> &paths,
         if (filename == "" || filename == "null") {
             filename = CurrentDir + wxFileName::GetPathSeparator() + CurrentSeqXmlFile->GetName() + ".mp4";
         }
-        auto const worked = ExportVideoPreview(filename);
+        auto const worked = ExportVideoPreview(filename, false);
         if (worked) {
             std::string response = wxString::Format("{\"msg\":\"Export Video Preview.\",\"output\":\"%s\"}", JSONSafe(filename));
             return sendResponse(response, "", 200, true);
         }        
-        return sendResponse("Export Video Preview Failed", "msg", 503, true);
+        return sendResponse("Export Video Preview Failed", "msg", 503, false);
     } else if (cmd == "runScript") {
         auto filename = params["filename"];
         if (filename.empty() || filename == "null" || !FileExists(filename)) {
