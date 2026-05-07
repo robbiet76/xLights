@@ -60,6 +60,20 @@ inline std::string ToLowerCopy(std::string value) {
     return value;
 }
 
+inline int ReadDesignerApiEnvIntMs(const char* name, int fallbackMs, int minimumMs = 1000) {
+    if (name == nullptr || *name == '\0') {
+        return fallbackMs;
+    }
+    if (const char* value = std::getenv(name); value != nullptr && *value != '\0') {
+        try {
+            return std::max(minimumMs, std::stoi(value));
+        } catch (...) {
+            return fallbackMs;
+        }
+    }
+    return fallbackMs;
+}
+
 inline std::string BuildDesignerSequenceRevisionToken(xLightsFrame* frame) {
     if (frame == nullptr || frame->CurrentSeqXmlFile == nullptr) {
         return std::string();
@@ -108,7 +122,8 @@ inline bool WaitDesignerRenderComplete(xLightsFrame* frame) {
 
     // RenderAll schedules asynchronous render work. The owned API must not
     // write the FSEQ until that work has populated sequence data for all frames.
-    constexpr int maxAttempts = 2400; // 60 seconds at 25ms per attempt.
+    const int maxWaitMs = ReadDesignerApiEnvIntMs("XLIGHTS_DESIGNER_RENDER_WAIT_MS", 600000);
+    const int maxAttempts = std::max(1, maxWaitMs / 25);
     for (int attempt = 0; attempt < maxAttempts && frame->ProgressBar != nullptr && frame->ProgressBar->IsShown(); ++attempt) {
         wxMilliSleep(25);
         wxYieldIfNeeded();
@@ -638,7 +653,8 @@ public:
             }
             promise->set_value(callbackResult);
         });
-        if (future.wait_for(std::chrono::seconds(90)) != std::future_status::ready) {
+        const int openWaitMs = detail::ReadDesignerApiEnvIntMs("XLIGHTS_DESIGNER_SEQUENCE_OPEN_WAIT_MS", 600000);
+        if (future.wait_for(std::chrono::milliseconds(openWaitMs)) != std::future_status::ready) {
             result.errorCode = "SEQUENCE_OPEN_TIMEOUT";
             result.errorMessage = "Timed out waiting for xLights to finish opening the requested sequence.";
             return result;
