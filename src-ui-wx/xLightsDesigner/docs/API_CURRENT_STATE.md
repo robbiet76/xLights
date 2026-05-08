@@ -130,6 +130,7 @@ Startup gating:
 `layout/settings` currently reports:
 - layout dirty flags
 - `modelsChangeCount`
+- `previewWidth` / `previewHeight`
 - `showDirectory`
 - saved file paths and last modified timestamps for:
   - `xlights_rgbeffects.xml`

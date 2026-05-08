@@ -121,6 +121,8 @@ struct LayoutSettingsSummary {
     bool hasUnsavedRgbEffectsChanges = false;
     bool hasUnsavedNetworkChanges = false;
     unsigned int modelsChangeCount = 0;
+    int previewWidth = 0;
+    int previewHeight = 0;
     std::string showDirectory;
     std::string rgbEffectsFile;
     std::string rgbEffectsModifiedAt;

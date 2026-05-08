@@ -411,6 +411,8 @@ public:
         if (auto it = request.params.find("renderFirst"); it != request.params.end()) {
             exportRequest.renderFirst = (it->second == "1" || it->second == "true" || it->second == "TRUE" || it->second == "yes" || it->second == "YES");
         }
+        exportRequest.width = parsing::ReadInt(request.params, "width", 0);
+        exportRequest.height = parsing::ReadInt(request.params, "height", 0);
 
         const auto validation = validatePreviewVideoExportRequest(exportRequest);
         if (!validation.ok()) {
@@ -445,7 +447,7 @@ public:
                 jobResponse.error = transport::ApiError{
                     result.errorCode.value_or(std::string(transport::errors::ValidationError)),
                     result.errorMessage.value_or("Unable to export the current sequence preview video."),
-                    nlohmann::json{{"file", exportRequest.file}, {"renderFirst", exportRequest.renderFirst}}
+                    nlohmann::json{{"file", exportRequest.file}, {"renderFirst", exportRequest.renderFirst}, {"width", exportRequest.width}, {"height", exportRequest.height}}
                 };
                 return jobResponse;
             }
@@ -620,6 +622,9 @@ public:
         validation::ValidationResult result;
         if (request.file.empty()) {
             result.addIssue("file", std::string(transport::errors::ValidationError), "file is required.");
+        }
+        if ((request.width < 0 || request.height < 0) || ((request.width > 0 || request.height > 0) && (request.width <= 0 || request.height <= 0))) {
+            result.addIssue("width", std::string(transport::errors::ValidationError), "width and height must both be positive when either is provided.");
         }
         return result;
     }

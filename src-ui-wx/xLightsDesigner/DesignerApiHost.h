@@ -14,6 +14,7 @@
 #include <cmath>
 #include <algorithm>
 #include <set>
+#include <cstdlib>
 
 #include "FSEQFile.h"
 #include "AudioManager.h"
@@ -522,6 +523,8 @@ public:
         settings.hasUnsavedNetworkChanges = _frame->UnsavedNetworkChanges;
         settings.hasUnsavedLayoutChanges = settings.hasUnsavedRgbEffectsChanges || settings.hasUnsavedNetworkChanges;
         settings.modelsChangeCount = _frame->modelsChangeCount;
+        settings.previewWidth = static_cast<int>(std::strtol(_frame->GetXmlSetting("previewWidth", "0").c_str(), nullptr, 10));
+        settings.previewHeight = static_cast<int>(std::strtol(_frame->GetXmlSetting("previewHeight", "0").c_str(), nullptr, 10));
         settings.showDirectory = _frame->CurrentDir.ToStdString();
 
         const wxFileName rgbEffectsFile(_frame->CurrentDir, XLIGHTS_RGBEFFECTS_FILE);
@@ -948,7 +951,7 @@ public:
                 }
             }
 
-            const bool exported = _frame->ExportVideoPreview(outputFile.GetFullPath(), false);
+            const bool exported = _frame->ExportVideoPreview(outputFile.GetFullPath(), false, request.width, request.height);
             result.sequence = readOpenSequence();
             if (!exported || !wxFileExists(outputFile.GetFullPath())) {
                 result.errorCode = "PREVIEW_VIDEO_EXPORT_FAILED";

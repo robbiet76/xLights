@@ -95,6 +95,8 @@ struct SequenceRenderResult {
 struct SequencePreviewVideoExportRequest {
     std::string file;
     bool renderFirst = false;
+    int width = 0;
+    int height = 0;
 };
 
 struct SequencePreviewVideoExportResult {

@@ -204,6 +204,8 @@ public:
         response.data["hasUnsavedRgbEffectsChanges"] = settings.hasUnsavedRgbEffectsChanges;
         response.data["hasUnsavedNetworkChanges"] = settings.hasUnsavedNetworkChanges;
         response.data["modelsChangeCount"] = settings.modelsChangeCount;
+        response.data["previewWidth"] = settings.previewWidth;
+        response.data["previewHeight"] = settings.previewHeight;
         response.data["showDirectory"] = settings.showDirectory;
         response.data["rgbEffectsFile"] = settings.rgbEffectsFile;
         response.data["rgbEffectsModifiedAt"] = settings.rgbEffectsModifiedAt;

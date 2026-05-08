@@ -10,10 +10,13 @@ Current allowed non-baseline files outside `xLights/xLightsDesigner/`:
 - `xLights/xLightsApp.cpp`
 - `xLights/xLightsApp.h`
 - `xLights/TabSequence.cpp`
+- `xLights/xLightsMain.cpp`
+- `xLights/xLightsMain.h`
 
 Reason:
 - `xLightsApp.*` provides the minimal startup and shutdown lifecycle hooks used to register the xLightsDesigner integration module
 - `TabSequence.cpp` applies owned-enabled policy to rgbeffects and effect-preset autosave recovery prompts so known startup recovery prompts do not block automated listener startup
+- `xLightsMain.*` exposes the narrow host hooks needed by owned API operations that must call existing xLights frame behavior, including requested-size House Preview video export
 
 Modal boundary:
 - normal owned API automation should prevent modals by using deterministic route preconditions

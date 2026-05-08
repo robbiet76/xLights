@@ -43,6 +43,7 @@
 #include <wx/zipstrm.h>
 
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <thread>
 #include <string>
@@ -3724,7 +3725,7 @@ void xLightsFrame::OnMenuItem_File_Export_VideoSelected(wxCommandEvent& event)
     ExportVideoPreview(pExportDlg.GetPath());
 }
 
-bool xLightsFrame::ExportVideoPreview(wxString const& path, bool showErrorDialog)
+bool xLightsFrame::ExportVideoPreview(wxString const& path, bool showErrorDialog, int requestedWidth, int requestedHeight)
 {
     int frameCount = _seqData.NumFrames();
 
@@ -3768,12 +3769,36 @@ bool xLightsFrame::ExportVideoPreview(wxString const& path, bool showErrorDialog
     
     spdlog::debug("Writing house-preview video to {}.", (const char*)path.c_str());
 
-    int width = housePreview->getWidth();
-    int height = housePreview->getHeight();
     double contentScaleFactor = housePreview->GetContentScaleFactor();
 #ifdef _WIN32
     contentScaleFactor = 1.;
 #endif // WIN32
+    int width = housePreview->getWidth();
+    int height = housePreview->getHeight();
+    const wxSize previousPanelMinSize = _housePreviewPanel->GetMinSize();
+    const wxSize previousPanelSize = _housePreviewPanel->GetSize();
+    const wxSize previousPreviewMinSize = housePreview->GetMinSize();
+    const wxSize previousPreviewSize = housePreview->GetSize();
+    bool resizedForExport = false;
+    if (requestedWidth > 0 && requestedHeight > 0) {
+        width = std::max(1, static_cast<int>(std::ceil(static_cast<double>(requestedWidth) / contentScaleFactor)));
+        height = std::max(1, static_cast<int>(std::ceil(static_cast<double>(requestedHeight) / contentScaleFactor)));
+        const wxSize requestedPreviewSize(width, height);
+        _housePreviewPanel->SetMinSize(requestedPreviewSize);
+        _housePreviewPanel->SetSize(requestedPreviewSize);
+        housePreview->SetMinSize(requestedPreviewSize);
+        housePreview->SetSize(requestedPreviewSize);
+        _housePreviewPanel->Layout();
+        m_mgr->Update();
+        wxYieldIfNeeded();
+        spdlog::info(
+            "VideoExporter - requested house preview export surface {} x {}; actual preview surface {} x {}.",
+            width,
+            height,
+            housePreview->getWidth(),
+            housePreview->getHeight());
+        resizedForExport = true;
+    }
 
     int audioChannelCount = 0;
     int audioSampleRate = 0;
@@ -3825,6 +3850,15 @@ bool xLightsFrame::ExportVideoPreview(wxString const& path, bool showErrorDialog
     }
 
     SetPlayStatus(playStatus);
+
+    if (resizedForExport) {
+        _housePreviewPanel->SetMinSize(previousPanelMinSize);
+        _housePreviewPanel->SetSize(previousPanelSize);
+        housePreview->SetMinSize(previousPreviewMinSize);
+        housePreview->SetSize(previousPreviewSize);
+        _housePreviewPanel->Layout();
+        m_mgr->Update();
+    }
 
     if (!visible) {
         m_mgr->GetPane("HousePreview").Hide();
