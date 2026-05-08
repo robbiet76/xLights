@@ -38,6 +38,7 @@
 #include <wx/tooltip.h>
 #include <wx/valnum.h>
 #include <wx/version.h>
+#include "xLightsDesigner/DesignerLaunchPolicy.h"
 #include <wx/wfstream.h>
 #include <wx/zipstrm.h>
 
@@ -2013,15 +2014,19 @@ xLightsFrame::xLightsFrame(wxWindow* parent, int ab, wxWindowID id, bool renderO
     ResetEffectsXml();
     EnableSequenceControls(true);
     if (ok && !dir.IsEmpty()) {
-        if (!SetDir(dir, !showDirFromCommandLine)) {
-            CurrentDir = "";
-            if (!PromptForShowDirectory(true, dir)) {
+            if (!SetDir(dir, !showDirFromCommandLine)) {
                 CurrentDir = "";
-                splash.Hide();
-                wxMessageBox("Exiting as setting a show folder is not optional.");
-                wxExit();
-                return;
-            }
+                if (!PromptForShowDirectory(true, dir)) {
+                    CurrentDir = "";
+                    splash.Hide();
+                    if (xLightsDesigner::ShouldSuppressPrompt()) {
+                        spdlog::error("Exiting during noninteractive launch because a valid show folder could not be established.");
+                    } else {
+                        wxMessageBox("Exiting as setting a show folder is not optional.");
+                    }
+                    wxExit();
+                    return;
+                }
         } else {
             if (ShowFolderIsInBackup(dir.ToStdString())) {
                 DisplayWarning("WARNING: Opening a show folder inside a backup folder. This is generally a very very bad idea.", this);
@@ -2036,7 +2041,11 @@ xLightsFrame::xLightsFrame(wxWindow* parent, int ab, wxWindowID id, bool renderO
         if (!PromptForShowDirectory(true)) {
             CurrentDir = "";
             splash.Hide();
-            wxMessageBox("Exiting as setting a show folder is not optional.");
+            if (xLightsDesigner::ShouldSuppressPrompt()) {
+                spdlog::error("Exiting during noninteractive launch because no show folder was available.");
+            } else {
+                wxMessageBox("Exiting as setting a show folder is not optional.");
+            }
             wxExit();
             return;
         }

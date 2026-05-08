@@ -25,6 +25,7 @@
 #include <thread>
 
 #include "xLightsMain.h"
+#include "xLightsDesigner/DesignerLaunchPolicy.h"
 #include "layout/LayoutPanel.h"
 #include "render/SequenceFile.h"
 #ifdef __WXOSX__
@@ -202,7 +203,13 @@ void xLightsFrame::UpdateRecentFilesList(bool reload) {
 
 bool xLightsFrame::SetDir(const wxString& newdir, bool permanent)
 {
+    if (xLightsDesigner::IsNonInteractiveLaunch()) {
+        spdlog::info("xLightsDesigner SetDir start dir='{}' permanent={}.", ToStdString(newdir), permanent);
+    }
     if (readOnlyMode) {
+        if (xLightsDesigner::IsNonInteractiveLaunch()) {
+            spdlog::error("xLightsDesigner SetDir failed: readOnlyMode.");
+        }
         wxMessageBox("Show directory cannot be changed in read only mode.", "Read Only Mode", wxICON_INFORMATION | wxOK);
         return false;
     }
@@ -213,11 +220,20 @@ bool xLightsFrame::SetDir(const wxString& newdir, bool permanent)
 
     // don't change show directories with an open sequence because models won't match
     if (!CloseSequence()) {
+        if (xLightsDesigner::IsNonInteractiveLaunch()) {
+            spdlog::error("xLightsDesigner SetDir failed: CloseSequence returned false.");
+        }
         return false;
     }
 
     if (!ObtainAccessToURL(newdir, true)) {
-        return false;
+        if (!xLightsDesigner::HasLaunchTrustedRootAccess(ToStdString(newdir), true)) {
+            if (xLightsDesigner::IsNonInteractiveLaunch()) {
+                spdlog::error("xLightsDesigner SetDir failed: no bookmark access and trusted-root write probe failed for '{}'.", ToStdString(newdir));
+            }
+            return false;
+        }
+        spdlog::info("Using xLightsDesigner trusted-root write access for show directory {}.", ToStdString(newdir));
     }
 
     
@@ -313,6 +329,9 @@ bool xLightsFrame::SetDir(const wxString& newdir, bool permanent)
     MenuFile->FindItem(ID_MENUITEM_RECENTFOLDERS)->Enable(cnt != 0);
 
     if (!DirExists) {
+        if (xLightsDesigner::IsNonInteractiveLaunch()) {
+            spdlog::error("xLightsDesigner SetDir failed: directory does not exist '{}'.", ToStdString(nd));
+        }
         wxString msg = _("The show directory '") + nd + ("' no longer exists.\nPlease choose a new show directory.");
         DisplayError(msg, this);
         return false;
@@ -380,6 +399,9 @@ bool xLightsFrame::SetDir(const wxString& newdir, bool permanent)
                 // File exists, but is not readable, but xLightsFrame hasn't been fully open
                 // Assume that xLights doesn't have permission to read from the show directory so
                 // prompt to re-aquire access.
+                if (xLightsDesigner::IsNonInteractiveLaunch()) {
+                    spdlog::error("xLightsDesigner SetDir failed: unable to load network config '{}' before frame visible.", networkFile.GetFullPath().ToStdString());
+                }
                 DisplayError(wxString::Format("Unable to load network config %s.  Try reselecting the show directory.", networkFile.GetFullPath()));
                 return false;
             }
@@ -398,7 +420,7 @@ bool xLightsFrame::SetDir(const wxString& newdir, bool permanent)
                 }
             }
 
-            if (!zcppControllers.empty()) {
+            if (!zcppControllers.empty() && !xLightsDesigner::ShouldSuppressPrompt()) {
                 wxString controllerList;
                 for (size_t i = 0; i < zcppControllers.size(); i++) {
                     if (i > 0) controllerList += ", ";
@@ -518,6 +540,9 @@ bool xLightsFrame::SetDir(const wxString& newdir, bool permanent)
 
     ValidateWindow();
 
+    if (xLightsDesigner::IsNonInteractiveLaunch()) {
+        spdlog::info("xLightsDesigner SetDir succeeded dir='{}'.", ToStdString(CurrentDir));
+    }
     return true;
 }
 
@@ -552,6 +577,10 @@ void xLightsFrame::OnButton_ChangeShowFolderTemporarily(wxCommandEvent& event)
 }
 
 bool xLightsFrame::PromptForDirectorySelection(const std::string &msg, std::string &dir) {
+    if (xLightsDesigner::ShouldSuppressPrompt()) {
+        spdlog::warn("Suppressing directory selection prompt during noninteractive launch: {} (current='{}')", msg, dir);
+        return false;
+    }
     wxDirDialog DirDialog1(this, msg, dir, wxDD_DEFAULT_STYLE, wxDefaultPosition, wxDefaultSize, _T("wxDirDialog"));
     while (true) {
         if (DirDialog1.ShowModal() == wxID_OK) {
@@ -565,6 +594,10 @@ bool xLightsFrame::PromptForDirectorySelection(const std::string &msg, std::stri
 
 
 bool xLightsFrame::PromptForShowDirectory(bool permanent, const std::string &defaultDir) {
+    if (xLightsDesigner::ShouldSuppressPrompt()) {
+        spdlog::error("Suppressing show directory prompt during noninteractive launch (default='{}').", defaultDir);
+        return false;
+    }
 
     wxDirDialog DirDialog1(this, _("Select Show Directory"), defaultDir, wxDD_DEFAULT_STYLE, wxDefaultPosition, wxDefaultSize, _T("wxDirDialog"));
 

@@ -30,11 +30,14 @@
 #include <time.h>       /* time */
 #include <thread>
 #include <iomanip>
+#include <csignal>
 #include "utils/ThreadUtils.h"
 #include <curl/curl.h>
 
 #include "xLightsApp.h"
 #include "xLightsVersion.h"
+#include "xLightsDesigner/DesignerIntegration.h"
+#include "xLightsDesigner/DesignerLaunchPolicy.h"
 #include "UtilFunctions.h"
 #include "shared/utils/wxUtilities.h"
 #include "settings/XLightsConfigAdapter.h"
@@ -513,6 +516,9 @@ bool xLightsApp::OnInit()
 {
     SetMainThreadId();
     InitialiseLogging(false);
+    if (xLightsDesigner::IsNonInteractiveLaunch()) {
+        std::signal(SIGPIPE, SIG_IGN);
+    }
 
     AppCallbacks::SetPostToMainThread([](std::function<void()> fn) {
         wxTheApp->CallAfter(std::move(fn));
@@ -740,13 +746,20 @@ bool xLightsApp::OnInit()
             sequenceFiles.Clear();
         }
 
-        if (!parser.Found("cs") && !parser.Found("r") && !parser.Found("o") && !info.empty() && readOnlyZipFile == "")
-        {
-            wxMessageBox(info, "Information", wxICON_INFORMATION | wxOK); // pre-frame: callback not yet registered
+        if (!parser.Found("cs") && !parser.Found("r") && !parser.Found("o") && !info.empty() && readOnlyZipFile == "") {
+            if (xLightsDesigner::IsNonInteractiveLaunch()) {
+                spdlog::info("Suppressing pre-frame command line info dialog during noninteractive launch: {}", (const char*)info.c_str());
+            } else {
+                wxMessageBox(info, "Information", wxICON_INFORMATION | wxOK); // pre-frame: callback not yet registered
+            }
         }
         break;
     default:
-        wxMessageBox(_("Unrecognized command line parameters"), "Error", wxICON_ERROR | wxOK); // pre-frame: callback not yet registered
+        if (xLightsDesigner::IsNonInteractiveLaunch()) {
+            spdlog::error("Unrecognized command line parameters during noninteractive launch.");
+        } else {
+            wxMessageBox(_("Unrecognized command line parameters"), "Error", wxICON_ERROR | wxOK); // pre-frame: callback not yet registered
+        }
         return false;
     }
 
@@ -813,6 +826,7 @@ bool xLightsApp::OnInit()
 
     xLightsFrame* const topFrame = (xLightsFrame*)GetTopWindow();
     __frame = topFrame;
+    xLightsDesigner::InitializeDesignerIntegration(topFrame);
 
     if (renderOnlyMode) {
         topFrame->CallAfter(&xLightsFrame::OpenRenderAndSaveSequencesF, sequenceFiles, xLightsFrame::RENDER_EXIT_ON_DONE);
@@ -845,6 +859,10 @@ bool xLightsApp::OnInit()
         glutInit(&(wxApp::argc), wxApp::argv);
     #endif
 
+    topFrame->CallAfter([]() {
+        xLightsDesigner::NotifyDesignerAppReady();
+    });
+
     spdlog::info("XLightsApp OnInit Done.");
 
     return wxsOK;
@@ -864,6 +882,12 @@ bool xLightsApp::ProcessIdle() {
         return wxApp::ProcessIdle() | b;
     }
     return b;
+}
+
+int xLightsApp::OnExit()
+{
+    xLightsDesigner::ShutdownDesignerIntegration();
+    return xLightsAppBaseClass::OnExit();
 }
 
 //global flags from command line:
