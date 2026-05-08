@@ -92,6 +92,39 @@ struct SequenceRenderResult {
     std::optional<std::string> fseqPath;
 };
 
+struct SequenceCheckIssue {
+    std::string type;
+    std::string message;
+    std::string category;
+    std::string modelName;
+    std::string effectName;
+    int startTimeMs = -1;
+    int layerIndex = -1;
+};
+
+struct SequenceCheckSection {
+    std::string id;
+    std::string title;
+    std::string description;
+    int errorCount = 0;
+    int warningCount = 0;
+    std::vector<SequenceCheckIssue> issues;
+};
+
+struct SequenceCheckResult {
+    bool checked = false;
+    bool sequenceOpen = false;
+    int errorCount = 0;
+    int warningCount = 0;
+    std::string showDirectory;
+    std::string sequencePath;
+    std::string generatedAt;
+    std::optional<std::string> errorCode;
+    std::optional<std::string> errorMessage;
+    SequenceSummary sequence;
+    std::vector<SequenceCheckSection> sections;
+};
+
 struct SequencePreviewVideoExportRequest {
     std::string file;
     bool renderFirst = false;

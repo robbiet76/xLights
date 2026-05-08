@@ -22,6 +22,7 @@ public:
         if (method == "POST" && path == "/xlightsdesigner/api/sequence/save") return "sequence.save";
         if (method == "POST" && path == "/xlightsdesigner/api/sequence/close") return "sequence.close";
         if (method == "POST" && path == "/xlightsdesigner/api/sequence/render-current") return "sequence.renderCurrent";
+        if (method == "POST" && path == "/xlightsdesigner/api/sequence/check") return "sequence.check";
         if (method == "POST" && path == "/xlightsdesigner/api/sequence/export-preview-video") return "sequence.exportPreviewVideo";
         if (method == "POST" && path == "/xlightsdesigner/api/sequence/render-samples") return "sequence.getRenderSamples";
 

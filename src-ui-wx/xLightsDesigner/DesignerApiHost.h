@@ -20,6 +20,8 @@
 #include "AudioManager.h"
 #include "SequenceFile.h"
 #include "xLightsMain.h"
+#include "diagnostics/CheckSequenceReport.h"
+#include "diagnostics/SequenceChecker.h"
 #include "models/CustomModel.h"
 #include "models/DisplayAsType.h"
 #include "models/ModelGroup.h"
@@ -131,6 +133,35 @@ inline bool WaitDesignerRenderComplete(xLightsFrame* frame) {
     }
     return frame->ProgressBar == nullptr || !frame->ProgressBar->IsShown();
 }
+
+inline std::string SequenceCheckIssueType(CheckSequenceReport::ReportIssue::Type type) {
+    switch (type) {
+        case CheckSequenceReport::ReportIssue::CRITICAL:
+            return "critical";
+        case CheckSequenceReport::ReportIssue::WARNING:
+            return "warning";
+        case CheckSequenceReport::ReportIssue::INFO:
+        default:
+            return "info";
+    }
+}
+
+class DesignerSequenceCheckCallbacks final : public SequenceCheckerCallbacks {
+public:
+    explicit DesignerSequenceCheckCallbacks(xLightsFrame* frame)
+        : _frame(frame) {}
+
+    bool IsCheckOptionDisabled(const std::string& option) const override {
+        return xLightsFrame::IsCheckSequenceOptionDisabledS(option);
+    }
+
+    std::string GetRenderCacheMode() const override {
+        return _frame == nullptr ? "Enabled" : _frame->EnableRenderCache().ToStdString();
+    }
+
+private:
+    xLightsFrame* _frame = nullptr;
+};
 
 inline wxString FindDesignerShowDirectoryForSequence(const std::string& sequenceFile) {
     wxString showDir = wxPathOnly(wxString::FromUTF8(sequenceFile));
@@ -523,8 +554,8 @@ public:
         settings.hasUnsavedNetworkChanges = _frame->UnsavedNetworkChanges;
         settings.hasUnsavedLayoutChanges = settings.hasUnsavedRgbEffectsChanges || settings.hasUnsavedNetworkChanges;
         settings.modelsChangeCount = _frame->modelsChangeCount;
-        settings.previewWidth = static_cast<int>(std::strtol(_frame->GetXmlSetting("previewWidth", "0").c_str(), nullptr, 10));
-        settings.previewHeight = static_cast<int>(std::strtol(_frame->GetXmlSetting("previewHeight", "0").c_str(), nullptr, 10));
+        settings.previewWidth = _frame->AllModels.GetPreviewWidth();
+        settings.previewHeight = _frame->AllModels.GetPreviewHeight();
         settings.showDirectory = _frame->CurrentDir.ToStdString();
 
         const wxFileName rgbEffectsFile(_frame->CurrentDir, XLIGHTS_RGBEFFECTS_FILE);
@@ -905,6 +936,71 @@ public:
             promise->set_value(finalizeResult());
         });
         return future.get();
+    }
+
+    [[nodiscard]] api::models::SequenceCheckResult checkSequence() const {
+        return RunOnMainThread<api::models::SequenceCheckResult>([this]() {
+            api::models::SequenceCheckResult result;
+            result.sequence = readOpenSequence();
+            result.sequenceOpen = result.sequence.isOpen;
+            if (_frame == nullptr) {
+                result.errorCode = "VALIDATION_ERROR";
+                result.errorMessage = "xLights frame is unavailable.";
+                return result;
+            }
+
+            _frame->RecalcModels();
+
+            CheckSequenceReport report;
+            for (const auto& section : CheckSequenceReport::REPORT_SECTIONS) {
+                report.AddSection(section);
+            }
+            report.SetShowFolder(_frame->GetShowDirectory());
+            if (_frame->CurrentSeqXmlFile != nullptr) {
+                wxFileName sequenceFile(_frame->CurrentSeqXmlFile->GetFullPath());
+                sequenceFile.SetExt("xsq");
+                report.SetSequencePath(sequenceFile.GetFullPath().ToStdString());
+            }
+
+            detail::DesignerSequenceCheckCallbacks callbacks(_frame);
+            SequenceChecker checker(
+                _frame->GetSequenceElements(),
+                _frame->AllModels,
+                *_frame->GetOutputManager(),
+                _frame->CurrentSeqXmlFile,
+                _frame->GetShowDirectory(),
+                &callbacks);
+            checker.RunFullCheck(report);
+
+            result.checked = true;
+            result.errorCount = report.GetTotalErrors();
+            result.warningCount = report.GetTotalWarnings();
+            result.showDirectory = report.GetShowFolder();
+            result.sequencePath = report.GetSequencePath();
+            result.generatedAt = report.GetGeneratedTime();
+            for (const auto& reportSection : report.GetSections()) {
+                api::models::SequenceCheckSection section;
+                section.id = reportSection.id;
+                section.title = reportSection.title;
+                section.description = reportSection.description;
+                section.errorCount = reportSection.errorCount;
+                section.warningCount = reportSection.warningCount;
+                section.issues.reserve(reportSection.issues.size());
+                for (const auto& reportIssue : reportSection.issues) {
+                    api::models::SequenceCheckIssue issue;
+                    issue.type = detail::SequenceCheckIssueType(reportIssue.type);
+                    issue.message = reportIssue.message;
+                    issue.category = reportIssue.category;
+                    issue.modelName = reportIssue.modelName;
+                    issue.effectName = reportIssue.effectName;
+                    issue.startTimeMs = reportIssue.startTimeMS;
+                    issue.layerIndex = reportIssue.layerIndex;
+                    section.issues.push_back(std::move(issue));
+                }
+                result.sections.push_back(std::move(section));
+            }
+            return result;
+        });
     }
 
     [[nodiscard]] api::models::SequencePreviewVideoExportResult exportPreviewVideo(const api::models::SequencePreviewVideoExportRequest& request) const {

@@ -16,6 +16,7 @@ public:
     using SaveSequenceFn = std::function<models::SequenceSaveResult()>;
     using CloseSequenceFn = std::function<models::SequenceCloseResult()>;
     using RenderSequenceFn = std::function<models::SequenceRenderResult()>;
+    using CheckSequenceFn = std::function<models::SequenceCheckResult()>;
     using ExportPreviewVideoFn = std::function<models::SequencePreviewVideoExportResult(const models::SequencePreviewVideoExportRequest&)>;
     using ReadRenderedSamplesFn = std::function<models::SequenceRenderSamplesResult(const models::SequenceRenderSamplesRequest&)>;
 
@@ -27,6 +28,7 @@ public:
                     SaveSequenceFn saveSequence,
                     CloseSequenceFn closeSequence,
                     RenderSequenceFn renderSequence,
+                    CheckSequenceFn checkSequence,
                     ExportPreviewVideoFn exportPreviewVideo,
                     ReadRenderedSamplesFn readRenderedSamples)
         : _readOpenSequence(std::move(readOpenSequence)),
@@ -37,6 +39,7 @@ public:
           _saveSequence(std::move(saveSequence)),
           _closeSequence(std::move(closeSequence)),
           _renderSequence(std::move(renderSequence)),
+          _checkSequence(std::move(checkSequence)),
           _exportPreviewVideo(std::move(exportPreviewVideo)),
           _readRenderedSamples(std::move(readRenderedSamples)) {}
 
@@ -76,6 +79,10 @@ public:
         return _renderSequence ? _renderSequence() : models::SequenceRenderResult{};
     }
 
+    [[nodiscard]] models::SequenceCheckResult checkSequence() const {
+        return _checkSequence ? _checkSequence() : models::SequenceCheckResult{};
+    }
+
     [[nodiscard]] models::SequencePreviewVideoExportResult exportPreviewVideo(const models::SequencePreviewVideoExportRequest& request) const {
         return _exportPreviewVideo ? _exportPreviewVideo(request) : models::SequencePreviewVideoExportResult{};
     }
@@ -93,6 +100,7 @@ private:
     SaveSequenceFn _saveSequence;
     CloseSequenceFn _closeSequence;
     RenderSequenceFn _renderSequence;
+    CheckSequenceFn _checkSequence;
     ExportPreviewVideoFn _exportPreviewVideo;
     ReadRenderedSamplesFn _readRenderedSamples;
 };

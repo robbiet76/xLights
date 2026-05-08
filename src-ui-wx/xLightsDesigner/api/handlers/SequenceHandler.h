@@ -399,6 +399,64 @@ public:
         return BuildQueuedJobAcceptedResponse(request, jobId);
     }
 
+    [[nodiscard]] transport::ApiResponse handleCheck(const transport::ApiRequest& request) const {
+        const auto jobId = SubmitDesignerApiJob(request.command, request.requestId, [service = _service, request]() {
+            transport::ApiResponse response;
+            response.command = request.command;
+            response.requestId = request.requestId;
+            const auto result = service.checkSequence();
+            if (!result.checked) {
+                response.statusCode = 409;
+                response.error = transport::ApiError{
+                    result.errorCode.value_or(std::string(transport::errors::ValidationError)),
+                    result.errorMessage.value_or("Unable to check the current sequence."),
+                    nlohmann::json::object()
+                };
+                return response;
+            }
+
+            nlohmann::json sections = nlohmann::json::array();
+            for (const auto& section : result.sections) {
+                nlohmann::json issues = nlohmann::json::array();
+                for (const auto& issue : section.issues) {
+                    issues.push_back({
+                        {"type", issue.type},
+                        {"message", issue.message},
+                        {"category", issue.category},
+                        {"modelName", issue.modelName},
+                        {"effectName", issue.effectName},
+                        {"startTimeMs", issue.startTimeMs},
+                        {"layerIndex", issue.layerIndex}
+                    });
+                }
+                sections.push_back({
+                    {"id", section.id},
+                    {"title", section.title},
+                    {"description", section.description},
+                    {"errorCount", section.errorCount},
+                    {"warningCount", section.warningCount},
+                    {"issues", issues}
+                });
+            }
+
+            response.data["checked"] = true;
+            response.data["sequenceOpen"] = result.sequenceOpen;
+            response.data["errorCount"] = result.errorCount;
+            response.data["warningCount"] = result.warningCount;
+            response.data["showDirectory"] = result.showDirectory;
+            response.data["sequencePath"] = result.sequencePath;
+            response.data["generatedAt"] = result.generatedAt;
+            response.data["sections"] = sections;
+            response.data["sequence"] = nlohmann::json{
+                {"isOpen", result.sequence.isOpen},
+                {"path", result.sequence.path.value_or("")},
+                {"revisionToken", result.sequence.revisionToken.value_or("")}
+            };
+            return response;
+        });
+        return BuildQueuedJobAcceptedResponse(request, jobId);
+    }
+
     [[nodiscard]] transport::ApiResponse handleExportPreviewVideo(const transport::ApiRequest& request) const {
         transport::ApiResponse response;
         response.command = request.command;

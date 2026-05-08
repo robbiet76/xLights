@@ -71,6 +71,9 @@ public:
         if (request.command == "sequence.renderCurrent") {
             return _sequenceHandler.handleRenderCurrent(request);
         }
+        if (request.command == "sequence.check") {
+            return _sequenceHandler.handleCheck(request);
+        }
         if (request.command == "sequence.exportPreviewVideo") {
             return _sequenceHandler.handleExportPreviewVideo(request);
         }
