@@ -37,7 +37,16 @@ public:
                 {"positionZ", model.positionZ},
                 {"width", model.width},
                 {"height", model.height},
-                {"depth", model.depth}
+                {"depth", model.depth},
+                {"rotationX", model.rotationX},
+                {"rotationY", model.rotationY},
+                {"rotationZ", model.rotationZ},
+                {"scaleX", model.scaleX},
+                {"scaleY", model.scaleY},
+                {"scaleZ", model.scaleZ},
+                {"renderWidth", model.renderWidth},
+                {"renderHeight", model.renderHeight},
+                {"renderDepth", model.renderDepth}
             });
         }
         return response;
@@ -49,8 +58,42 @@ public:
         response.requestId = request.requestId;
 
         const auto summary = _service.getModels();
+        const auto settings = _service.getSettings();
         response.data["models"] = nlohmann::json::array();
+        response.data["preview"] = {
+            {"name", settings.activePreview},
+            {"mode", settings.preview3d ? "3d" : "2d"},
+            {"canvasWidth", settings.previewWidth},
+            {"canvasHeight", settings.previewHeight},
+            {"virtualCanvasWidth", settings.virtualCanvasWidth},
+            {"virtualCanvasHeight", settings.virtualCanvasHeight},
+            {"display2dCenter0", settings.display2dCenter0},
+            {"zoom", settings.previewZoom},
+            {"alignment", {
+                {"status", "unverified"},
+                {"mode", "xlights_preview_contract_partial"},
+                {"reason", "Owned API exposes preview construction settings, but target renderer has not yet reproduced xLights ModelPreview transforms."}
+            }}
+        };
+        response.data["background"] = {
+            {"imagePath", settings.backgroundImage},
+            {"available", settings.backgroundImageAvailable},
+            {"scaled", settings.backgroundScaled},
+            {"brightness", settings.backgroundBrightness},
+            {"alpha", settings.backgroundAlpha},
+            {"composite", false},
+            {"alignment", {
+                {"status", "unverified"},
+                {"reason", "Background image path and scale settings are exposed, but pixel alignment has not been verified."}
+            }}
+        };
         response.data["cameras"] = nlohmann::json::array();
+        response.data["cameras"].push_back({
+            {"id", settings.preview3d ? "layout-preview-3d-current" : "layout-preview-2d-current"},
+            {"mode", settings.preview3d ? "3d" : "2d"},
+            {"zoom", settings.previewZoom},
+            {"status", "partial"}
+        });
         response.data["views"] = nlohmann::json::array();
         response.data["displayElements"] = nlohmann::json::array();
         for (const auto& model : summary.models) {
@@ -67,20 +110,25 @@ public:
                         {"z", model.positionZ}
                     }},
                     {"rotationDeg", {
-                        {"x", 0.0},
-                        {"y", 0.0},
-                        {"z", 0.0}
+                        {"x", model.rotationX},
+                        {"y", model.rotationY},
+                        {"z", model.rotationZ}
                     }},
                     {"scale", {
-                        {"x", 1.0},
-                        {"y", 1.0},
-                        {"z", 1.0}
+                        {"x", model.scaleX},
+                        {"y", model.scaleY},
+                        {"z", model.scaleZ}
                     }}
                 }},
                 {"dimensions", {
                     {"width", model.width},
                     {"height", model.height},
                     {"depth", model.depth}
+                }},
+                {"renderSize", {
+                    {"width", model.renderWidth},
+                    {"height", model.renderHeight},
+                    {"depth", model.renderDepth}
                 }},
                 {"attributes", {
                     {"stringType", model.stringType},
@@ -206,6 +254,17 @@ public:
         response.data["modelsChangeCount"] = settings.modelsChangeCount;
         response.data["previewWidth"] = settings.previewWidth;
         response.data["previewHeight"] = settings.previewHeight;
+        response.data["virtualCanvasWidth"] = settings.virtualCanvasWidth;
+        response.data["virtualCanvasHeight"] = settings.virtualCanvasHeight;
+        response.data["preview3d"] = settings.preview3d;
+        response.data["display2dCenter0"] = settings.display2dCenter0;
+        response.data["previewZoom"] = settings.previewZoom;
+        response.data["activePreview"] = settings.activePreview;
+        response.data["backgroundImage"] = settings.backgroundImage;
+        response.data["backgroundImageAvailable"] = settings.backgroundImageAvailable;
+        response.data["backgroundScaled"] = settings.backgroundScaled;
+        response.data["backgroundBrightness"] = settings.backgroundBrightness;
+        response.data["backgroundAlpha"] = settings.backgroundAlpha;
         response.data["showDirectory"] = settings.showDirectory;
         response.data["rgbEffectsFile"] = settings.rgbEffectsFile;
         response.data["rgbEffectsModifiedAt"] = settings.rgbEffectsModifiedAt;

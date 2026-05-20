@@ -21,6 +21,15 @@ struct LayoutModelSummary {
     double width = 0.0;
     double height = 0.0;
     double depth = 0.0;
+    double rotationX = 0.0;
+    double rotationY = 0.0;
+    double rotationZ = 0.0;
+    double scaleX = 1.0;
+    double scaleY = 1.0;
+    double scaleZ = 1.0;
+    double renderWidth = 0.0;
+    double renderHeight = 0.0;
+    double renderDepth = 0.0;
 };
 
 struct LayoutModelsSummary {
@@ -123,6 +132,17 @@ struct LayoutSettingsSummary {
     unsigned int modelsChangeCount = 0;
     int previewWidth = 0;
     int previewHeight = 0;
+    int virtualCanvasWidth = 0;
+    int virtualCanvasHeight = 0;
+    bool preview3d = false;
+    bool display2dCenter0 = false;
+    double previewZoom = 1.0;
+    std::string activePreview = "Default";
+    std::string backgroundImage;
+    bool backgroundImageAvailable = false;
+    bool backgroundScaled = false;
+    int backgroundBrightness = 100;
+    int backgroundAlpha = 100;
     std::string showDirectory;
     std::string rgbEffectsFile;
     std::string rgbEffectsModifiedAt;

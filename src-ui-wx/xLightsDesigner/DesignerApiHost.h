@@ -22,6 +22,7 @@
 #include "xLightsMain.h"
 #include "diagnostics/CheckSequenceReport.h"
 #include "diagnostics/SequenceChecker.h"
+#include "layout/ModelPreview.h"
 #include "models/CustomModel.h"
 #include "models/DisplayAsType.h"
 #include "models/ModelGroup.h"
@@ -556,6 +557,19 @@ public:
         settings.modelsChangeCount = _frame->modelsChangeCount;
         settings.previewWidth = _frame->AllModels.GetPreviewWidth();
         settings.previewHeight = _frame->AllModels.GetPreviewHeight();
+        settings.virtualCanvasWidth = settings.previewWidth;
+        settings.virtualCanvasHeight = settings.previewHeight;
+        if (auto* preview = _frame->GetLayoutPreview(); preview != nullptr) {
+            preview->GetVirtualCanvasSize(settings.virtualCanvasWidth, settings.virtualCanvasHeight);
+            settings.preview3d = preview->Is3D();
+            settings.previewZoom = static_cast<double>(preview->GetZoom());
+        }
+        settings.display2dCenter0 = _frame->GetDisplay2DCenter0();
+        settings.backgroundImage = _frame->GetDefaultPreviewBackgroundImage();
+        settings.backgroundImageAvailable = !settings.backgroundImage.empty() && wxFileExists(wxString::FromUTF8(settings.backgroundImage.c_str()));
+        settings.backgroundScaled = _frame->GetDefaultPreviewBackgroundScaled();
+        settings.backgroundBrightness = _frame->GetDefaultPreviewBackgroundBrightness();
+        settings.backgroundAlpha = _frame->GetDefaultPreviewBackgroundAlpha();
         settings.showDirectory = _frame->CurrentDir.ToStdString();
 
         const wxFileName rgbEffectsFile(_frame->CurrentDir, XLIGHTS_RGBEFFECTS_FILE);
@@ -1441,6 +1455,8 @@ public:
             }
             const auto& location = model->GetModelScreenLocation();
             const auto position = location.GetWorldPosition();
+            const auto rotation = location.GetRotation();
+            const auto scale = location.GetScaleMatrix();
             api::models::LayoutModelSummary modelSummary;
             modelSummary.name = model->GetName();
             modelSummary.displayAs = DisplayAsTypeToString(model->GetDisplayAs());
@@ -1456,6 +1472,15 @@ public:
             modelSummary.width = static_cast<double>(location.GetMWidth());
             modelSummary.height = static_cast<double>(location.GetMHeight());
             modelSummary.depth = static_cast<double>(location.GetMDepth());
+            modelSummary.rotationX = static_cast<double>(rotation.x);
+            modelSummary.rotationY = static_cast<double>(rotation.y);
+            modelSummary.rotationZ = static_cast<double>(rotation.z);
+            modelSummary.scaleX = static_cast<double>(scale.x);
+            modelSummary.scaleY = static_cast<double>(scale.y);
+            modelSummary.scaleZ = static_cast<double>(scale.z);
+            modelSummary.renderWidth = static_cast<double>(location.GetRenderWi());
+            modelSummary.renderHeight = static_cast<double>(location.GetRenderHt());
+            modelSummary.renderDepth = static_cast<double>(location.GetRenderDp());
             summary.models.push_back(std::move(modelSummary));
         }
         return summary;
