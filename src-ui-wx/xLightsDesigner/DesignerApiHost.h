@@ -90,6 +90,18 @@ inline std::string BuildDesignerSequenceRevisionToken(xLightsFrame* frame) {
     return path.empty() ? std::string() : path + "#" + std::to_string(frame->GetSequenceElements().GetChangeCount());
 }
 
+inline api::models::SequenceSummary ReadDesignerOpenSequenceSummary(xLightsFrame* frame) {
+    api::models::SequenceSummary summary;
+    if (frame == nullptr || frame->CurrentSeqXmlFile == nullptr) {
+        return summary;
+    }
+
+    summary.isOpen = true;
+    summary.path = frame->CurrentSeqXmlFile->GetFullPath();
+    summary.revisionToken = BuildDesignerSequenceRevisionToken(frame);
+    return summary;
+}
+
 inline std::string ResolveDesignerRenderedFseqPath(xLightsFrame* frame) {
     if (frame == nullptr || frame->CurrentSeqXmlFile == nullptr) {
         return std::string();
@@ -520,15 +532,7 @@ public:
 
     // Sequence state and lifecycle.
     [[nodiscard]] api::models::SequenceSummary readOpenSequence() const {
-        api::models::SequenceSummary summary;
-        if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) {
-            return summary;
-        }
-
-        summary.isOpen = true;
-        summary.path = _frame->CurrentSeqXmlFile->GetFullPath();
-        summary.revisionToken = detail::BuildDesignerSequenceRevisionToken(_frame);
-        return summary;
+        return detail::ReadDesignerOpenSequenceSummary(_frame);
     }
 
     [[nodiscard]] api::models::SequenceSettings readSequenceSettings() const {
@@ -768,21 +772,21 @@ public:
         xLightsFrame* frame = _frame;
         const std::string requestedFile = request.file;
         const bool force = request.force;
-        frame->CallAfter([this, promise, requestedFile, force]() mutable {
+        frame->CallAfter([promise, frame, requestedFile, force]() mutable {
             xLightsDesigner::AppendDesignerDiagnostic(std::string("sequence.open main-thread callback started file=") + requestedFile);
             api::models::SequenceOpenResult callbackResult;
             callbackResult.requestedPath = requestedFile;
-            const auto guard = detail::EnterOwnedSequenceOpenState(_frame, requestedFile, force);
+            const auto guard = detail::EnterOwnedSequenceOpenState(frame, requestedFile, force);
             if (!detail::ObtainOwnedApiAccessToPath(requestedFile, false)) {
-                detail::ExitOwnedSequenceOpenState(_frame, guard);
+                detail::ExitOwnedSequenceOpenState(frame, guard);
                 xLightsDesigner::AppendDesignerDiagnostic("sequence.open callback failed sequenceAccessDenied");
                 callbackResult.errorCode = "SEQUENCE_ACCESS_DENIED";
                 callbackResult.errorMessage = "Unable to obtain access to the requested sequence file.";
                 promise->set_value(callbackResult);
                 return;
             }
-            if (!detail::PrepareDesignerShowDirectoryForSequence(_frame, requestedFile)) {
-                detail::ExitOwnedSequenceOpenState(_frame, guard);
+            if (!detail::PrepareDesignerShowDirectoryForSequence(frame, requestedFile)) {
+                detail::ExitOwnedSequenceOpenState(frame, guard);
                 xLightsDesigner::AppendDesignerDiagnostic("sequence.open callback failed showDirectoryFailed");
                 callbackResult.errorCode = "SHOW_DIRECTORY_FAILED";
                 callbackResult.errorMessage = "Unable to switch xLights to the target show directory before opening the sequence.";
@@ -790,10 +794,10 @@ public:
                 return;
             }
             xLightsDesigner::AppendDesignerDiagnostic("sequence.open callback calling xLights OpenSequence");
-            _frame->OpenSequence(wxString::FromUTF8(requestedFile), nullptr);
+            frame->OpenSequence(wxString::FromUTF8(requestedFile), nullptr);
             xLightsDesigner::AppendDesignerDiagnostic("sequence.open callback xLights OpenSequence returned");
-            detail::ExitOwnedSequenceOpenState(_frame, guard);
-            const auto opened = readOpenSequence();
+            detail::ExitOwnedSequenceOpenState(frame, guard);
+            const auto opened = detail::ReadDesignerOpenSequenceSummary(frame);
             if (opened.isOpen && opened.path.has_value() && opened.path.value() == requestedFile) {
                 xLightsDesigner::AppendDesignerDiagnostic("sequence.open callback completed opened=1");
                 callbackResult.opened = true;
@@ -1816,39 +1820,40 @@ public:
                                                       request.showDirectory);
         }
 
-        auto switchOnMainThread = [this, request, targetShowDir]() {
+        xLightsFrame* frame = _frame;
+        auto switchOnMainThread = [request, targetShowDir, frame]() {
             api::models::MediaShowDirectoryResult callbackResult;
-            callbackResult.previousShowDirectory = _frame != nullptr ? _frame->CurrentDir.ToStdString() : std::string();
+            callbackResult.previousShowDirectory = frame != nullptr ? frame->CurrentDir.ToStdString() : std::string();
             callbackResult.showDirectory = request.showDirectory;
-            if (_frame == nullptr) {
+            if (frame == nullptr) {
                 callbackResult.errorCode = "VALIDATION_ERROR";
                 callbackResult.errorMessage = "xLights frame is not available.";
                 return callbackResult;
             }
 
-            const bool hadSequence = _frame->CurrentSeqXmlFile != nullptr;
-            const bool previousRenderMode = _frame->_renderMode;
-            const bool previousPromptBatchRenderIssues = _frame->_promptBatchRenderIssues;
+            const bool hadSequence = frame->CurrentSeqXmlFile != nullptr;
+            const bool previousRenderMode = frame->_renderMode;
+            const bool previousPromptBatchRenderIssues = frame->_promptBatchRenderIssues;
             if (request.force) {
-                _frame->_renderMode = true;
-                _frame->_promptBatchRenderIssues = false;
-                if (_frame->CurrentSeqXmlFile != nullptr) {
-                    _frame->mSavedChangeCount = _frame->GetSequenceElements().GetChangeCount();
+                frame->_renderMode = true;
+                frame->_promptBatchRenderIssues = false;
+                if (frame->CurrentSeqXmlFile != nullptr) {
+                    frame->mSavedChangeCount = frame->GetSequenceElements().GetChangeCount();
                 }
-                _frame->UnsavedRgbEffectsChanges = false;
-                _frame->UnsavedNetworkChanges = false;
+                frame->UnsavedRgbEffectsChanges = false;
+                frame->UnsavedNetworkChanges = false;
             }
 
-            const bool switched = _frame->SetDir(targetShowDir, request.permanent);
+            const bool switched = frame->SetDir(targetShowDir, request.permanent);
 
             if (request.force) {
-                _frame->_renderMode = previousRenderMode;
-                _frame->_promptBatchRenderIssues = previousPromptBatchRenderIssues;
+                frame->_renderMode = previousRenderMode;
+                frame->_promptBatchRenderIssues = previousPromptBatchRenderIssues;
             }
 
-            callbackResult.sequenceClosed = hadSequence && _frame->CurrentSeqXmlFile == nullptr;
-            callbackResult.showDirectory = _frame->CurrentDir.ToStdString();
-            callbackResult.changed = switched && _frame->CurrentDir == targetShowDir;
+            callbackResult.sequenceClosed = hadSequence && frame->CurrentSeqXmlFile == nullptr;
+            callbackResult.showDirectory = frame->CurrentDir.ToStdString();
+            callbackResult.changed = switched && frame->CurrentDir == targetShowDir;
             if (!callbackResult.changed) {
                 callbackResult.errorCode = "SHOW_DIRECTORY_SWITCH_FAILED";
                 callbackResult.errorMessage = "xLights did not switch to the requested show directory.";
@@ -1862,7 +1867,6 @@ public:
 
         auto promise = std::make_shared<std::promise<api::models::MediaShowDirectoryResult>>();
         auto future = promise->get_future();
-        xLightsFrame* frame = _frame;
         frame->CallAfter([promise, switchOnMainThread]() mutable {
             promise->set_value(switchOnMainThread());
         });
@@ -1891,17 +1895,18 @@ public:
             return result;
         }
 
-        auto promptOnMainThread = [this, request, targetShowDir]() {
+        xLightsFrame* frame = _frame;
+        auto promptOnMainThread = [request, targetShowDir, frame]() {
             api::models::MediaShowDirectoryResult callbackResult;
-            callbackResult.previousShowDirectory = _frame != nullptr ? _frame->CurrentDir.ToStdString() : std::string();
+            callbackResult.previousShowDirectory = frame != nullptr ? frame->CurrentDir.ToStdString() : std::string();
             callbackResult.showDirectory = request.showDirectory;
-            if (_frame == nullptr) {
+            if (frame == nullptr) {
                 callbackResult.errorCode = "VALIDATION_ERROR";
                 callbackResult.errorMessage = "xLights frame is not available.";
                 return callbackResult;
             }
 
-            wxDirDialog dialog(_frame,
+            wxDirDialog dialog(frame,
                                _("Select the project show folder for xLightsDesigner"),
                                targetShowDir,
                                wxDD_DEFAULT_STYLE,
@@ -1937,29 +1942,29 @@ public:
             }
 
             ObtainAccessToURL(selectedDir, true);
-            const bool hadSequence = _frame->CurrentSeqXmlFile != nullptr;
-            const bool previousRenderMode = _frame->_renderMode;
-            const bool previousPromptBatchRenderIssues = _frame->_promptBatchRenderIssues;
+            const bool hadSequence = frame->CurrentSeqXmlFile != nullptr;
+            const bool previousRenderMode = frame->_renderMode;
+            const bool previousPromptBatchRenderIssues = frame->_promptBatchRenderIssues;
             if (request.force) {
-                _frame->_renderMode = true;
-                _frame->_promptBatchRenderIssues = false;
-                if (_frame->CurrentSeqXmlFile != nullptr) {
-                    _frame->mSavedChangeCount = _frame->GetSequenceElements().GetChangeCount();
+                frame->_renderMode = true;
+                frame->_promptBatchRenderIssues = false;
+                if (frame->CurrentSeqXmlFile != nullptr) {
+                    frame->mSavedChangeCount = frame->GetSequenceElements().GetChangeCount();
                 }
-                _frame->UnsavedRgbEffectsChanges = false;
-                _frame->UnsavedNetworkChanges = false;
+                frame->UnsavedRgbEffectsChanges = false;
+                frame->UnsavedNetworkChanges = false;
             }
 
-            const bool switched = _frame->SetDir(targetShowDir, request.permanent);
+            const bool switched = frame->SetDir(targetShowDir, request.permanent);
 
             if (request.force) {
-                _frame->_renderMode = previousRenderMode;
-                _frame->_promptBatchRenderIssues = previousPromptBatchRenderIssues;
+                frame->_renderMode = previousRenderMode;
+                frame->_promptBatchRenderIssues = previousPromptBatchRenderIssues;
             }
 
-            callbackResult.sequenceClosed = hadSequence && _frame->CurrentSeqXmlFile == nullptr;
-            callbackResult.showDirectory = _frame->CurrentDir.ToStdString();
-            callbackResult.changed = switched && _frame->CurrentDir == targetShowDir;
+            callbackResult.sequenceClosed = hadSequence && frame->CurrentSeqXmlFile == nullptr;
+            callbackResult.showDirectory = frame->CurrentDir.ToStdString();
+            callbackResult.changed = switched && frame->CurrentDir == targetShowDir;
             if (!callbackResult.changed) {
                 callbackResult.errorCode = "SHOW_DIRECTORY_SWITCH_FAILED";
                 callbackResult.errorMessage = "xLights did not switch to the requested show directory.";
@@ -1973,7 +1978,6 @@ public:
 
         auto promise = std::make_shared<std::promise<api::models::MediaShowDirectoryResult>>();
         auto future = promise->get_future();
-        xLightsFrame* frame = _frame;
         frame->CallAfter([promise, promptOnMainThread]() mutable {
             promise->set_value(promptOnMainThread());
         });
