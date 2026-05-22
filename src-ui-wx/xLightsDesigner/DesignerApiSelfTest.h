@@ -49,8 +49,6 @@ inline DesignerApiSelfTestResult RunDesignerApiSelfTests() {
         api::transport::EndpointRouter router;
         Check(router.resolve("GET", "/xlightsdesigner/api/sequence/open") == std::optional<std::string>("sequence.getOpen"),
               "EndpointRouter should map sequence open endpoint.", result);
-        Check(router.resolve("GET", "/xlightsdesigner/api/metadata/effects/status") == std::optional<std::string>("metadata.effects.status"),
-              "EndpointRouter should map metadata effects status endpoint.", result);
         Check(router.resolve("GET", "/xlightsdesigner/api/layout/scene") == std::optional<std::string>("layout.getScene"),
               "EndpointRouter should map layout scene endpoint.", result);
         Check(router.resolve("GET", "/xlightsdesigner/api/layout/submodels") == std::optional<std::string>("layout.getSubmodels"),
@@ -83,18 +81,14 @@ inline DesignerApiSelfTestResult RunDesignerApiSelfTests() {
               "EndpointRouter should map DataLayer upsert endpoint.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/sequence/export-preview-video") == std::optional<std::string>("sequence.exportPreviewVideo"),
               "EndpointRouter should map preview video export endpoint.", result);
-        Check(router.resolve("POST", "/xlightsdesigner/api/sequencing/apply-window-plan") == std::optional<std::string>("sequencing.applyWindowPlan"),
-              "EndpointRouter should map sequencing apply-window-plan endpoint.", result);
         Check(router.resolve("GET", "/xlightsdesigner/api/elements/display-order") == std::optional<std::string>("elements.getDisplayOrder"),
               "EndpointRouter should map display-order read endpoint.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/elements/display-order") == std::optional<std::string>("elements.setDisplayOrder"),
               "EndpointRouter should map display-order mutation endpoint.", result);
-        Check(router.resolve("POST", "/xlightsdesigner/api/effects/update") == std::optional<std::string>("effects.update"),
-              "EndpointRouter should map effect update endpoint.", result);
-        Check(router.resolve("POST", "/xlightsdesigner/api/effects/delete") == std::optional<std::string>("effects.delete"),
-              "EndpointRouter should map effect delete endpoint.", result);
-        Check(router.resolve("POST", "/xlightsdesigner/api/effects/reorder-layer") == std::optional<std::string>("effects.reorderLayer"),
-              "EndpointRouter should map effect layer reorder endpoint.", result);
+        Check(!router.resolve("POST", "/xlightsdesigner/api/effects/update").has_value(),
+              "EndpointRouter should not expose native effect mutation endpoints.", result);
+        Check(!router.resolve("POST", "/xlightsdesigner/api/sequencing/apply-window-plan").has_value(),
+              "EndpointRouter should not expose native effect sequencing endpoints.", result);
         Check(!router.resolve("DELETE", "/xlightsdesigner/api/sequence/open").has_value(),
               "EndpointRouter should reject unsupported method/path pairs.", result);
     }
@@ -180,7 +174,7 @@ inline DesignerApiSelfTestResult RunDesignerApiSelfTests() {
     {
         api::transport::ApiResponse response;
         response.statusCode = 400;
-        response.command = "effects.addEffect";
+        response.command = "sequence.open";
         response.error = api::transport::ApiError{"VALIDATION_ERROR", "bad request", nlohmann::json::object()};
 
         auto envelope = api::transport::BuildJsonHttpEnvelope(response);

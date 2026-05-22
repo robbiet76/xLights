@@ -3,13 +3,11 @@
 #include <optional>
 
 #include "../handlers/DataLayerHandler.h"
-#include "../handlers/EffectHandler.h"
 #include "../handlers/ElementHandler.h"
 #include "../handlers/LayoutHandler.h"
 #include "../handlers/MediaHandler.h"
 #include "../handlers/RuntimeHandler.h"
 #include "../handlers/SequenceHandler.h"
-#include "../handlers/SequencingHandler.h"
 #include "../handlers/TimingHandler.h"
 #include "ApiRequest.h"
 #include "ApiResponse.h"
@@ -24,24 +22,19 @@ public:
                   handlers::TimingHandler timingHandler,
                   handlers::MediaHandler mediaHandler,
                   handlers::LayoutHandler layoutHandler,
-                  handlers::ElementHandler elementHandler,
-                  handlers::EffectHandler effectHandler,
-                  handlers::SequencingHandler sequencingHandler)
+                  handlers::ElementHandler elementHandler)
         : _runtimeHandler(std::move(runtimeHandler)),
           _sequenceHandler(std::move(sequenceHandler)),
           _dataLayerHandler(std::move(dataLayerHandler)),
           _timingHandler(std::move(timingHandler)),
           _mediaHandler(std::move(mediaHandler)),
           _layoutHandler(std::move(layoutHandler)),
-          _elementHandler(std::move(elementHandler)),
-          _effectHandler(std::move(effectHandler)),
-          _sequencingHandler(std::move(sequencingHandler)) {}
+          _elementHandler(std::move(elementHandler)) {}
 
     [[nodiscard]] std::optional<ApiResponse> route(const ApiRequest& request) const {
         if (request.command == "health.get") return _runtimeHandler.handleHealth(request);
         if (request.command == "runtime.getCapabilities") return _runtimeHandler.handleGetCapabilities(request);
         if (request.command == "jobs.get") return _runtimeHandler.handleGetJob(request);
-        if (request.command == "metadata.effects.status") return _runtimeHandler.handleMetadataStatus(request);
 
         if (request.command == "sequence.getOpen") return _sequenceHandler.handleGetOpen(request);
         if (request.command == "sequence.getRevision") return _sequenceHandler.handleGetRevision(request);
@@ -92,19 +85,6 @@ public:
         if (request.command == "elements.getDisplayOrder") return _elementHandler.handleGetDisplayOrder(request);
         if (request.command == "elements.setDisplayOrder") return _elementHandler.handleSetDisplayOrder(request);
 
-        if (request.command == "effects.getWindow") return _effectHandler.handleGetWindow(request);
-        if (request.command == "effects.addEffect") return _effectHandler.handleAddEffect(request);
-        if (request.command == "effects.applyBatch") return _effectHandler.handleApplyBatch(request);
-        if (request.command == "effects.clone") return _effectHandler.handleCloneEffects(request);
-        if (request.command == "effects.clearWindow") return _effectHandler.handleClearWindow(request);
-        if (request.command == "effects.update") return _effectHandler.handleUpdateEffect(request);
-        if (request.command == "effects.delete") return _effectHandler.handleDeleteEffects(request);
-        if (request.command == "effects.deleteLayer") return _effectHandler.handleDeleteLayer(request);
-        if (request.command == "effects.reorderLayer") return _effectHandler.handleReorderLayer(request);
-        if (request.command == "effects.compactLayers") return _effectHandler.handleCompactLayers(request);
-
-        if (request.command == "sequencing.applyWindowPlan") return _sequencingHandler.handleApplyWindowPlan(request);
-        if (request.command == "sequencing.applyBatchPlan") return _sequencingHandler.handleApplyBatchPlan(request);
         return std::nullopt;
     }
 
@@ -116,8 +96,6 @@ private:
     handlers::MediaHandler _mediaHandler;
     handlers::LayoutHandler _layoutHandler;
     handlers::ElementHandler _elementHandler;
-    handlers::EffectHandler _effectHandler;
-    handlers::SequencingHandler _sequencingHandler;
 };
 
 } // namespace xLightsDesigner::api::transport

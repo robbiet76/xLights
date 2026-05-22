@@ -5,7 +5,6 @@
 
 #include "../../DesignerApiRuntime.h"
 #include "../parsing/ParameterReaders.h"
-#include "../services/EffectMetadataStatus.h"
 #include "../transport/ApiRequest.h"
 #include "../transport/ApiResponse.h"
 
@@ -138,22 +137,6 @@ public:
             {"inScope", false},
             {"reason", "xLightsDesigner uses generated FSEQ DataLayers and does not require native effect block authoring endpoints."}
         };
-        return response;
-    }
-
-    [[nodiscard]] transport::ApiResponse handleMetadataStatus(const transport::ApiRequest& request) const {
-        transport::ApiResponse response;
-        response.command = request.command;
-        response.requestId = request.requestId;
-        const auto status = services::GetEffectMetadataStatus();
-        response.data["metadataDir"] = status.metadataDir;
-        response.data["metadataDirExists"] = status.metadataDirExists;
-        response.data["schemaPresent"] = status.schemaPresent;
-        response.data["schemaHash"] = status.schemaHash;
-        response.data["effectFileCount"] = status.effectFileCount;
-        response.data["sharedFileCount"] = status.sharedFileCount;
-        response.data["bundleFingerprint"] = status.bundleFingerprint;
-        response.data["files"] = status.files;
         return response;
     }
 

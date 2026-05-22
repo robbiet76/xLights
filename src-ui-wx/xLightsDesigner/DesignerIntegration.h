@@ -11,7 +11,6 @@
  **************************************************************/
 
 #include <cstdlib>
-#include <fstream>
 #include <map>
 #include <optional>
 #include <string>
@@ -24,22 +23,18 @@
 #include "DesignerApiRuntime.h"
 #include "DesignerApiSelfTest.h"
 #include "DesignerApiSmoke.h"
-#include "api/handlers/EffectHandler.h"
 #include "api/handlers/DataLayerHandler.h"
 #include "api/handlers/ElementHandler.h"
 #include "api/handlers/LayoutHandler.h"
 #include "api/handlers/MediaHandler.h"
 #include "api/handlers/SequenceHandler.h"
-#include "api/handlers/SequencingHandler.h"
 #include "api/handlers/TimingHandler.h"
 #include "api/parsing/RequestParser.h"
-#include "api/services/EffectService.h"
 #include "api/services/DataLayerService.h"
 #include "api/services/ElementService.h"
 #include "api/services/LayoutService.h"
 #include "api/services/MediaService.h"
 #include "api/services/SequenceService.h"
-#include "api/services/SequencingService.h"
 #include "api/services/TimingService.h"
 #include "api/transport/ApiResponse.h"
 #include "api/transport/EndpointRouter.h"
@@ -82,36 +77,16 @@ inline bool IsTruthyFlagValue(const char* value) {
     return enabled == "1" || enabled == "true" || enabled == "TRUE" || enabled == "yes" || enabled == "YES";
 }
 
-inline bool FileExistsAndNotEmpty(const std::string& path) {
-    std::ifstream file(path);
-    return file.good() && file.peek() != std::ifstream::traits_type::eof();
-}
-
-inline bool IsDesignerFlagEnabledFromFile(const char* fileName) {
-    const char* home = std::getenv("HOME");
-    if (home == nullptr || *home == '\0') {
-        return false;
-    }
-
-    const std::string userBase = std::string(home) + "/Library/Application Support/xLightsDesigner/";
-    if (FileExistsAndNotEmpty(userBase + fileName)) {
-        return true;
-    }
-
-    const std::string sandboxBase = std::string(home) + "/Library/Containers/org.xlights/Data/Library/Application Support/xLightsDesigner/";
-    return FileExistsAndNotEmpty(sandboxBase + fileName);
-}
-
 inline bool IsDesignerSmokeEnabled() {
-    return IsTruthyFlagValue(std::getenv("XLIGHTS_DESIGNER_SMOKE")) || IsDesignerFlagEnabledFromFile("smoke-enabled");
+    return IsTruthyFlagValue(std::getenv("XLIGHTS_DESIGNER_SMOKE"));
 }
 
 inline bool IsDesignerSelfTestEnabled() {
-    return IsTruthyFlagValue(std::getenv("XLIGHTS_DESIGNER_SELF_TEST")) || IsDesignerFlagEnabledFromFile("self-test-enabled");
+    return IsTruthyFlagValue(std::getenv("XLIGHTS_DESIGNER_SELF_TEST"));
 }
 
 inline bool IsDesignerIntegrationEnabled() {
-    return IsTruthyFlagValue(std::getenv("XLIGHTS_DESIGNER_ENABLED")) || IsDesignerFlagEnabledFromFile("integration-enabled");
+    return IsTruthyFlagValue(std::getenv("XLIGHTS_DESIGNER_ENABLED"));
 }
 
 inline void InitializeDesignerIntegration(xLightsFrame* frame) {
@@ -263,18 +238,6 @@ inline std::optional<api::transport::ApiResponse> HandleDesignerApiRequest(
         [host]() { return host->readElements(); },
         [host]() { return host->readDisplayElementOrder(); },
         [host](const api::models::SetDisplayElementOrderRequest& request) { return host->setDisplayElementOrder(request); });
-    api::services::EffectService effectService(
-        [host](const api::models::EffectWindowRequest& request) { return host->readEffectsWindow(request); },
-        [host](const api::models::AddEffectRequest& request) { return host->addEffect(request); },
-        [host](const api::models::ClearEffectWindowRequest& request) { return host->clearEffectsWindow(request); },
-        [host](const api::models::ApplyEffectBatchRequest& request) { return host->applyEffectBatch(request); },
-        [host](const api::models::CloneEffectsRequest& request) { return host->cloneEffects(request); },
-        [host](const api::models::UpdateEffectRequest& request) { return host->updateEffect(request); },
-        [host](const api::models::DeleteEffectsRequest& request) { return host->deleteEffects(request); },
-        [host](const api::models::DeleteEffectLayerRequest& request) { return host->deleteEffectLayer(request); },
-        [host](const api::models::ReorderEffectLayerRequest& request) { return host->reorderEffectLayer(request); },
-        [host](const api::models::CompactEffectLayersRequest& request) { return host->compactEffectLayers(request); });
-    api::services::SequencingService sequencingService(timingService, effectService);
     api::handlers::RuntimeHandler runtimeHandler([host]() { return host->readModalState(); });
     api::handlers::SequenceHandler sequenceHandler(std::move(sequenceService));
     api::handlers::DataLayerHandler dataLayerHandler(std::move(dataLayerService));
@@ -282,9 +245,7 @@ inline std::optional<api::transport::ApiResponse> HandleDesignerApiRequest(
     api::handlers::MediaHandler mediaHandler(std::move(mediaService));
     api::handlers::LayoutHandler layoutHandler(std::move(layoutService));
     api::handlers::ElementHandler elementHandler(std::move(elementService));
-    api::handlers::EffectHandler effectHandler(std::move(effectService));
-    api::handlers::SequencingHandler sequencingHandler(std::move(sequencingService));
-    api::transport::RequestRouter router(std::move(runtimeHandler), std::move(sequenceHandler), std::move(dataLayerHandler), std::move(timingHandler), std::move(mediaHandler), std::move(layoutHandler), std::move(elementHandler), std::move(effectHandler), std::move(sequencingHandler));
+    api::transport::RequestRouter router(std::move(runtimeHandler), std::move(sequenceHandler), std::move(dataLayerHandler), std::move(timingHandler), std::move(mediaHandler), std::move(layoutHandler), std::move(elementHandler));
 
     return router.route(api::parsing::ParseRequest(command, params, requestId));
 }

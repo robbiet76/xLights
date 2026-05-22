@@ -1,45 +1,23 @@
 # xLightsDesigner Integration Surface
 
-This directory owns xLightsDesigner-specific integration code.
+This directory owns the xLightsDesigner-specific API and runtime integration.
 
-Current architecture:
-- baseline xLights automation remains under `xLights/automation/`
-- xLightsDesigner integration is additive, not a replacement for xLights-owned automation
-- the only active host seam is a minimal lifecycle hook in `xLightsApp`
+The production architecture is direct channel output through xLights DataLayers:
+- xLightsDesigner reads display, timing, media, and sequence state through the owned API.
+- xLightsDesigner writes an adjacent `.xld.fseq` file.
+- xLights attaches that file as an XLD DataLayer and renders the final controller `.fseq`.
+- Native xLights effect-block authoring is intentionally out of scope for this API.
 
-Current active entrypoint:
-- `DesignerIntegration.h`
-  - startup registration via `InitializeDesignerIntegration(...)`
-  - shutdown via `ShutdownDesignerIntegration()`
+Activation:
+- The integration is inert unless launched with `XLIGHTS_DESIGNER_ENABLED=1`.
+- Self-test and smoke modes are env-only: `XLIGHTS_DESIGNER_SELF_TEST=1`, `XLIGHTS_DESIGNER_SMOKE=1`.
+- Do not add file-marker activation paths; release builds must not expose the listener accidentally.
 
-Rules:
-- new xLightsDesigner-owned code lives here
-- existing xLights automation should stay baseline unless there is a narrowly justified host hook
-- hooks must be inert by default and must not interfere with normal xLights behavior
-- owned API code should be built as a clean first-class surface, not as a carry-over from legacy xLights automation
-- do not use `V2` naming in the owned xLightsDesigner API surface
+Host boundary:
+- New xLightsDesigner-owned code belongs in this directory.
+- Existing xLights files should receive only narrow, gated hooks needed for lifecycle, noninteractive prompt handling, DataLayer rendering, or display readback.
+- Hooks must be inert during normal xLights use.
 
-Next planned refactor:
-- see `docs/API_AUDIT_PLAN.md`
-- perform a full audit of the future `xLightsDesigner/api/` folder before building out more owned API functionality
-
-Current current-state API reference:
-- see `docs/API_CURRENT_STATE.md`
-
-Current in-process harness:
-- `DesignerApiHarness.h`
-  - invoke owned commands directly
-  - invoke canonical owned endpoints directly
-  - returns JSON-ready responses without relying on xLights-owned automation
-
-Endpoint examples:
-- see `docs/API_EXAMPLES.md`
-
-
-Owned self-test toggle:
-- set `XLIGHTS_DESIGNER_SELF_TEST=1` to run the header-only xLightsDesigner self-tests during integration initialization
-- current scope covers endpoint mapping and transport normalization
-
-Owned smoke toggle:
-- set `XLIGHTS_DESIGNER_SMOKE=1` to run a small in-process owned API smoke pass during integration initialization
-- smoke output is logged and uses `DesignerApiHarness` against the owned endpoint layer
+Reference:
+- Current route surface: `docs/API_CURRENT_STATE.md`
+- Host ownership boundary: `docs/OWNERSHIP_BOUNDARY.md`
