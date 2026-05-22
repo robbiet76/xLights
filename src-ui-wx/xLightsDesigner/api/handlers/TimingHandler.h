@@ -47,12 +47,16 @@ public:
         transport::ApiResponse response;
         response.command = request.command;
         response.requestId = request.requestId;
-        const auto trackName = parsing::ReadString(request.params, "track");
+        const auto trackName = readTrackName(request);
         const int startMs = parsing::ReadInt(request.params, "startMs", -1);
         const int endMs = parsing::ReadInt(request.params, "endMs", -1);
         if (trackName.empty()) {
             response.statusCode = 400;
-            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "timing.getMarks requires track.", nlohmann::json::object()};
+            response.error = transport::ApiError{
+                std::string(transport::errors::ValidationError),
+                "timing.getMarks requires trackName.",
+                nlohmann::json{{"acceptedAliases", {"trackName", "track"}}}
+            };
             return response;
         }
         if ((startMs >= 0 && endMs >= 0 && endMs < startMs) || startMs < -1 || endMs < -1) {
@@ -72,10 +76,15 @@ public:
         }
         if (!summary.trackFound) {
             response.statusCode = 404;
-            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "Requested timing track was not found in the current sequence.", {{"track", trackName}}};
+            response.error = transport::ApiError{
+                std::string(transport::errors::ValidationError),
+                "Requested timing track was not found in the current sequence.",
+                {{"trackName", trackName}, {"track", trackName}}
+            };
             return response;
         }
         response.data["track"] = summary.trackName;
+        response.data["trackName"] = summary.trackName;
         response.data["revisionToken"] = summary.revisionToken;
         response.data["marks"] = nlohmann::json::array();
         for (const auto& mark : summary.marks) {
@@ -87,10 +96,14 @@ public:
     [[nodiscard]] transport::ApiResponse handleAddMarks(const transport::ApiRequest& request) const {
         // Mark creation can touch xLights UI state, so it runs through the
         // owned runtime queue after lightweight request validation.
-        const auto trackName = parsing::ReadString(request.params, "track");
+        const auto trackName = readTrackName(request);
         if (trackName.empty()) {
             transport::ApiResponse response; response.command = request.command; response.requestId = request.requestId; response.statusCode = 400;
-            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "timing.addMarks requires track.", nlohmann::json::object()};
+            response.error = transport::ApiError{
+                std::string(transport::errors::ValidationError),
+                "timing.addMarks requires trackName.",
+                nlohmann::json{{"acceptedAliases", {"trackName", "track"}}}
+            };
             return response;
         }
         const auto subType = parsing::ReadString(request.params, "subType");
@@ -139,7 +152,7 @@ public:
                 response.statusCode = 404; response.error = transport::ApiError{std::string(transport::errors::SequenceNotOpen), "No sequence open.", nlohmann::json::object()}; return response;
             }
             if (!result.trackFound) {
-                response.statusCode = 500; response.error = transport::ApiError{std::string(transport::errors::InternalError), "Track could not be resolved after timing.addMarks.", {{"track", trackName}}}; return response;
+                response.statusCode = 500; response.error = transport::ApiError{std::string(transport::errors::InternalError), "Track could not be resolved after timing.addMarks.", {{"trackName", trackName}, {"track", trackName}}}; return response;
             }
             response.data["requestedTrackName"] = result.requestedTrackName;
             response.data["actualTrackName"] = result.actualTrackName;
@@ -154,11 +167,15 @@ public:
         transport::ApiResponse response;
         response.command = request.command;
         response.requestId = request.requestId;
-        const auto trackName = parsing::ReadString(request.params, "track");
+        const auto trackName = readTrackName(request);
         const auto subType = parsing::ReadString(request.params, "subType");
         if (trackName.empty()) {
             response.statusCode = 400;
-            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "timing.ensureTrack requires track.", nlohmann::json::object()};
+            response.error = transport::ApiError{
+                std::string(transport::errors::ValidationError),
+                "timing.ensureTrack requires trackName.",
+                nlohmann::json{{"acceptedAliases", {"trackName", "track"}}}
+            };
             return response;
         }
         const auto result = _service.ensureTrack({trackName, subType});
@@ -175,6 +192,14 @@ public:
     }
 
 private:
+    [[nodiscard]] static std::string readTrackName(const transport::ApiRequest& request) {
+        auto trackName = parsing::ReadString(request.params, "trackName");
+        if (trackName.empty()) {
+            trackName = parsing::ReadString(request.params, "track");
+        }
+        return trackName;
+    }
+
     services::TimingService _service;
 };
 
