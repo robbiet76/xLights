@@ -61,6 +61,25 @@
 #include "spdlog/sinks/stdout_color_sinks.h"
 #include "spdlog/common.h"
 
+#include <cstdio>
+
+namespace {
+void DesignerNonInteractiveAssertHandler(const wxString& file,
+                                         int line,
+                                         const wxString& function,
+                                         const wxString& condition,
+                                         const wxString& message)
+{
+    std::fprintf(stderr,
+                 "Suppressing wx assert during xLightsDesigner noninteractive launch: %s:%d %s condition='%s' message='%s'\n",
+                 file.ToStdString().c_str(),
+                 line,
+                 function.ToStdString().c_str(),
+                 condition.ToStdString().c_str(),
+                 message.ToStdString().c_str());
+}
+}
+
 #ifdef LINUX
 #include <GL/glut.h>
 #endif
@@ -416,6 +435,9 @@ wxIMPLEMENT_APP_NO_MAIN(xLightsApp);
 xLightsApp::xLightsApp() :
     xLightsAppBaseClass("xLights")
 {
+    if (xLightsDesigner::IsNonInteractiveLaunch()) {
+        wxSetAssertHandler(DesignerNonInteractiveAssertHandler);
+    }
 }
 
 wxString xLightsFrame::GetThreadStatusReport() {
@@ -518,6 +540,7 @@ bool xLightsApp::OnInit()
     InitialiseLogging(false);
     if (xLightsDesigner::IsNonInteractiveLaunch()) {
         std::signal(SIGPIPE, SIG_IGN);
+        wxSetAssertHandler(DesignerNonInteractiveAssertHandler);
     }
 
     AppCallbacks::SetPostToMainThread([](std::function<void()> fn) {
@@ -819,7 +842,12 @@ bool xLightsApp::OnInit()
         if (Frame->CurrentDir == "") {
             spdlog::info("Show directory not set");
         }
-    	Frame->Show();
+        if (xLightsDesigner::ShouldSuppressPrompt()) {
+            spdlog::info("Suppressing xLights main window activation during xLightsDesigner noninteractive launch.");
+            Frame->Show(false);
+        } else {
+            Frame->Show();
+        }
     	SetTopWindow(Frame);
     }
     //*)

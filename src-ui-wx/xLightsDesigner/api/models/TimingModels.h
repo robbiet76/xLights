@@ -10,6 +10,8 @@ struct TimingTrackSummary {
     std::string name;
     std::string type;
     int markCount = 0;
+    int layerCount = 0;
+    std::string revisionToken;
 };
 
 struct TimingTracksSummary {
@@ -34,6 +36,7 @@ struct TimingMarksSummary {
     bool sequenceOpen = false;
     bool trackFound = false;
     std::string trackName;
+    std::string revisionToken;
     std::vector<TimingMarkSummary> marks;
 };
 

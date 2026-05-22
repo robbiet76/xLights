@@ -25,6 +25,7 @@
 #include "DesignerApiSelfTest.h"
 #include "DesignerApiSmoke.h"
 #include "api/handlers/EffectHandler.h"
+#include "api/handlers/DataLayerHandler.h"
 #include "api/handlers/ElementHandler.h"
 #include "api/handlers/LayoutHandler.h"
 #include "api/handlers/MediaHandler.h"
@@ -33,6 +34,7 @@
 #include "api/handlers/TimingHandler.h"
 #include "api/parsing/RequestParser.h"
 #include "api/services/EffectService.h"
+#include "api/services/DataLayerService.h"
 #include "api/services/ElementService.h"
 #include "api/services/LayoutService.h"
 #include "api/services/MediaService.h"
@@ -224,10 +226,19 @@ inline std::optional<api::transport::ApiResponse> HandleDesignerApiRequest(
         [host](const api::models::SequenceSettingsUpdateRequest& request) { return host->updateSequenceSettings(request); },
         [host]() { return host->saveSequence(); },
         [host]() { return host->closeSequence(); },
+        [host]() { return host->focusSequence(); },
         [host]() { return host->renderCurrentSequence(); },
         [host]() { return host->checkSequence(); },
         [host](const api::models::SequencePreviewVideoExportRequest& request) { return host->exportPreviewVideo(request); },
-        [host](const api::models::SequenceRenderSamplesRequest& request) { return host->readRenderedSamples(request); });
+        [host](const api::models::SequenceRenderSamplesRequest& request) { return host->readRenderedSamples(request); },
+        [host]() { return host->readFinalFseqState(); },
+        [host]() { return host->readSyncHealth(); });
+    api::services::DataLayerService dataLayerService(
+        [host]() { return host->readDataLayers(); },
+        [host](const api::models::DataLayerUpsertRequest& request) { return host->upsertDataLayer(request); },
+        [host](const api::models::DataLayerRemoveRequest& request) { return host->removeDataLayer(request); },
+        [host](const api::models::DataLayerReorderRequest& request) { return host->reorderDataLayer(request); },
+        [host](const api::models::DataLayerValidateRequest& request) { return host->validateDataLayer(request); });
     api::services::TimingService timingService(
         [host]() { return host->readTimingTracks(); },
         [host](const api::models::TimingMarksRequest& request) { return host->readTimingMarks(request); },
@@ -237,11 +248,14 @@ inline std::optional<api::transport::ApiResponse> HandleDesignerApiRequest(
         [host]() { return host->readCurrentMedia(); },
         [host]() { return host->readMediaDirectories(); },
         [host](const api::models::MediaShowDirectoryRequest& request) { return host->setShowDirectory(request); },
-        [host](const api::models::MediaShowDirectoryRequest& request) { return host->requestShowDirectoryAccess(request); });
+        [host](const api::models::MediaShowDirectoryRequest& request) { return host->requestShowDirectoryAccess(request); },
+        [host](const api::models::MediaPathAccessValidationRequest& request) { return host->validateMediaPathAccess(request); },
+        [host]() { return host->readAudioCapabilities(); });
     api::services::LayoutService layoutService(
         [host]() { return host->readLayoutModels(); },
         [host]() { return host->readLayoutSubmodels(); },
         [host](const api::models::LayoutModelNodesRequest& request) { return host->readLayoutModelNodes(request); },
+        [host]() { return host->readLayoutChannelMap(); },
         [host]() { return host->readLayoutSettings(); },
         [host]() { return host->readLayoutGroupMemberships(); },
         [host](const api::models::CreateCustomModelRequest& request) { return host->createCustomModel(request); });
@@ -263,13 +277,14 @@ inline std::optional<api::transport::ApiResponse> HandleDesignerApiRequest(
     api::services::SequencingService sequencingService(timingService, effectService);
     api::handlers::RuntimeHandler runtimeHandler([host]() { return host->readModalState(); });
     api::handlers::SequenceHandler sequenceHandler(std::move(sequenceService));
+    api::handlers::DataLayerHandler dataLayerHandler(std::move(dataLayerService));
     api::handlers::TimingHandler timingHandler(std::move(timingService));
     api::handlers::MediaHandler mediaHandler(std::move(mediaService));
     api::handlers::LayoutHandler layoutHandler(std::move(layoutService));
     api::handlers::ElementHandler elementHandler(std::move(elementService));
     api::handlers::EffectHandler effectHandler(std::move(effectService));
     api::handlers::SequencingHandler sequencingHandler(std::move(sequencingService));
-    api::transport::RequestRouter router(std::move(runtimeHandler), std::move(sequenceHandler), std::move(timingHandler), std::move(mediaHandler), std::move(layoutHandler), std::move(elementHandler), std::move(effectHandler), std::move(sequencingHandler));
+    api::transport::RequestRouter router(std::move(runtimeHandler), std::move(sequenceHandler), std::move(dataLayerHandler), std::move(timingHandler), std::move(mediaHandler), std::move(layoutHandler), std::move(elementHandler), std::move(effectHandler), std::move(sequencingHandler));
 
     return router.route(api::parsing::ParseRequest(command, params, requestId));
 }

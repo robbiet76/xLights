@@ -69,6 +69,33 @@ public:
         return response;
     }
 
+    [[nodiscard]] transport::ApiResponse handleGetState(const transport::ApiRequest& request) const {
+        transport::ApiResponse response;
+        response.command = request.command;
+        response.requestId = request.requestId;
+
+        const auto settings = _service.getSettings();
+        if (!settings.isOpen) {
+            response.statusCode = 404;
+            response.error = transport::ApiError{
+                std::string(transport::errors::SequenceNotOpen),
+                "No sequence open.",
+                nlohmann::json::object()
+            };
+            return response;
+        }
+
+        response.data = serializeSettings(settings);
+        response.data["isOpen"] = true;
+        const auto finalFseq = _service.getFinalFseqState();
+        response.data["finalFseq"] = serializeFinalFseqState(finalFseq);
+        const auto syncHealth = _service.getSyncHealth();
+        if (syncHealth.sequenceOpen) {
+            response.data["syncHealth"] = serializeSyncHealth(syncHealth);
+        }
+        return response;
+    }
+
     [[nodiscard]] transport::ApiResponse handleSetSettings(const transport::ApiRequest& request) const {
         transport::ApiResponse response;
         response.command = request.command;
@@ -376,11 +403,43 @@ public:
         return BuildQueuedJobAcceptedResponse(request, jobId);
     }
 
+    [[nodiscard]] transport::ApiResponse handleFocus(const transport::ApiRequest& request) const {
+        const auto jobId = SubmitDesignerApiJob(request.command, request.requestId, [service = _service, request]() {
+            transport::ApiResponse response;
+            response.command = request.command;
+            response.requestId = request.requestId;
+            const auto result = service.focusSequence();
+            if (!result.focused || !result.sequence.isOpen) {
+                response.statusCode = result.errorCode.has_value() && result.errorCode.value() == transport::errors::SequenceNotOpen ? 404 : 409;
+                response.error = transport::ApiError{
+                    result.errorCode.value_or(std::string(transport::errors::ValidationError)),
+                    result.errorMessage.value_or("Unable to focus the current sequence."),
+                    nlohmann::json{{"sequenceOpen", result.sequence.isOpen}, {"sequencePath", result.sequence.path.value_or("")}}
+                };
+                return response;
+            }
+            response.data["focused"] = true;
+            response.data["sequence"] = nlohmann::json{{"path", result.sequence.path.value_or("")}, {"revisionToken", result.sequence.revisionToken.value_or("")}};
+            return response;
+        });
+        return BuildQueuedJobAcceptedResponse(request, jobId);
+    }
+
     [[nodiscard]] transport::ApiResponse handleRenderCurrent(const transport::ApiRequest& request) const {
         const auto jobId = SubmitDesignerApiJob(request.command, request.requestId, [service = _service, request]() {
             transport::ApiResponse response;
             response.command = request.command;
             response.requestId = request.requestId;
+            const auto health = service.getSyncHealth();
+            if (health.status == "blocked") {
+                response.statusCode = 409;
+                response.error = transport::ApiError{
+                    "XLD_DATALAYER_STALE_OR_UNSAFE",
+                    "The final controller FSEQ cannot be saved until the XLD DataLayer manifest is current.",
+                    nlohmann::json{{"syncHealth", SequenceHandler::serializeSyncHealth(health)}}
+                };
+                return response;
+            }
             const auto result = service.renderSequence();
             if (!result.rendered || !result.sequence.isOpen) {
                 response.statusCode = 409;
@@ -393,6 +452,29 @@ public:
             }
             response.data["rendered"] = true;
             response.data["fseqPath"] = result.fseqPath.value_or("");
+            response.data["sequence"] = nlohmann::json{{"path", result.sequence.path.value_or("")}, {"revisionToken", result.sequence.revisionToken.value_or("")}};
+            return response;
+        });
+        return BuildQueuedJobAcceptedResponse(request, jobId);
+    }
+
+    [[nodiscard]] transport::ApiResponse handleSaveFinalFseq(const transport::ApiRequest& request) const {
+        const auto jobId = SubmitDesignerApiJob(request.command, request.requestId, [service = _service, request]() {
+            transport::ApiResponse response;
+            response.command = request.command;
+            response.requestId = request.requestId;
+            const auto result = service.renderSequence();
+            if (!result.rendered || !result.sequence.isOpen) {
+                response.statusCode = 409;
+                response.error = transport::ApiError{
+                    std::string(transport::errors::ValidationError),
+                    "Unable to save the final controller FSEQ for the current sequence.",
+                    nlohmann::json::object()
+                };
+                return response;
+            }
+            response.data["saved"] = true;
+            response.data["finalFseqPath"] = result.fseqPath.value_or("");
             response.data["sequence"] = nlohmann::json{{"path", result.sequence.path.value_or("")}, {"revisionToken", result.sequence.revisionToken.value_or("")}};
             return response;
         });
@@ -654,6 +736,50 @@ public:
         return response;
     }
 
+    [[nodiscard]] transport::ApiResponse handleGetFinalFseq(const transport::ApiRequest& request) const {
+        transport::ApiResponse response;
+        response.command = request.command;
+        response.requestId = request.requestId;
+
+        const auto result = _service.getFinalFseqState();
+        if (!result.sequenceOpen) {
+            response.statusCode = 404;
+            response.error = transport::ApiError{
+                std::string(transport::errors::SequenceNotOpen),
+                "No sequence open.",
+                nlohmann::json::object()
+            };
+            return response;
+        }
+        response.data = serializeFinalFseqState(result);
+        return response;
+    }
+
+    [[nodiscard]] transport::ApiResponse handleGetSyncHealth(const transport::ApiRequest& request) const {
+        transport::ApiResponse response;
+        response.command = request.command;
+        response.requestId = request.requestId;
+
+        const auto result = _service.getSyncHealth();
+        if (!result.sequenceOpen) {
+            response.statusCode = 404;
+            response.error = transport::ApiError{
+                std::string(transport::errors::SequenceNotOpen),
+                "No sequence open.",
+                nlohmann::json::object()
+            };
+            return response;
+        }
+        response.data["sequenceOpen"] = result.sequenceOpen;
+        response.data["status"] = result.status;
+        response.data["sequencePath"] = result.sequencePath;
+        response.data["revisionToken"] = result.revisionToken;
+        response.data["warnings"] = result.warnings;
+        response.data["finalFseq"] = serializeFinalFseqState(result.finalFseq);
+        response.data["dataLayers"] = serializeDataLayerList(result.dataLayers);
+        return response;
+    }
+
     [[nodiscard]] validation::ValidationResult validateOpenRequest(const models::SequenceOpenRequest& request) const {
         validation::ValidationResult result;
         if (request.file.empty()) {
@@ -722,6 +848,116 @@ public:
             {"frameMs", settings.frameMs.value_or(0)},
             {"supportsModelBlending", settings.supportsModelBlending.value_or(false)},
             {"hasUnsavedChanges", settings.hasUnsavedChanges.value_or(false)}
+        };
+    }
+
+    static nlohmann::json serializeFseq(const models::FseqFileSummary& fseq) {
+        return {
+            {"exists", fseq.exists},
+            {"readable", fseq.readable},
+            {"path", fseq.path},
+            {"versionMajor", fseq.versionMajor},
+            {"versionMinor", fseq.versionMinor},
+            {"frameMs", fseq.frameMs},
+            {"frameCount", fseq.frameCount},
+            {"channelCount", fseq.channelCount},
+            {"maxChannel", fseq.maxChannel},
+            {"modifiedAt", fseq.modifiedAt}
+        };
+    }
+
+    static nlohmann::json serializeXldManifest(const models::XldManifestValidationSummary& manifest) {
+        return {
+            {"expected", manifest.expected},
+            {"exists", manifest.exists},
+            {"readable", manifest.readable},
+            {"path", manifest.path},
+            {"status", manifest.status},
+            {"issueCodes", manifest.issueCodes},
+            {"warnings", manifest.warnings},
+            {"artifactType", manifest.artifactType},
+            {"artifactVersion", manifest.artifactVersion},
+            {"appId", manifest.appId},
+            {"targetSequencePath", manifest.targetSequencePath},
+            {"generatedFseqPath", manifest.generatedFseqPath},
+            {"generatedFseqBasename", manifest.generatedFseqBasename},
+            {"generatedFseqSizeBytes", manifest.generatedFseqSizeBytes},
+            {"displaySnapshotId", manifest.displaySnapshotId},
+            {"channelMapSnapshotId", manifest.channelMapSnapshotId},
+            {"channelMapFingerprint", manifest.channelMapFingerprint},
+            {"outputConfigurationFingerprint", manifest.outputConfigurationFingerprint},
+            {"frameMs", manifest.frameMs},
+            {"frameCount", manifest.frameCount},
+            {"channelCount", manifest.channelCount},
+            {"dataLayerName", manifest.dataLayerName},
+            {"generatedAt", manifest.generatedAt}
+        };
+    }
+
+    static nlohmann::json serializeDataLayer(const models::DataLayerSummary& layer) {
+        nlohmann::json value{
+            {"index", layer.index},
+            {"name", layer.name},
+            {"source", layer.source},
+            {"dataSource", layer.dataSource},
+            {"placement", layer.placement},
+            {"pathMode", layer.pathMode},
+            {"isNutcracker", layer.isNutcracker},
+            {"isXldLayer", layer.isXldLayer},
+            {"pathExists", layer.pathExists},
+            {"participatesInFinalRender", layer.participatesInFinalRender},
+            {"numChannels", layer.numChannels},
+            {"numFrames", layer.numFrames},
+            {"channelOffset", layer.channelOffset},
+            {"lorConvertParams", layer.lorConvertParams}
+        };
+        if (layer.fseq.has_value()) {
+            value["fseq"] = serializeFseq(*layer.fseq);
+        }
+        if (layer.xldManifest.has_value()) {
+            value["xldManifest"] = serializeXldManifest(*layer.xldManifest);
+        }
+        return value;
+    }
+
+    static nlohmann::json serializeDataLayerList(const models::DataLayerListSummary& summary) {
+        nlohmann::json value{
+            {"sequenceOpen", summary.sequenceOpen},
+            {"sequencePath", summary.sequencePath},
+            {"revisionToken", summary.revisionToken},
+            {"layers", nlohmann::json::array()}
+        };
+        for (const auto& layer : summary.layers) {
+            value["layers"].push_back(serializeDataLayer(layer));
+        }
+        return value;
+    }
+
+    static nlohmann::json serializeFinalFseqState(const models::SequenceFinalFseqState& state) {
+        nlohmann::json value{
+            {"sequenceOpen", state.sequenceOpen},
+            {"sequencePath", state.sequencePath},
+            {"revisionToken", state.revisionToken},
+            {"finalFseqPath", state.finalFseqPath},
+            {"exists", state.exists},
+            {"readable", state.readable},
+            {"freshness", state.freshness}
+        };
+        if (state.fseq.has_value()) {
+            value["fseq"] = serializeFseq(*state.fseq);
+        }
+        return value;
+    }
+
+    static nlohmann::json serializeSyncHealth(const models::SequenceSyncHealthSummary& summary) {
+        return {
+            {"sequenceOpen", summary.sequenceOpen},
+            {"status", summary.status},
+            {"sequencePath", summary.sequencePath},
+            {"revisionToken", summary.revisionToken},
+            {"warnings", summary.warnings},
+            {"finalFseq", serializeFinalFseqState(summary.finalFseq)},
+            {"dataLayers", serializeDataLayerList(summary.dataLayers)}
         };
     }
 

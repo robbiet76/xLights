@@ -219,7 +219,7 @@ bool xLightsFrame::SetDir(const wxString& newdir, bool permanent)
         nd = nd.SubString(0, nd.size() - 2);
 
     // don't change show directories with an open sequence because models won't match
-    if (!CloseSequence()) {
+    if (CurrentSeqXmlFile != nullptr && !CloseSequence()) {
         if (xLightsDesigner::IsNonInteractiveLaunch()) {
             spdlog::error("xLightsDesigner SetDir failed: CloseSequence returned false.");
         }
@@ -227,13 +227,16 @@ bool xLightsFrame::SetDir(const wxString& newdir, bool permanent)
     }
 
     if (!ObtainAccessToURL(newdir, true)) {
-        if (!xLightsDesigner::HasLaunchTrustedRootAccess(ToStdString(newdir), true)) {
+        const auto newdirUtf8 = ToStdString(newdir);
+        const bool trustedNoninteractiveShowDir =
+            xLightsDesigner::IsNonInteractiveLaunch() && xLightsDesigner::IsLaunchTrustedRootPath(newdirUtf8);
+        if (!xLightsDesigner::HasLaunchTrustedRootAccess(newdirUtf8, true) && !trustedNoninteractiveShowDir) {
             if (xLightsDesigner::IsNonInteractiveLaunch()) {
-                spdlog::error("xLightsDesigner SetDir failed: no bookmark access and trusted-root write probe failed for '{}'.", ToStdString(newdir));
+                spdlog::error("xLightsDesigner SetDir failed: no bookmark access and trusted-root write probe failed for '{}'.", newdirUtf8);
             }
             return false;
         }
-        spdlog::info("Using xLightsDesigner trusted-root write access for show directory {}.", ToStdString(newdir));
+        spdlog::info("Using xLightsDesigner trusted-root access for show directory {}.", newdirUtf8);
     }
 
     

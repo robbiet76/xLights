@@ -38,6 +38,7 @@
 #include <wx/tooltip.h>
 #include <wx/valnum.h>
 #include <wx/version.h>
+#include "xLightsDesigner/DesignerDiagnostics.h"
 #include "xLightsDesigner/DesignerLaunchPolicy.h"
 #include <wx/wfstream.h>
 #include <wx/zipstrm.h>
@@ -650,10 +651,32 @@ xLightsFrame::xLightsFrame(wxWindow* parent, int ab, wxWindowID id, bool renderO
     CurlManager::INSTANCE.setYieldFunction([] { wxYieldIfNeeded(); });
 
     OutputManager::SetConfirmCallback([](const std::string& message, const std::string& title) -> bool {
+        if (xLightsDesigner::ShouldSuppressPrompt()) {
+            spdlog::warn("Suppressing xLightsDesigner noninteractive confirmation dialog '{}': {}", title, message);
+            xLightsDesigner::RecordSuppressedDialog("warning", "OutputManagerConfirm", title, message);
+            return false;
+        }
         return wxMessageBox(message, title, wxICON_QUESTION | wxYES_NO) == wxYES;
     });
 
     AppCallbacks::SetDisplayMessageCallback([](AppCallbacks::DisplayMessageLevel level, const std::string& msg) {
+        if (xLightsDesigner::ShouldSuppressPrompt()) {
+            switch (level) {
+            case AppCallbacks::DisplayMessageLevel::Error:
+                spdlog::error("Suppressing xLightsDesigner noninteractive error dialog: {}", msg);
+                xLightsDesigner::RecordSuppressedDialog("error", "AppCallbacks", "Error", msg);
+                break;
+            case AppCallbacks::DisplayMessageLevel::Warning:
+                spdlog::warn("Suppressing xLightsDesigner noninteractive warning dialog: {}", msg);
+                xLightsDesigner::RecordSuppressedDialog("warning", "AppCallbacks", "Warning", msg);
+                break;
+            case AppCallbacks::DisplayMessageLevel::Info:
+                spdlog::info("Suppressing xLightsDesigner noninteractive info dialog: {}", msg);
+                xLightsDesigner::RecordSuppressedDialog("info", "AppCallbacks", "Information", msg);
+                break;
+            }
+            return;
+        }
         switch (level) {
         case AppCallbacks::DisplayMessageLevel::Error:
             wxMessageBox(msg, "Error", wxICON_ERROR | wxOK);
@@ -719,7 +742,7 @@ xLightsFrame::xLightsFrame(wxWindow* parent, int ab, wxWindowID id, bool renderO
     _renderEngine->SetOnAllRenderJobsComplete([this]() { CallAfter(&xLightsFrame::RenderDone); });
 
     _exiting = false;
-    SplashScreenShow splash(renderOnlyMode);
+    SplashScreenShow splash(renderOnlyMode || xLightsDesigner::ShouldSuppressPrompt());
     splash.Show();
     splash.Update();
     wxYield();
@@ -1499,7 +1522,7 @@ xLightsFrame::xLightsFrame(wxWindow* parent, int ab, wxWindowID id, bool renderO
     spdlog::debug("Show directory {}.", (const char*)dir.c_str());
 
 #if !defined(_DEBUG)
-    if (dir != "") {
+    if (dir != "" && !xLightsDesigner::IsNonInteractiveLaunch()) {
 #ifdef __WXMSW__
         _tod.PrepTipOfDay(this);
 #else
@@ -3284,7 +3307,12 @@ void xLightsFrame::DoBackup(bool prompt, bool startup, bool forceallfiles)
 
     //  first make sure there is a Backup sub directory
     if (_backupDirectory == "") {
-        wxMessageBox("Backup directory has not been set. Aborting backup.");
+        if (xLightsDesigner::ShouldSuppressPrompt()) {
+            spdlog::error("Suppressing xLightsDesigner noninteractive backup error dialog: Backup directory has not been set. Aborting backup.");
+            xLightsDesigner::RecordSuppressedDialog("error", "DoBackup", "Backup", "Backup directory has not been set. Aborting backup.");
+        } else {
+            wxMessageBox("Backup directory has not been set. Aborting backup.");
+        }
         return;
     }
 
@@ -3323,6 +3351,11 @@ void xLightsFrame::DoBackup(bool prompt, bool startup, bool forceallfiles)
     }
 
     if (prompt) {
+        if (xLightsDesigner::ShouldSuppressPrompt()) {
+            spdlog::warn("Suppressing xLightsDesigner noninteractive backup confirmation dialog; backup skipped.");
+            xLightsDesigner::RecordSuppressedDialog("warning", "DoBackup", "Backup", "Backup confirmation was suppressed; backup skipped.");
+            return;
+        }
         if (wxNO == wxMessageBox("All xml & xsq files under " + wxString::Format("%i", MAXBACKUPFILE_MB) + "MB in your xlights directory will be backed up to \"" +
                                      newDir + "\". Proceed?",
                                  "Backup", wxICON_QUESTION | wxYES_NO)) {

@@ -91,6 +91,39 @@ struct LayoutModelNodesSummary {
     std::vector<LayoutModelNodeSummary> nodes;
 };
 
+struct LayoutChannelMapNode {
+    int nodeId = 0;
+    int nodeIndex = 0;
+    int stringIndex = 0;
+    std::string name;
+    int channelStart = 0; // 1-based
+    int channelStartZeroBased = 0;
+    int channelCount = 0;
+    std::string evidence;
+};
+
+struct LayoutChannelMapTarget {
+    std::string targetName;
+    std::string targetKind = "model";
+    std::string displayAs;
+    int startChannel = 0; // 1-based
+    int endChannel = 0;   // 1-based inclusive
+    int nodeCount = 0;
+    bool usableForFseq = false;
+    std::vector<LayoutChannelMapNode> nodes;
+    std::vector<std::string> warnings;
+};
+
+struct LayoutChannelMapSummary {
+    std::string snapshotId;
+    std::string fingerprint;
+    std::string mappingEvidence;
+    int maxChannelCount = 0;
+    bool usableForFseq = false;
+    std::vector<LayoutChannelMapTarget> targets;
+    std::vector<std::string> warnings;
+};
+
 struct CustomModelNode {
     int x = -1;
     int y = -1;

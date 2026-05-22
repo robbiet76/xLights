@@ -15,6 +15,9 @@
 #include <algorithm>
 #include <set>
 #include <cstdlib>
+#include <functional>
+#include <cstdint>
+#include <nlohmann/json.hpp>
 
 #include "FSEQFile.h"
 #include "AudioManager.h"
@@ -32,6 +35,7 @@
 #include "DesignerDiagnostics.h"
 #include "DesignerApiRuntime.h"
 #include "DesignerLaunchPolicy.h"
+#include "api/models/DataLayerModels.h"
 #include "api/models/EffectModels.h"
 #include "api/models/ElementModels.h"
 #include "api/models/LayoutModels.h"
@@ -117,6 +121,33 @@ inline wxString BuildDesignerRenderedFseqPath(xLightsFrame* frame) {
     wxFileName output(frame->CurrentSeqXmlFile->GetFullPath());
     output.SetExt("fseq");
     return output.GetFullPath();
+}
+
+inline api::models::FseqFileSummary ReadDesignerFseqSummary(const std::string& path) {
+    api::models::FseqFileSummary summary;
+    summary.path = path;
+    if (path.empty()) {
+        return summary;
+    }
+    const wxFileName fileName(wxString::FromUTF8(path));
+    summary.exists = fileName.FileExists();
+    summary.modifiedAt = ReadDesignerApiFileModifiedAt(fileName);
+    if (!summary.exists) {
+        return summary;
+    }
+
+    std::unique_ptr<FSEQFile> file(FSEQFile::openFSEQFile(path));
+    if (!file) {
+        return summary;
+    }
+    summary.readable = true;
+    summary.versionMajor = file->getVersionMajor();
+    summary.versionMinor = file->getVersionMinor();
+    summary.frameMs = static_cast<int>(file->getStepTime());
+    summary.frameCount = static_cast<int>(file->getNumFrames());
+    summary.channelCount = static_cast<int>(file->getChannelCount());
+    summary.maxChannel = static_cast<int>(file->getMaxChannel());
+    return summary;
 }
 
 inline bool WaitDesignerRenderComplete(xLightsFrame* frame) {
@@ -249,6 +280,8 @@ inline nlohmann::json BuildDesignerModalStateJson(xLightsFrame* frame) {
         {"blocked", modalCount > 0},
         {"modalCount", modalCount},
         {"shownDialogCount", shownDialogCount},
+        {"suppressedDialogCount", xLightsDesigner::GetSuppressedDialogsJson().size()},
+        {"suppressedDialogs", xLightsDesigner::GetSuppressedDialogsJson()},
         {"windows", windows}
     };
 }
@@ -262,6 +295,16 @@ inline bool ObtainOwnedApiAccessToPath(const std::string& path, bool enforceWrit
         return true;
     }
     return HasOwnedTrustedRootAccess(path, enforceWritable);
+}
+
+inline bool IsExistingFileReadableByDesignerApi(const std::filesystem::path& path) {
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec) || std::filesystem::is_directory(path, ec)) {
+        return false;
+    }
+
+    std::ifstream input(path, std::ios::binary);
+    return input.good();
 }
 
 inline bool HasOwnedShowFolderAccess(xLightsFrame* frame, const std::string& path, bool enforceWritable = false) {
@@ -324,6 +367,41 @@ inline bool FilesHaveEqualContents(const std::filesystem::path& left, const std:
         }
     }
     return lhs.eof() && rhs.eof();
+}
+
+inline std::string BuildStableRevisionToken(const std::string& text) {
+    std::uint64_t hash = 1469598103934665603ull;
+    for (const unsigned char ch : text) {
+        hash ^= static_cast<std::uint64_t>(ch);
+        hash *= 1099511628211ull;
+    }
+    return std::to_string(hash);
+}
+
+inline std::string BuildTimingTrackRevisionToken(TimingElement* track) {
+    if (track == nullptr) {
+        return std::string();
+    }
+
+    std::ostringstream stream;
+    stream << track->GetName() << '|' << track->GetSubType() << '|' << (track->IsFixedTiming() ? "fixed" : "variable");
+    for (size_t layerIndex = 0; layerIndex < track->GetEffectLayerCount(); ++layerIndex) {
+        EffectLayer* layer = track->GetEffectLayer(static_cast<int>(layerIndex));
+        if (layer == nullptr) {
+            continue;
+        }
+        stream << "|layer:" << layerIndex << ':' << layer->GetEffectCount();
+        for (auto* effect : layer->GetEffects()) {
+            if (effect == nullptr) {
+                continue;
+            }
+            stream << '|'
+                   << effect->GetStartTimeMS() << '-'
+                   << effect->GetEndTimeMS() << ':'
+                   << effect->GetEffectName();
+        }
+    }
+    return BuildStableRevisionToken(stream.str());
 }
 
 inline bool CanReuseCurrentShowForTrustedWorkspace(xLightsFrame* frame, const wxString& targetShowDir) {
@@ -621,11 +699,15 @@ public:
     [[nodiscard]] api::models::SequenceOpenResult openSequence(const api::models::SequenceOpenRequest& request) const {
         api::models::SequenceOpenResult result;
         result.requestedPath = request.file;
+        xLightsDesigner::AppendDesignerDiagnostic(std::string("sequence.open requested file=") + request.file +
+                                                  " force=" + (request.force ? "1" : "0"));
         if (_frame == nullptr || request.file.empty()) {
+            xLightsDesigner::AppendDesignerDiagnostic("sequence.open rejected missingFrameOrFile");
             return result;
         }
 
         if (!IsDesignerApiStartupSettled()) {
+            xLightsDesigner::AppendDesignerDiagnostic("sequence.open rejected appNotReady");
             result.errorCode = "APP_NOT_READY";
             result.errorMessage = "xLightsDesigner sequence.open is blocked until xLights startup has fully settled.";
             result.retryAfterMs = GetDesignerApiStartupSettleRemainingMs();
@@ -634,33 +716,41 @@ public:
 
         const auto current = readOpenSequence();
         if (!request.force && current.isOpen && current.path.has_value() && current.path.value() == request.file) {
+            xLightsDesigner::AppendDesignerDiagnostic("sequence.open skipped alreadyOpen");
             result.opened = true;
             result.sequence = current;
             return result;
         }
 
         if (wxIsMainThread()) {
+            xLightsDesigner::AppendDesignerDiagnostic("sequence.open executing on main thread");
             const auto guard = detail::EnterOwnedSequenceOpenState(_frame, request.file, request.force);
             if (!detail::ObtainOwnedApiAccessToPath(request.file, false)) {
                 detail::ExitOwnedSequenceOpenState(_frame, guard);
+                xLightsDesigner::AppendDesignerDiagnostic("sequence.open failed sequenceAccessDenied");
                 result.errorCode = "SEQUENCE_ACCESS_DENIED";
                 result.errorMessage = "Unable to obtain access to the requested sequence file.";
                 return result;
             }
             if (!detail::PrepareDesignerShowDirectoryForSequence(_frame, request.file)) {
                 detail::ExitOwnedSequenceOpenState(_frame, guard);
+                xLightsDesigner::AppendDesignerDiagnostic("sequence.open failed showDirectoryFailed");
                 result.errorCode = "SHOW_DIRECTORY_FAILED";
                 result.errorMessage = "Unable to switch xLights to the target show directory before opening the sequence.";
                 return result;
             }
+            xLightsDesigner::AppendDesignerDiagnostic("sequence.open calling xLights OpenSequence on main thread");
             _frame->OpenSequence(wxString::FromUTF8(request.file), nullptr);
+            xLightsDesigner::AppendDesignerDiagnostic("sequence.open xLights OpenSequence returned on main thread");
             detail::ExitOwnedSequenceOpenState(_frame, guard);
             const auto opened = readOpenSequence();
             if (opened.isOpen && opened.path.has_value() && opened.path.value() == request.file) {
+                xLightsDesigner::AppendDesignerDiagnostic("sequence.open completed opened=1");
                 result.opened = true;
                 result.sequence = opened;
                 return result;
             }
+            xLightsDesigner::AppendDesignerDiagnostic("sequence.open failed sequenceOpenFailed after main thread return");
             result.errorCode = "SEQUENCE_OPEN_FAILED";
             result.errorMessage = "xLights did not report the requested sequence as open after OpenSequence completed.";
             return result;
@@ -672,11 +762,13 @@ public:
         const std::string requestedFile = request.file;
         const bool force = request.force;
         frame->CallAfter([this, promise, requestedFile, force]() mutable {
+            xLightsDesigner::AppendDesignerDiagnostic(std::string("sequence.open main-thread callback started file=") + requestedFile);
             api::models::SequenceOpenResult callbackResult;
             callbackResult.requestedPath = requestedFile;
             const auto guard = detail::EnterOwnedSequenceOpenState(_frame, requestedFile, force);
             if (!detail::ObtainOwnedApiAccessToPath(requestedFile, false)) {
                 detail::ExitOwnedSequenceOpenState(_frame, guard);
+                xLightsDesigner::AppendDesignerDiagnostic("sequence.open callback failed sequenceAccessDenied");
                 callbackResult.errorCode = "SEQUENCE_ACCESS_DENIED";
                 callbackResult.errorMessage = "Unable to obtain access to the requested sequence file.";
                 promise->set_value(callbackResult);
@@ -684,18 +776,23 @@ public:
             }
             if (!detail::PrepareDesignerShowDirectoryForSequence(_frame, requestedFile)) {
                 detail::ExitOwnedSequenceOpenState(_frame, guard);
+                xLightsDesigner::AppendDesignerDiagnostic("sequence.open callback failed showDirectoryFailed");
                 callbackResult.errorCode = "SHOW_DIRECTORY_FAILED";
                 callbackResult.errorMessage = "Unable to switch xLights to the target show directory before opening the sequence.";
                 promise->set_value(callbackResult);
                 return;
             }
+            xLightsDesigner::AppendDesignerDiagnostic("sequence.open callback calling xLights OpenSequence");
             _frame->OpenSequence(wxString::FromUTF8(requestedFile), nullptr);
+            xLightsDesigner::AppendDesignerDiagnostic("sequence.open callback xLights OpenSequence returned");
             detail::ExitOwnedSequenceOpenState(_frame, guard);
             const auto opened = readOpenSequence();
             if (opened.isOpen && opened.path.has_value() && opened.path.value() == requestedFile) {
+                xLightsDesigner::AppendDesignerDiagnostic("sequence.open callback completed opened=1");
                 callbackResult.opened = true;
                 callbackResult.sequence = opened;
             } else {
+                xLightsDesigner::AppendDesignerDiagnostic("sequence.open callback failed sequenceOpenFailed after return");
                 callbackResult.errorCode = "SEQUENCE_OPEN_FAILED";
                 callbackResult.errorMessage = "xLights did not report the requested sequence as open after OpenSequence completed.";
             }
@@ -703,10 +800,12 @@ public:
         });
         const int openWaitMs = detail::ReadDesignerApiEnvIntMs("XLIGHTS_DESIGNER_SEQUENCE_OPEN_WAIT_MS", 600000);
         if (future.wait_for(std::chrono::milliseconds(openWaitMs)) != std::future_status::ready) {
+            xLightsDesigner::AppendDesignerDiagnostic("sequence.open timed out waiting for main-thread callback");
             result.errorCode = "SEQUENCE_OPEN_TIMEOUT";
             result.errorMessage = "Timed out waiting for xLights to finish opening the requested sequence.";
             return result;
         }
+        xLightsDesigner::AppendDesignerDiagnostic("sequence.open worker received callback result");
         return future.get();
     }
 
@@ -815,6 +914,32 @@ public:
                 return result;
             }
             result.closed = true;
+            result.sequence = readOpenSequence();
+            return result;
+        });
+    }
+
+    [[nodiscard]] api::models::SequenceFocusResult focusSequence() const {
+        return RunOnMainThread<api::models::SequenceFocusResult>([this]() {
+            api::models::SequenceFocusResult result;
+            result.sequence = readOpenSequence();
+            if (_frame == nullptr) {
+                result.errorCode = "VALIDATION_ERROR";
+                result.errorMessage = "xLights frame is unavailable.";
+                return result;
+            }
+            if (_frame->CurrentSeqXmlFile == nullptr || !result.sequence.isOpen) {
+                result.errorCode = std::string(api::transport::errors::SequenceNotOpen);
+                result.errorMessage = "No sequence is open.";
+                return result;
+            }
+
+            const int sequencerPage = _frame->Notebook1->GetPageIndex(_frame->PanelSequencer);
+            if (sequencerPage != wxNOT_FOUND) {
+                _frame->Notebook1->SetSelection(sequencerPage);
+            }
+            _frame->EnableSequenceControls(true);
+            result.focused = true;
             result.sequence = readOpenSequence();
             return result;
         });
@@ -1202,6 +1327,284 @@ public:
         return result;
     }
 
+    [[nodiscard]] api::models::SequenceFinalFseqState readFinalFseqState() const {
+        api::models::SequenceFinalFseqState state;
+        const auto sequence = readOpenSequence();
+        state.sequenceOpen = sequence.isOpen;
+        state.sequencePath = sequence.path.value_or("");
+        state.revisionToken = sequence.revisionToken.value_or("");
+        if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr || !sequence.isOpen) {
+            return state;
+        }
+
+        state.finalFseqPath = detail::ResolveDesignerRenderedFseqPath(_frame);
+        if (state.finalFseqPath.empty()) {
+            state.finalFseqPath = detail::BuildDesignerRenderedFseqPath(_frame).ToStdString();
+        }
+        state.fseq = detail::ReadDesignerFseqSummary(state.finalFseqPath);
+        state.exists = state.fseq->exists;
+        state.readable = state.fseq->readable;
+        state.freshness = state.exists ? "present-unverified" : "missing";
+        return state;
+    }
+
+    [[nodiscard]] api::models::SequenceSyncHealthSummary readSyncHealth() const {
+        api::models::SequenceSyncHealthSummary health;
+        const auto sequence = readOpenSequence();
+        health.sequenceOpen = sequence.isOpen;
+        health.sequencePath = sequence.path.value_or("");
+        health.revisionToken = sequence.revisionToken.value_or("");
+        if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr || !sequence.isOpen) {
+            health.status = "blocked";
+            health.warnings.push_back("No sequence is open.");
+            return health;
+        }
+
+        health.dataLayers = readDataLayers();
+        health.finalFseq = readFinalFseqState();
+        health.status = "ready";
+        bool hasXldLayer = false;
+        bool hasBlockedIssue = false;
+        for (const auto& layer : health.dataLayers.layers) {
+            if (layer.isXldLayer) {
+                hasXldLayer = true;
+                if (!layer.pathExists) {
+                    health.status = "update-required";
+                    health.warnings.push_back("An XLD DataLayer references a missing generated FSEQ file.");
+                }
+                if (layer.xldManifest.has_value()) {
+                    for (const auto& warning : layer.xldManifest->warnings) {
+                        health.warnings.push_back(warning);
+                    }
+                    if (layer.xldManifest->status == "blocked") {
+                        hasBlockedIssue = true;
+                    }
+                }
+            }
+        }
+        if (hasXldLayer && !health.finalFseq.exists) {
+            health.status = "update-required";
+            health.warnings.push_back("The final controller FSEQ is missing after XLD DataLayer binding.");
+        }
+        if (_frame->mSavedChangeCount != _frame->GetSequenceElements().GetChangeCount()) {
+            health.status = "update-required";
+            health.warnings.push_back("The xLights sequence has unsaved changes.");
+        }
+        if (hasBlockedIssue) {
+            health.status = "blocked";
+        }
+        return health;
+    }
+
+    [[nodiscard]] api::models::DataLayerListSummary readDataLayers() const {
+        api::models::DataLayerListSummary summary;
+        const auto sequence = readOpenSequence();
+        summary.sequenceOpen = sequence.isOpen;
+        summary.sequencePath = sequence.path.value_or("");
+        summary.revisionToken = sequence.revisionToken.value_or("");
+        if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr || !summary.sequenceOpen) {
+            return summary;
+        }
+
+        DataLayerSet& layers = _frame->CurrentSeqXmlFile->GetDataLayers();
+        const int nutcrackerIndex = findNutcrackerIndex(layers);
+        const int count = layers.GetNumLayers();
+        const std::string currentChannelMapFingerprint = readLayoutChannelMap().fingerprint;
+        summary.layers.reserve(std::max(0, count));
+        for (int index = 0; index < count; ++index) {
+            if (auto* layer = layers.GetDataLayer(static_cast<size_t>(index)); layer != nullptr) {
+                summary.layers.push_back(makeDataLayerSummary(*layer, index, nutcrackerIndex, currentChannelMapFingerprint, summary.sequencePath));
+            }
+        }
+        return summary;
+    }
+
+    [[nodiscard]] api::models::DataLayerMutationResult upsertDataLayer(const api::models::DataLayerUpsertRequest& request) const {
+        return RunOnMainThread<api::models::DataLayerMutationResult>([this, request]() {
+            api::models::DataLayerMutationResult result;
+            result.sequenceOpen = _frame != nullptr && _frame->CurrentSeqXmlFile != nullptr;
+            result.sequencePath = result.sequenceOpen ? _frame->CurrentSeqXmlFile->GetFullPath() : std::string();
+            if (!result.sequenceOpen) {
+                result.errorCode = std::string(api::transport::errors::SequenceNotOpen);
+                result.errorMessage = "No sequence is open.";
+                return result;
+            }
+            if (_frame->IsReadOnlyMode()) {
+                result.errorCode = std::string(api::transport::errors::ValidationError);
+                result.errorMessage = "DataLayers cannot be changed in read-only mode.";
+                return result;
+            }
+            if (request.name.empty() || request.sourceFseqPath.empty()) {
+                result.errorCode = std::string(api::transport::errors::ValidationError);
+                result.errorMessage = "DataLayer name and source FSEQ path are required.";
+                return result;
+            }
+            if (isNutcrackerName(request.name)) {
+                result.errorCode = std::string(api::transport::errors::ValidationError);
+                result.errorMessage = "The Nutcracker render layer cannot be replaced.";
+                return result;
+            }
+            if (!detail::ObtainOwnedApiAccessToPath(request.sourceFseqPath, false) ||
+                !wxFileExists(wxString::FromUTF8(request.sourceFseqPath))) {
+                result.errorCode = "DATA_LAYER_FILE_INACCESSIBLE";
+                result.errorMessage = "The DataLayer source FSEQ file is inaccessible.";
+                return result;
+            }
+
+            DataLayerSet& layers = _frame->CurrentSeqXmlFile->GetDataLayers();
+            int layerIndex = findDataLayerIndex(layers, request.name);
+            DataLayer* layer = layerIndex >= 0 ? layers.GetDataLayer(static_cast<size_t>(layerIndex)) : nullptr;
+            if (layer == nullptr) {
+                layer = layers.AddDataLayer(request.name, request.sourceFseqPath, request.dataSourcePath.empty() ? request.sourceFseqPath : request.dataSourcePath);
+                layerIndex = layers.GetNumLayers() - 1;
+            }
+            layer->SetName(request.name);
+            layer->SetSource(request.sourceFseqPath);
+            layer->SetDataSource(request.dataSourcePath.empty() ? request.sourceFseqPath : request.dataSourcePath);
+            if (request.channelCount > 0) layer->SetNumChannels(request.channelCount);
+            if (request.frameCount > 0) layer->SetNumFrames(request.frameCount);
+            layer->SetChannelOffset(std::max(0, request.channelOffset));
+
+            moveDataLayerForPlacement(layers, layerIndex, request.placement);
+            _frame->GetSequenceElements().IncrementChangeCount(nullptr);
+
+            result.ok = true;
+            result.layers = readDataLayers();
+            const int updatedIndex = findDataLayerIndex(layers, request.name);
+            result.layer = updatedIndex >= 0
+                ? makeDataLayerSummary(*layers.GetDataLayer(static_cast<size_t>(updatedIndex)), updatedIndex, findNutcrackerIndex(layers), readLayoutChannelMap().fingerprint, result.sequencePath)
+                : api::models::DataLayerSummary{};
+            return result;
+        });
+    }
+
+    [[nodiscard]] api::models::DataLayerMutationResult removeDataLayer(const api::models::DataLayerRemoveRequest& request) const {
+        return RunOnMainThread<api::models::DataLayerMutationResult>([this, request]() {
+            api::models::DataLayerMutationResult result;
+            result.sequenceOpen = _frame != nullptr && _frame->CurrentSeqXmlFile != nullptr;
+            result.sequencePath = result.sequenceOpen ? _frame->CurrentSeqXmlFile->GetFullPath() : std::string();
+            if (!result.sequenceOpen) {
+                result.errorCode = std::string(api::transport::errors::SequenceNotOpen);
+                result.errorMessage = "No sequence is open.";
+                return result;
+            }
+            DataLayerSet& layers = _frame->CurrentSeqXmlFile->GetDataLayers();
+            const int layerIndex = resolveDataLayerIndex(layers, request.name, request.index);
+            if (layerIndex < 0) {
+                result.errorCode = "DATA_LAYER_NOT_FOUND";
+                result.errorMessage = "DataLayer was not found.";
+                return result;
+            }
+            DataLayer* layer = layers.GetDataLayer(static_cast<size_t>(layerIndex));
+            if (layer == nullptr || isNutcrackerName(layer->GetName())) {
+                result.errorCode = std::string(api::transport::errors::ValidationError);
+                result.errorMessage = "The Nutcracker render layer cannot be removed.";
+                return result;
+            }
+            layers.RemoveDataLayer(layerIndex);
+            _frame->GetSequenceElements().IncrementChangeCount(nullptr);
+            result.ok = true;
+            result.layers = readDataLayers();
+            return result;
+        });
+    }
+
+    [[nodiscard]] api::models::DataLayerMutationResult reorderDataLayer(const api::models::DataLayerReorderRequest& request) const {
+        return RunOnMainThread<api::models::DataLayerMutationResult>([this, request]() {
+            api::models::DataLayerMutationResult result;
+            result.sequenceOpen = _frame != nullptr && _frame->CurrentSeqXmlFile != nullptr;
+            result.sequencePath = result.sequenceOpen ? _frame->CurrentSeqXmlFile->GetFullPath() : std::string();
+            if (!result.sequenceOpen) {
+                result.errorCode = std::string(api::transport::errors::SequenceNotOpen);
+                result.errorMessage = "No sequence is open.";
+                return result;
+            }
+            DataLayerSet& layers = _frame->CurrentSeqXmlFile->GetDataLayers();
+            int layerIndex = resolveDataLayerIndex(layers, request.name, request.index);
+            if (layerIndex < 0) {
+                result.errorCode = "DATA_LAYER_NOT_FOUND";
+                result.errorMessage = "DataLayer was not found.";
+                return result;
+            }
+            DataLayer* layer = layers.GetDataLayer(static_cast<size_t>(layerIndex));
+            if (layer == nullptr || isNutcrackerName(layer->GetName())) {
+                result.errorCode = std::string(api::transport::errors::ValidationError);
+                result.errorMessage = "The Nutcracker render layer cannot be reordered.";
+                return result;
+            }
+            if (!request.placement.empty()) {
+                moveDataLayerForPlacement(layers, layerIndex, request.placement);
+            } else if (request.targetIndex >= 0) {
+                moveDataLayerToIndex(layers, layerIndex, std::min(request.targetIndex, layers.GetNumLayers() - 1));
+            } else {
+                result.errorCode = std::string(api::transport::errors::ValidationError);
+                result.errorMessage = "A targetIndex or placement is required.";
+                return result;
+            }
+            _frame->GetSequenceElements().IncrementChangeCount(nullptr);
+            result.ok = true;
+            result.layers = readDataLayers();
+            const int updatedIndex = resolveDataLayerIndex(layers, request.name, request.index);
+            result.layer = updatedIndex >= 0
+                ? makeDataLayerSummary(*layers.GetDataLayer(static_cast<size_t>(updatedIndex)), updatedIndex, findNutcrackerIndex(layers), readLayoutChannelMap().fingerprint, result.sequencePath)
+                : api::models::DataLayerSummary{};
+            return result;
+        });
+    }
+
+    [[nodiscard]] api::models::DataLayerValidationResult validateDataLayer(const api::models::DataLayerValidateRequest& request) const {
+        api::models::DataLayerValidationResult result;
+        result.sequenceOpen = _frame != nullptr && _frame->CurrentSeqXmlFile != nullptr;
+        if (!result.sequenceOpen) {
+            result.errorCode = std::string(api::transport::errors::SequenceNotOpen);
+            result.errorMessage = "No sequence is open.";
+            return result;
+        }
+
+        DataLayerSet& layers = _frame->CurrentSeqXmlFile->GetDataLayers();
+        const int layerIndex = resolveDataLayerIndex(layers, request.name, request.index);
+        const int nutcrackerIndex = findNutcrackerIndex(layers);
+        if (layerIndex >= 0) {
+            if (auto* layer = layers.GetDataLayer(static_cast<size_t>(layerIndex)); layer != nullptr) {
+                result.layer = makeDataLayerSummary(*layer, layerIndex, nutcrackerIndex, readLayoutChannelMap().fingerprint, _frame->CurrentSeqXmlFile->GetFullPath());
+                result.path = result.layer.dataSource;
+            }
+        }
+        if (!request.fseqPath.empty()) {
+            result.path = request.fseqPath;
+        }
+        result.fseq = detail::ReadDesignerFseqSummary(result.path);
+        result.fileExists = result.fseq.exists;
+        result.readable = result.fseq.readable;
+        result.supportedVersion = result.fseq.readable && result.fseq.versionMajor > 0;
+        if (!result.fileExists) {
+            result.errorCode = "DATA_LAYER_FILE_MISSING";
+            result.errorMessage = "The DataLayer FSEQ file does not exist.";
+            return result;
+        }
+        if (!result.readable || !result.supportedVersion) {
+            result.errorCode = "UNSUPPORTED_FSEQ";
+            result.errorMessage = "The DataLayer FSEQ file could not be read by xLights.";
+            return result;
+        }
+        if (request.expectedChannelCount > 0 && result.fseq.channelCount != request.expectedChannelCount) {
+            result.warnings.push_back("FSEQ channel count does not match the expected channel count.");
+        }
+        if (request.expectedFrameCount > 0 && result.fseq.frameCount != request.expectedFrameCount) {
+            result.warnings.push_back("FSEQ frame count does not match the expected frame count.");
+        }
+        if (request.expectedFrameMs > 0 && result.fseq.frameMs != request.expectedFrameMs) {
+            result.warnings.push_back("FSEQ frame timing does not match the expected frame timing.");
+        }
+        if (result.layer.xldManifest.has_value()) {
+            for (const auto& warning : result.layer.xldManifest->warnings) {
+                result.warnings.push_back(warning);
+            }
+        }
+        result.ok = true;
+        return result;
+    }
+
     [[nodiscard]] api::models::MediaSummary readCurrentMedia() const {
         api::models::MediaSummary summary;
         if (_frame == nullptr) {
@@ -1231,6 +1634,113 @@ public:
         return summary;
     }
 
+    [[nodiscard]] api::models::MediaPathAccessValidationResult validateMediaPathAccess(const api::models::MediaPathAccessValidationRequest& request) const {
+        api::models::MediaPathAccessValidationResult result;
+        for (const auto& requested : request.checks) {
+            api::models::MediaPathAccessCheckResult check;
+            check.kind = requested.kind;
+            check.path = requested.path;
+            check.trustedRoot = detail::IsOwnedTrustedRootPath(requested.path);
+
+            std::error_code ec;
+            const auto resolvedPath = detail::ResolveOwnedAccessTarget(requested.path);
+            check.exists = !resolvedPath.empty() && std::filesystem::exists(resolvedPath, ec);
+            if (_frame != nullptr && !_frame->CurrentDir.empty() && !resolvedPath.empty()) {
+                const auto showRoot = detail::ResolveOwnedAccessTarget(_frame->CurrentDir.ToStdString());
+                check.withinCurrentShowDirectory = !showRoot.empty() && detail::IsPathWithinRoot(resolvedPath, showRoot);
+            }
+
+            if (requested.path.empty()) {
+                check.errorCode = "VALIDATION_ERROR";
+                check.errorMessage = "Path is required.";
+            } else if (requested.mustExist && !check.exists) {
+                check.errorCode = "PATH_NOT_FOUND";
+                check.errorMessage = "Path does not exist.";
+            }
+
+            if (check.exists) {
+                if (std::filesystem::is_directory(resolvedPath, ec)) {
+                    check.readable = std::filesystem::exists(resolvedPath, ec);
+                } else {
+                    std::ifstream input(resolvedPath, std::ios::binary);
+                    check.readable = input.good();
+                }
+            }
+
+            if (check.exists) {
+                const auto probeDir = std::filesystem::is_directory(resolvedPath, ec) ? resolvedPath : resolvedPath.parent_path();
+                if (!probeDir.empty() && std::filesystem::exists(probeDir, ec)) {
+                    const auto probe = probeDir / ".xld-media-access-test";
+                    std::ofstream output(probe.string(), std::ios::out | std::ios::trunc);
+                    check.writable = output.is_open();
+                    if (output.is_open()) {
+                        output.close();
+                        std::filesystem::remove(probe, ec);
+                    }
+                }
+            }
+
+            if (!check.trustedRoot) {
+                check.warnings.push_back("Path is not inside an xLightsDesigner trusted development root.");
+            } else {
+                check.warnings.push_back("Trusted development root status does not guarantee xLights can read the file; readable/writable checks report actual access.");
+            }
+
+            if (!check.errorCode.has_value() && requested.requireReadable && !check.readable) {
+                check.errorCode = "PATH_NOT_READABLE";
+                check.errorMessage = "Path exists but could not be read.";
+            }
+            if (!check.errorCode.has_value() && requested.requireWritable && !check.writable) {
+                check.errorCode = "PATH_NOT_WRITABLE";
+                check.errorMessage = "Path exists but could not be written.";
+            }
+
+            check.accessible = !check.errorCode.has_value() &&
+                (!requested.mustExist || check.exists) &&
+                (!requested.requireReadable || check.readable) &&
+                (!requested.requireWritable || check.writable);
+            if (!check.accessible) {
+                result.ok = false;
+            }
+            result.checks.push_back(std::move(check));
+        }
+        return result;
+    }
+
+    [[nodiscard]] api::models::MediaAudioCapabilitiesSummary readAudioCapabilities() const {
+        api::models::MediaAudioCapabilitiesSummary summary;
+        if (_frame == nullptr) {
+            summary.warnings.push_back("xLights frame is not available.");
+            return summary;
+        }
+
+        if (_frame->CurrentSeqXmlFile != nullptr) {
+            summary.sequenceOpen = true;
+            const auto mediaFile = _frame->CurrentSeqXmlFile->GetMediaFile();
+            if (!mediaFile.empty()) {
+                wxFileName mediaName(mediaFile);
+                if (!mediaName.IsAbsolute() && !_frame->CurrentDir.empty()) {
+                    mediaName.MakeAbsolute(_frame->CurrentDir);
+                }
+                summary.mediaFile = mediaName.GetFullPath().ToStdString();
+                summary.mediaAvailable = mediaName.FileExists();
+                if (!summary.mediaAvailable) {
+                    summary.warnings.push_back("The current sequence references media that xLights could not find.");
+                }
+            } else {
+                summary.warnings.push_back("The current sequence does not reference a media file.");
+            }
+        } else {
+            summary.warnings.push_back("No sequence is open.");
+        }
+
+        summary.capabilities.push_back({"mediaReference", summary.mediaAvailable, "xLights", summary.mediaAvailable ? "Current sequence media file is available." : "Current sequence media file is not available."});
+        summary.capabilities.push_back({"waveform", false, "xLights", "Owned API waveform extraction is not implemented in this contract slice."});
+        summary.capabilities.push_back({"timingTracks", true, "xLights", "Timing tracks are exposed through the timing API."});
+        summary.capabilities.push_back({"audioAnalysisHandoff", false, "xLightsDesigner", "Audio analysis handoff execution remains app-side work and is intentionally deferred."});
+        return summary;
+    }
+
     [[nodiscard]] api::models::MediaShowDirectoryResult setShowDirectory(const api::models::MediaShowDirectoryRequest& request) const {
         api::models::MediaShowDirectoryResult result;
         result.showDirectory = request.showDirectory;
@@ -1245,6 +1755,15 @@ public:
         if (!wxFileName::DirExists(targetShowDir)) {
             result.errorCode = "SHOW_DIRECTORY_NOT_FOUND";
             result.errorMessage = "Show directory does not exist.";
+            return result;
+        }
+
+        std::error_code effectsPathError;
+        const auto rgbEffectsPath = std::filesystem::path(request.showDirectory) / XLIGHTS_RGBEFFECTS_FILE;
+        if (std::filesystem::exists(rgbEffectsPath, effectsPathError) &&
+            !detail::IsExistingFileReadableByDesignerApi(rgbEffectsPath)) {
+            result.errorCode = "SHOW_DIRECTORY_LAYOUT_UNREADABLE";
+            result.errorMessage = "The show directory layout file exists but xLightsDesigner could not read it.";
             return result;
         }
 
@@ -1266,10 +1785,17 @@ public:
             return result;
         }
 
-        if (!detail::ObtainOwnedApiAccessToPath(request.showDirectory, true)) {
+        const bool accessOk = detail::ObtainOwnedApiAccessToPath(request.showDirectory, true);
+        const bool trustedNoninteractiveShowDir =
+            xLightsDesigner::IsNonInteractiveLaunch() && detail::IsOwnedTrustedRootPath(request.showDirectory);
+        if (!accessOk && !trustedNoninteractiveShowDir) {
             result.errorCode = "SHOW_DIRECTORY_ACCESS_DENIED";
             result.errorMessage = "Unable to obtain write access to the requested show directory.";
             return result;
+        }
+        if (!accessOk && trustedNoninteractiveShowDir) {
+            xLightsDesigner::AppendDesignerDiagnostic(std::string("setShowDirectory using noninteractive trusted root without write probe showDirectory=") +
+                                                      request.showDirectory);
         }
 
         auto switchOnMainThread = [this, request, targetShowDir]() {
@@ -1578,6 +2104,73 @@ public:
             summary.nodes.push_back(std::move(row));
         }
 
+        return summary;
+    }
+
+    [[nodiscard]] api::models::LayoutChannelMapSummary readLayoutChannelMap() const {
+        api::models::LayoutChannelMapSummary summary;
+        summary.mappingEvidence = "xlights-calculated-node-act-channel";
+        if (_frame == nullptr) {
+            summary.warnings.push_back("xLights frame is unavailable.");
+            return summary;
+        }
+
+        std::ostringstream fingerprint;
+        fingerprint << "models=" << _frame->AllModels.size() << ";change=" << _frame->modelsChangeCount << ";";
+        int maxChannel = 0;
+        bool hasWarnings = false;
+        for (auto it = _frame->AllModels.begin(); it != _frame->AllModels.end(); ++it) {
+            auto* model = it->second;
+            if (model == nullptr) {
+                continue;
+            }
+
+            api::models::LayoutChannelMapTarget target;
+            target.targetName = model->GetName();
+            target.displayAs = DisplayAsTypeToString(model->GetDisplayAs());
+            target.startChannel = static_cast<int>(model->GetFirstChannel()) + 1;
+            target.endChannel = static_cast<int>(model->GetLastChannel()) + 1;
+            target.nodeCount = static_cast<int>(model->GetNodeCount());
+            target.usableForFseq = model->GetDisplayAs() != DisplayAsType::ModelGroup && target.nodeCount > 0;
+            fingerprint << target.targetName << ":" << target.startChannel << "-" << target.endChannel << ":" << target.nodeCount << ";";
+
+            if (model->GetDisplayAs() == DisplayAsType::ModelGroup) {
+                target.warnings.push_back("Model groups do not expose direct node channel mapping; use member model mappings.");
+                hasWarnings = true;
+            }
+
+            target.nodes.reserve(std::max(0, target.nodeCount));
+            for (uint32_t nodeIndex = 0; nodeIndex < model->GetNodeCount(); ++nodeIndex) {
+                auto* node = model->GetNode(nodeIndex);
+                if (node == nullptr) {
+                    continue;
+                }
+                const int channelCount = static_cast<int>(node->GetChanCount());
+                api::models::LayoutChannelMapNode row;
+                row.nodeId = static_cast<int>(nodeIndex + 1);
+                row.nodeIndex = static_cast<int>(nodeIndex);
+                row.stringIndex = static_cast<int>(node->StringNum);
+                row.name = model->GetNodeName(nodeIndex, true);
+                row.channelStartZeroBased = static_cast<int>(node->ActChan);
+                row.channelStart = row.channelStartZeroBased + 1;
+                row.channelCount = channelCount;
+                row.evidence = "NodeBaseClass.ActChan/GetChanCount";
+                if (channelCount <= 0) {
+                    target.warnings.push_back("A node has no channel count.");
+                    hasWarnings = true;
+                }
+                maxChannel = std::max(maxChannel, row.channelStartZeroBased + channelCount);
+                target.nodes.push_back(std::move(row));
+            }
+            summary.targets.push_back(std::move(target));
+        }
+        summary.maxChannelCount = maxChannel;
+        summary.usableForFseq = maxChannel > 0 && !summary.targets.empty();
+        if (hasWarnings) {
+            summary.warnings.push_back("Some display elements require group-member expansion or have incomplete node channel evidence.");
+        }
+        summary.fingerprint = std::to_string(std::hash<std::string>{}(fingerprint.str()));
+        summary.snapshotId = "xlights-channel-map-" + summary.fingerprint;
         return summary;
     }
 
@@ -2597,6 +3190,7 @@ public:
         }
 
         summary.trackFound = true;
+        summary.revisionToken = detail::BuildTimingTrackRevisionToken(track);
         for (size_t layerIndex = 0; layerIndex < track->GetEffectLayerCount(); ++layerIndex) {
             EffectLayer* layer = track->GetEffectLayer(static_cast<int>(layerIndex));
             if (layer == nullptr) {
@@ -2692,13 +3286,18 @@ public:
                 continue;
             }
             int markCount = 0;
-            if (auto* layer0 = track->GetEffectLayer(0); layer0 != nullptr) {
-                markCount = layer0->GetEffectCount();
+            const int layerCount = static_cast<int>(track->GetEffectLayerCount());
+            for (int layerIndex = 0; layerIndex < layerCount; ++layerIndex) {
+                if (auto* layer = track->GetEffectLayer(layerIndex); layer != nullptr) {
+                    markCount += layer->GetEffectCount();
+                }
             }
             summary.tracks.push_back({
                 track->GetName(),
                 track->IsFixedTiming() ? "fixed" : "variable",
-                markCount
+                markCount,
+                layerCount,
+                detail::BuildTimingTrackRevisionToken(track)
             });
         }
         return summary;
@@ -2716,6 +3315,304 @@ private:
         summary.isGroup = model->GetDisplayAs() == DisplayAsType::ModelGroup;
         summary.isSubmodel = model->GetDisplayAs() == DisplayAsType::SubModel;
         summary.active = model->IsActive();
+        return summary;
+    }
+
+    [[nodiscard]] static bool isNutcrackerName(const std::string& name) {
+        return detail::ToLowerCopy(name) == "nutcracker";
+    }
+
+    [[nodiscard]] static bool isXldLayerNameOrPath(const std::string& name, const std::string& path) {
+        const auto lowerName = detail::ToLowerCopy(name);
+        const auto lowerPath = detail::ToLowerCopy(path);
+        return lowerName.rfind("xld", 0) == 0 || lowerPath.find(".xld.") != std::string::npos;
+    }
+
+    [[nodiscard]] static int findNutcrackerIndex(DataLayerSet& layers) {
+        for (int index = 0; index < layers.GetNumLayers(); ++index) {
+            if (auto* layer = layers.GetDataLayer(static_cast<size_t>(index)); layer != nullptr && isNutcrackerName(layer->GetName())) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    [[nodiscard]] static int findDataLayerIndex(DataLayerSet& layers, const std::string& name) {
+        if (name.empty()) {
+            return -1;
+        }
+        for (int index = 0; index < layers.GetNumLayers(); ++index) {
+            if (auto* layer = layers.GetDataLayer(static_cast<size_t>(index)); layer != nullptr && layer->GetName() == name) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    [[nodiscard]] static int resolveDataLayerIndex(DataLayerSet& layers, const std::string& name, int requestedIndex) {
+        if (!name.empty()) {
+            return findDataLayerIndex(layers, name);
+        }
+        return requestedIndex >= 0 && requestedIndex < layers.GetNumLayers() ? requestedIndex : -1;
+    }
+
+    static void moveDataLayerToIndex(DataLayerSet& layers, int fromIndex, int targetIndex) {
+        if (fromIndex < 0 || fromIndex >= layers.GetNumLayers()) {
+            return;
+        }
+        targetIndex = std::max(0, std::min(targetIndex, layers.GetNumLayers() - 1));
+        while (fromIndex > targetIndex) {
+            layers.MoveLayerUp(fromIndex);
+            --fromIndex;
+        }
+        while (fromIndex < targetIndex) {
+            layers.MoveLayerDown(fromIndex);
+            ++fromIndex;
+        }
+    }
+
+    static void moveDataLayerForPlacement(DataLayerSet& layers, int layerIndex, const std::string& placement) {
+        const auto normalized = detail::ToLowerCopy(placement);
+        if (normalized.empty()) {
+            return;
+        }
+        const int nutcrackerIndex = findNutcrackerIndex(layers);
+        if (nutcrackerIndex < 0) {
+            return;
+        }
+        if (normalized == "above-nutcracker" || normalized == "above" || normalized == "overlay") {
+            moveDataLayerToIndex(layers, layerIndex, std::max(0, nutcrackerIndex));
+        } else if (normalized == "below-nutcracker" || normalized == "below" || normalized == "base") {
+            moveDataLayerToIndex(layers, layerIndex, std::min(layers.GetNumLayers() - 1, nutcrackerIndex + 1));
+        }
+    }
+
+    [[nodiscard]] static std::string dataLayerPathMode(const std::string& path) {
+        if (path.empty() || path[0] == '<') {
+            return "internal";
+        }
+        wxFileName fileName(wxString::FromUTF8(path));
+        return fileName.IsAbsolute() ? "absolute" : "relative";
+    }
+
+    [[nodiscard]] static std::string readManifestString(const nlohmann::json& manifest, const char* key) {
+        if (!manifest.contains(key)) {
+            return std::string();
+        }
+        const auto& value = manifest.at(key);
+        return value.is_string() ? value.get<std::string>() : std::string();
+    }
+
+    [[nodiscard]] static int readManifestInt(const nlohmann::json& manifest, const char* key) {
+        if (!manifest.contains(key)) {
+            return 0;
+        }
+        const auto& value = manifest.at(key);
+        if (value.is_number_integer()) {
+            return value.get<int>();
+        }
+        if (value.is_number()) {
+            return static_cast<int>(value.get<double>());
+        }
+        return 0;
+    }
+
+    [[nodiscard]] static long long readManifestInt64(const nlohmann::json& manifest, const char* key) {
+        if (!manifest.contains(key)) {
+            return 0;
+        }
+        const auto& value = manifest.at(key);
+        if (value.is_number_integer()) {
+            return value.get<long long>();
+        }
+        if (value.is_number()) {
+            return static_cast<long long>(value.get<double>());
+        }
+        return 0;
+    }
+
+    [[nodiscard]] static std::string expectedXldManifestPathForFseq(const std::string& fseqPath) {
+        if (fseqPath.empty() || fseqPath[0] == '<') {
+            return std::string();
+        }
+        wxFileName manifest(wxString::FromUTF8(fseqPath));
+        if (manifest.GetFullName().empty()) {
+            return std::string();
+        }
+        manifest.SetExt("manifest.json");
+        return manifest.GetFullPath().ToStdString();
+    }
+
+    static void addXldManifestIssue(
+        api::models::XldManifestValidationSummary& manifest,
+        const std::string& issueCode,
+        const std::string& warning,
+        bool blocksFinalOutput
+    ) {
+        manifest.issueCodes.push_back(issueCode);
+        manifest.warnings.push_back(warning);
+        if (blocksFinalOutput) {
+            manifest.status = "blocked";
+        } else if (manifest.status != "blocked") {
+            manifest.status = "warning";
+        }
+    }
+
+    [[nodiscard]] static std::string normalizedPathForComparison(const std::string& path) {
+        if (path.empty()) {
+            return std::string();
+        }
+        wxFileName fileName(wxString::FromUTF8(path));
+        fileName.Normalize(wxPATH_NORM_DOTS | wxPATH_NORM_ABSOLUTE | wxPATH_NORM_TILDE);
+        return fileName.GetFullPath().ToStdString();
+    }
+
+    [[nodiscard]] static api::models::XldManifestValidationSummary validateXldManifestForLayer(
+        const api::models::DataLayerSummary& layer,
+        const std::string& currentChannelMapFingerprint,
+        const std::string& currentSequencePath
+    ) {
+        api::models::XldManifestValidationSummary result;
+        result.expected = true;
+        result.path = expectedXldManifestPathForFseq(layer.dataSource);
+        if (result.path.empty()) {
+            result.status = "blocked";
+            addXldManifestIssue(result, "xld_manifest_path_unresolved", "The XLD manifest path could not be resolved for this DataLayer.", true);
+            return result;
+        }
+
+        wxFileName manifestFile(wxString::FromUTF8(result.path));
+        result.exists = manifestFile.FileExists();
+        if (!result.exists) {
+            result.status = "blocked";
+            addXldManifestIssue(result, "xld_manifest_missing", "The XLD manifest is missing for this generated DataLayer.", true);
+            return result;
+        }
+
+        std::ifstream input(result.path);
+        if (!input.good()) {
+            result.status = "blocked";
+            addXldManifestIssue(result, "xld_manifest_unreadable", "The XLD manifest exists but could not be read.", true);
+            return result;
+        }
+
+        nlohmann::json manifest = nlohmann::json::parse(input, nullptr, false);
+        result.readable = !manifest.is_discarded() && manifest.is_object();
+        if (!result.readable) {
+            result.status = "blocked";
+            addXldManifestIssue(result, "xld_manifest_invalid_json", "The XLD manifest is not valid JSON.", true);
+            return result;
+        }
+
+        result.status = "safe";
+        result.artifactType = readManifestString(manifest, "artifactType");
+        result.artifactVersion = readManifestInt(manifest, "artifactVersion");
+        result.appId = readManifestString(manifest, "appId");
+        result.targetSequencePath = readManifestString(manifest, "targetSequencePath");
+        result.generatedFseqPath = readManifestString(manifest, "generatedFseqPath");
+        result.generatedFseqBasename = readManifestString(manifest, "generatedFseqBasename");
+        result.generatedFseqSizeBytes = readManifestInt64(manifest, "generatedFseqSizeBytes");
+        result.displaySnapshotId = readManifestString(manifest, "displaySnapshotId");
+        result.channelMapSnapshotId = readManifestString(manifest, "channelMapSnapshotId");
+        result.channelMapFingerprint = readManifestString(manifest, "channelMapFingerprint");
+        result.outputConfigurationFingerprint = readManifestString(manifest, "outputConfigurationFingerprint");
+        result.frameMs = readManifestInt(manifest, "frameTimeMs");
+        result.frameCount = readManifestInt(manifest, "frameCount");
+        result.channelCount = readManifestInt(manifest, "channelCount");
+        result.dataLayerName = readManifestString(manifest, "dataLayerName");
+        result.generatedAt = readManifestString(manifest, "generatedAt");
+
+        if (result.appId != "XLD" || result.artifactType != "xld_fseq_manifest_v1") {
+            addXldManifestIssue(result, "xld_manifest_invalid", "The XLD manifest is not a valid XLD AI layer manifest.", true);
+        }
+        if (!result.generatedFseqBasename.empty()) {
+            wxFileName layerFile(wxString::FromUTF8(layer.dataSource));
+            if (layerFile.GetFullName().ToStdString() != result.generatedFseqBasename) {
+                addXldManifestIssue(result, "xld_manifest_fseq_path_mismatch", "The XLD manifest references a different generated FSEQ file.", true);
+            }
+        }
+        if (!result.generatedFseqPath.empty()) {
+            const auto expectedPath = normalizedPathForComparison(layer.dataSource);
+            const auto manifestPath = normalizedPathForComparison(result.generatedFseqPath);
+            if (!expectedPath.empty() && !manifestPath.empty() && expectedPath != manifestPath) {
+                addXldManifestIssue(result, "xld_manifest_fseq_path_mismatch", "The XLD manifest generated FSEQ path does not match the DataLayer path.", true);
+            }
+        }
+        if (!result.targetSequencePath.empty()) {
+            const auto expectedPath = normalizedPathForComparison(currentSequencePath);
+            const auto manifestPath = normalizedPathForComparison(result.targetSequencePath);
+            if (!expectedPath.empty() && !manifestPath.empty() && expectedPath != manifestPath) {
+                addXldManifestIssue(result, "xld_manifest_sequence_mismatch", "The XLD manifest was generated for a different xLights sequence.", true);
+            }
+        }
+        if (result.generatedFseqSizeBytes > 0 && !layer.dataSource.empty()) {
+            std::error_code error;
+            const auto actualSize = std::filesystem::file_size(std::filesystem::path(layer.dataSource), error);
+            if (!error && static_cast<long long>(actualSize) != result.generatedFseqSizeBytes) {
+                addXldManifestIssue(result, "xld_manifest_fseq_size_mismatch", "The generated XLD FSEQ file size does not match the manifest.", true);
+            }
+        }
+        if (layer.fseq.has_value() && layer.fseq->readable) {
+            if (result.channelCount > 0 && layer.fseq->channelCount != result.channelCount) {
+                addXldManifestIssue(result, "xld_manifest_fseq_header_mismatch", "The generated XLD FSEQ channel count does not match the manifest.", true);
+            }
+            if (result.frameCount > 0 && layer.fseq->frameCount != result.frameCount) {
+                addXldManifestIssue(result, "xld_manifest_fseq_header_mismatch", "The generated XLD FSEQ frame count does not match the manifest.", true);
+            }
+            if (result.frameMs > 0 && layer.fseq->frameMs != result.frameMs) {
+                addXldManifestIssue(result, "xld_manifest_fseq_header_mismatch", "The generated XLD FSEQ frame timing does not match the manifest.", true);
+            }
+        }
+        if (result.channelMapFingerprint.empty()) {
+            addXldManifestIssue(result, "xld_manifest_channel_map_missing", "The XLD manifest does not include channel-map fingerprint evidence.", true);
+        } else if (currentChannelMapFingerprint.empty()) {
+            addXldManifestIssue(result, "xld_manifest_channel_map_unverified", "The current xLights channel-map fingerprint could not be verified.", false);
+        } else if (result.channelMapFingerprint != currentChannelMapFingerprint) {
+            addXldManifestIssue(result, "xld_manifest_stale_channel_map", "The XLD manifest channel-map fingerprint does not match the current xLights layout.", true);
+        }
+        if (result.displaySnapshotId.empty()) {
+            addXldManifestIssue(result, "xld_manifest_display_snapshot_missing", "The XLD manifest does not identify the display snapshot used for generation.", false);
+        }
+
+        return result;
+    }
+
+    [[nodiscard]] static api::models::DataLayerSummary makeDataLayerSummary(
+        const DataLayer& layer,
+        int index,
+        int nutcrackerIndex,
+        const std::string& currentChannelMapFingerprint,
+        const std::string& currentSequencePath
+    ) {
+        api::models::DataLayerSummary summary;
+        summary.index = index;
+        summary.name = layer.GetName();
+        summary.source = layer.GetSource();
+        summary.dataSource = layer.GetDataSource();
+        summary.isNutcracker = isNutcrackerName(summary.name);
+        summary.isXldLayer = isXldLayerNameOrPath(summary.name, summary.dataSource);
+        summary.numChannels = layer.GetNumChannels();
+        summary.numFrames = layer.GetNumFrames();
+        summary.channelOffset = layer.GetChannelOffset();
+        summary.lorConvertParams = layer.GetLORConvertParams();
+        summary.pathMode = dataLayerPathMode(summary.dataSource);
+        summary.pathExists = !summary.dataSource.empty() && summary.dataSource[0] != '<' && wxFileExists(wxString::FromUTF8(summary.dataSource));
+        summary.participatesInFinalRender = true;
+        if (summary.isNutcracker) {
+            summary.placement = "nutcracker";
+        } else if (nutcrackerIndex < 0) {
+            summary.placement = "unknown";
+        } else if (index < nutcrackerIndex) {
+            summary.placement = "above-nutcracker";
+        } else {
+            summary.placement = "below-nutcracker";
+        }
+        if (summary.pathExists) {
+            summary.fseq = detail::ReadDesignerFseqSummary(summary.dataSource);
+        }
+        if (summary.isXldLayer) {
+            summary.xldManifest = validateXldManifestForLayer(summary, currentChannelMapFingerprint, currentSequencePath);
+        }
         return summary;
     }
 

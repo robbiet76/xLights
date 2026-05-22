@@ -273,6 +273,48 @@ public:
         return response;
     }
 
+    [[nodiscard]] transport::ApiResponse handleGetChannelMap(const transport::ApiRequest& request) const {
+        transport::ApiResponse response;
+        response.command = request.command;
+        response.requestId = request.requestId;
+
+        const auto summary = _service.getChannelMap();
+        response.data["snapshotId"] = summary.snapshotId;
+        response.data["fingerprint"] = summary.fingerprint;
+        response.data["mappingEvidence"] = summary.mappingEvidence;
+        response.data["maxChannelCount"] = summary.maxChannelCount;
+        response.data["usableForFseq"] = summary.usableForFseq;
+        response.data["warnings"] = summary.warnings;
+        response.data["targets"] = nlohmann::json::array();
+        for (const auto& target : summary.targets) {
+            nlohmann::json targetJson{
+                {"targetName", target.targetName},
+                {"targetKind", target.targetKind},
+                {"displayAs", target.displayAs},
+                {"startChannel", target.startChannel},
+                {"endChannel", target.endChannel},
+                {"nodeCount", target.nodeCount},
+                {"usableForFseq", target.usableForFseq},
+                {"warnings", target.warnings},
+                {"nodes", nlohmann::json::array()}
+            };
+            for (const auto& node : target.nodes) {
+                targetJson["nodes"].push_back({
+                    {"nodeId", node.nodeId},
+                    {"nodeIndex", node.nodeIndex},
+                    {"stringIndex", node.stringIndex},
+                    {"name", node.name},
+                    {"channelStart", node.channelStart},
+                    {"channelStartZeroBased", node.channelStartZeroBased},
+                    {"channelCount", node.channelCount},
+                    {"evidence", node.evidence}
+                });
+            }
+            response.data["targets"].push_back(std::move(targetJson));
+        }
+        return response;
+    }
+
     [[nodiscard]] transport::ApiResponse handleGetGroupMembers(const transport::ApiRequest& request) const {
         transport::ApiResponse response;
         response.command = request.command;

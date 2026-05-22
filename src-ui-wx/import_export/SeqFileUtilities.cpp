@@ -56,6 +56,7 @@
 #include "models/DMX/DmxModel.h"
 #include "models/ModelGroup.h"
 #include "sequencer/MainSequencer.h"
+#include "xLightsDesigner/DesignerLaunchPolicy.h"
 
 #include "render/SequencePackage.h"
 #include "import_export/Vixen3.h"
@@ -1203,7 +1204,9 @@ bool xLightsFrame::CloseSequence()
     }
 
     _sequenceElements.Clear();
-    ResetAllPanelDefaultSettings();
+    if (!xLightsDesigner::IsNonInteractiveLaunch()) {
+        ResetAllPanelDefaultSettings();
+    }
     mSavedChangeCount = _sequenceElements.GetChangeCount();
     mLastAutosaveCount = mSavedChangeCount;
 
@@ -1327,4 +1330,3 @@ void xLightsFrame::SetSequenceEnd(int ms)
     _sequenceElements.SetSequenceEnd(CurrentSeqXmlFile->GetSequenceDurationMS());
     _housePreviewPanel->SetDurationFrames(CurrentSeqXmlFile->GetSequenceDurationMS() / CurrentSeqXmlFile->GetFrameMS());
 }
-

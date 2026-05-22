@@ -9,6 +9,7 @@
  **************************************************************/
 
 #include <atomic>
+#include <algorithm>
 #include <filesystem>
 #include <map>
 #include <system_error>
@@ -1307,6 +1308,7 @@ void xLightsFrame::SelectedEffectChanged(SelectedEffectChangedEvent& event)
         if (effect == nullptr)
         {
             spdlog::error("SelectedEffectChanged ... effect no longer exists {} {} {}ms", event._elementName, event._layer, event._startTime);
+            return;
         }
         else
         {
@@ -3218,6 +3220,13 @@ void xLightsFrame::DoLoadPerspective(Perspective* perspective)
     
     if (perspective == nullptr) {
         spdlog::warn("xLightsFrame::LoadPerspective Null perspective.");
+        return;
+    }
+    const bool perspectiveOwned = std::any_of(_perspectives.begin(), _perspectives.end(), [perspective](const Perspective& known) {
+        return &known == perspective;
+    });
+    if (!perspectiveOwned) {
+        spdlog::warn("xLightsFrame::LoadPerspective ignored stale perspective pointer.");
         return;
     }
 

@@ -61,6 +61,10 @@ inline DesignerApiSelfTestResult RunDesignerApiSelfTests() {
               "EndpointRouter should map media show-directory mutation endpoint.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/media/request-show-directory-access") == std::optional<std::string>("media.requestShowDirectoryAccess"),
               "EndpointRouter should map media show-directory access request endpoint.", result);
+        Check(router.resolve("POST", "/xlightsdesigner/api/media/paths/validate-access") == std::optional<std::string>("media.validatePathAccess"),
+              "EndpointRouter should map media path access validation endpoint.", result);
+        Check(router.resolve("GET", "/xlightsdesigner/api/media/audio/capabilities") == std::optional<std::string>("media.audio.getCapabilities"),
+              "EndpointRouter should map media audio capabilities endpoint.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/layout/models/custom") == std::optional<std::string>("layout.createCustomModel"),
               "EndpointRouter should map custom model creation endpoint.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/sequence/settings") == std::optional<std::string>("sequence.setSettings"),
@@ -69,6 +73,14 @@ inline DesignerApiSelfTestResult RunDesignerApiSelfTests() {
               "EndpointRouter should map timing add-marks endpoint.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/sequence/render-samples") == std::optional<std::string>("sequence.getRenderSamples"),
               "EndpointRouter should map render samples endpoint.", result);
+        Check(router.resolve("GET", "/xlightsdesigner/api/capabilities") == std::optional<std::string>("runtime.getCapabilities"),
+              "EndpointRouter should map capability discovery endpoint.", result);
+        Check(router.resolve("GET", "/xlightsdesigner/api/layout/channel-map") == std::optional<std::string>("layout.getChannelMap"),
+              "EndpointRouter should map layout channel map endpoint.", result);
+        Check(router.resolve("GET", "/xlightsdesigner/api/sequence/data-layers") == std::optional<std::string>("sequence.dataLayers.list"),
+              "EndpointRouter should map DataLayer list endpoint.", result);
+        Check(router.resolve("POST", "/xlightsdesigner/api/sequence/data-layers/upsert") == std::optional<std::string>("sequence.dataLayers.upsert"),
+              "EndpointRouter should map DataLayer upsert endpoint.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/sequence/export-preview-video") == std::optional<std::string>("sequence.exportPreviewVideo"),
               "EndpointRouter should map preview video export endpoint.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/sequencing/apply-window-plan") == std::optional<std::string>("sequencing.applyWindowPlan"),
@@ -117,6 +129,7 @@ inline DesignerApiSelfTestResult RunDesignerApiSelfTests() {
             []() { return api::models::LayoutModelsSummary{}; },
             []() { return api::models::LayoutSubmodelsSummary{}; },
             [](const api::models::LayoutModelNodesRequest&) { return api::models::LayoutModelNodesSummary{}; },
+            []() { return api::models::LayoutChannelMapSummary{}; },
             []() { return api::models::LayoutSettingsSummary{}; },
             []() { return api::models::LayoutGroupMembershipsSummary{}; },
             [&capturedRequest](const api::models::CreateCustomModelRequest& request) {

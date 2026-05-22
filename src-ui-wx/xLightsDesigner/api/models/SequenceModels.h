@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "DataLayerModels.h"
+
 namespace xLightsDesigner::api::models {
 
 struct SequenceSummary {
@@ -81,6 +83,13 @@ struct SequenceSaveResult {
 
 struct SequenceCloseResult {
     bool closed = false;
+    std::optional<std::string> errorCode;
+    std::optional<std::string> errorMessage;
+    SequenceSummary sequence;
+};
+
+struct SequenceFocusResult {
+    bool focused = false;
     std::optional<std::string> errorCode;
     std::optional<std::string> errorMessage;
     SequenceSummary sequence;
@@ -181,6 +190,27 @@ struct SequenceRenderSamplesResult {
     std::string sampleEncoding = "base64_packed_channel_ranges_v1";
     std::vector<SequenceChannelRangeRequest> channelRanges;
     std::vector<SequenceRenderedFrameSample> samples;
+};
+
+struct SequenceFinalFseqState {
+    bool sequenceOpen = false;
+    std::string sequencePath;
+    std::string revisionToken;
+    std::string finalFseqPath;
+    bool exists = false;
+    bool readable = false;
+    std::string freshness = "unknown";
+    std::optional<FseqFileSummary> fseq;
+};
+
+struct SequenceSyncHealthSummary {
+    bool sequenceOpen = false;
+    std::string status = "unknown";
+    std::string sequencePath;
+    std::string revisionToken;
+    std::vector<std::string> warnings;
+    DataLayerListSummary dataLayers;
+    SequenceFinalFseqState finalFseq;
 };
 
 } // namespace xLightsDesigner::api::models

@@ -72,6 +72,75 @@ public:
         return BuildDesignerApiJobStatusResponse(request, *snapshot);
     }
 
+    [[nodiscard]] transport::ApiResponse handleGetCapabilities(const transport::ApiRequest& request) const {
+        transport::ApiResponse response;
+        response.command = request.command;
+        response.requestId = request.requestId;
+        response.data["apiVersion"] = "2026.08-xld-datalayer-v1";
+        response.data["architecture"] = "direct-channel-fseq-datalayer";
+        response.data["runtime"] = {
+            {"health", true},
+            {"modalState", true},
+            {"jobs", true},
+            {"capabilityDiscovery", true}
+        };
+        response.data["showFolder"] = {
+            {"get", true},
+            {"set", true},
+            {"pathAccessValidation", true},
+            {"xlightsReadableValidation", true}
+        };
+        response.data["media"] = {
+            {"current", true},
+            {"directories", true},
+            {"pathAccessValidation", true},
+            {"audioCapabilityDiscovery", true},
+            {"audioAnalysisExecution", false}
+        };
+        response.data["layout"] = {
+            {"models", true},
+            {"groups", true},
+            {"submodels", true},
+            {"modelNodes", true},
+            {"channelMap", true},
+            {"previewScene", true},
+            {"background", true},
+            {"settingsRevision", true}
+        };
+        response.data["sequence"] = {
+            {"open", true},
+            {"create", true},
+            {"save", true},
+            {"close", true},
+            {"focus", true},
+            {"state", true},
+            {"settings", true},
+            {"renderCurrent", true},
+            {"saveFinalFseq", true},
+            {"finalFseqState", true},
+            {"syncHealth", true}
+        };
+        response.data["timing"] = {
+            {"listTracks", true},
+            {"readMarks", true},
+            {"upsertAppOwnedTracks", true},
+            {"revisionSummary", true}
+        };
+        response.data["dataLayers"] = {
+            {"list", true},
+            {"upsert", true},
+            {"remove", true},
+            {"reorder", true},
+            {"validate", true},
+            {"relativePaths", "reported"}
+        };
+        response.data["nativeEffectControl"] = {
+            {"inScope", false},
+            {"reason", "xLightsDesigner uses generated FSEQ DataLayers and does not require native effect block authoring endpoints."}
+        };
+        return response;
+    }
+
     [[nodiscard]] transport::ApiResponse handleMetadataStatus(const transport::ApiRequest& request) const {
         transport::ApiResponse response;
         response.command = request.command;

@@ -28,7 +28,13 @@ public:
         }
         response.data["tracks"] = nlohmann::json::array();
         for (const auto& track : summary.tracks) {
-            response.data["tracks"].push_back({{"name", track.name}, {"type", track.type}, {"markCount", track.markCount}});
+            response.data["tracks"].push_back({
+                {"name", track.name},
+                {"type", track.type},
+                {"markCount", track.markCount},
+                {"layerCount", track.layerCount},
+                {"revisionToken", track.revisionToken}
+            });
         }
         return response;
     }
@@ -66,6 +72,7 @@ public:
             return response;
         }
         response.data["track"] = summary.trackName;
+        response.data["revisionToken"] = summary.revisionToken;
         response.data["marks"] = nlohmann::json::array();
         for (const auto& mark : summary.marks) {
             response.data["marks"].push_back({{"startMs", mark.startMs}, {"endMs", mark.endMs}, {"label", mark.label}, {"layerNumber", mark.layerNumber}});

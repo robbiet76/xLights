@@ -11,6 +11,7 @@ public:
     using ReadModelsFn = std::function<models::LayoutModelsSummary()>;
     using ReadSubmodelsFn = std::function<models::LayoutSubmodelsSummary()>;
     using ReadModelNodesFn = std::function<models::LayoutModelNodesSummary(const models::LayoutModelNodesRequest&)>;
+    using ReadChannelMapFn = std::function<models::LayoutChannelMapSummary()>;
     using ReadSettingsFn = std::function<models::LayoutSettingsSummary()>;
     using ReadGroupMembershipsFn = std::function<models::LayoutGroupMembershipsSummary()>;
     using CreateCustomModelFn = std::function<models::CreateCustomModelResult(const models::CreateCustomModelRequest&)>;
@@ -18,12 +19,14 @@ public:
     LayoutService(ReadModelsFn readModels,
                   ReadSubmodelsFn readSubmodels,
                   ReadModelNodesFn readModelNodes,
+                  ReadChannelMapFn readChannelMap,
                   ReadSettingsFn readSettings,
                   ReadGroupMembershipsFn readGroupMemberships,
                   CreateCustomModelFn createCustomModel)
         : _readModels(std::move(readModels)),
           _readSubmodels(std::move(readSubmodels)),
           _readModelNodes(std::move(readModelNodes)),
+          _readChannelMap(std::move(readChannelMap)),
           _readSettings(std::move(readSettings)),
           _readGroupMemberships(std::move(readGroupMemberships)),
           _createCustomModel(std::move(createCustomModel)) {}
@@ -44,6 +47,10 @@ public:
         return _readModelNodes ? _readModelNodes(request) : models::LayoutModelNodesSummary{};
     }
 
+    [[nodiscard]] models::LayoutChannelMapSummary getChannelMap() const {
+        return _readChannelMap ? _readChannelMap() : models::LayoutChannelMapSummary{};
+    }
+
     [[nodiscard]] models::LayoutSettingsSummary getSettings() const {
         return _readSettings ? _readSettings() : models::LayoutSettingsSummary{};
     }
@@ -56,6 +63,7 @@ private:
     ReadModelsFn _readModels;
     ReadSubmodelsFn _readSubmodels;
     ReadModelNodesFn _readModelNodes;
+    ReadChannelMapFn _readChannelMap;
     ReadSettingsFn _readSettings;
     ReadGroupMembershipsFn _readGroupMemberships;
     CreateCustomModelFn _createCustomModel;

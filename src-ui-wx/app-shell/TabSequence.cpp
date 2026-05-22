@@ -228,14 +228,23 @@ void xLightsFrame::LoadEffectsFile()
         }
         pugi::xml_parse_result result = effectsXml.load_file(effectsFile.GetFullPath().ToStdString().c_str());
         if (!result) {
-            DisplayError(wxString::Format("Unable to load RGB effects File ... Creating a Default One.\nError at offset: %td Error '%s'", result.offset, result.description()), this);
+            const auto message = wxString::Format("Unable to load RGB effects File ... Creating a Default One.\nError at offset: %td Error '%s'", result.offset, result.description());
+            if (xLightsDesigner::ShouldSuppressPrompt()) {
+                spdlog::error("Suppressing RGB effects load error during xLightsDesigner noninteractive launch: {}", message.ToStdString());
+            } else {
+                DisplayError(message, this);
+            }
             CreateDefaultEffectsXml(effectsXml);
         }
     }
 
     pugi::xml_node root = effectsXml.document_element();
     if (std::string_view(root.name()) != "xrgb") {
-        DisplayError("Invalid RGB effects file ... creating a default one.", this);
+        if (xLightsDesigner::ShouldSuppressPrompt()) {
+            spdlog::error("Suppressing invalid RGB effects file error during xLightsDesigner noninteractive launch.");
+        } else {
+            DisplayError("Invalid RGB effects file ... creating a default one.", this);
+        }
         CreateDefaultEffectsXml(effectsXml);
         root = effectsXml.document_element();
     }
