@@ -1,5 +1,7 @@
 #pragma once
 
+#include <utility>
+
 #include <nlohmann/json.hpp>
 
 #include "../../DesignerApiRuntime.h"
@@ -11,6 +13,8 @@
 
 namespace xLightsDesigner::api::handlers {
 
+// Element endpoints expose sequence row inventory and ordering. These APIs
+// support display organization without editing native xLights effect content.
 class ElementHandler {
 public:
     explicit ElementHandler(services::ElementService service)

@@ -6,6 +6,8 @@
 
 namespace xLightsDesigner::api::models {
 
+// DataLayer models describe generated XLD FSEQ files, their xLights layer
+// placement, and the manifest evidence needed to detect stale output.
 struct FseqFileSummary {
     bool exists = false;
     bool readable = false;

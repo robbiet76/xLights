@@ -9,6 +9,8 @@
 
 namespace xLightsDesigner {
 
+// Runtime smoke checks intentionally stay small: they verify that the active
+// xLights frame can answer the core read routes and one render-sample request.
 struct DesignerApiSmokeResult {
     int passed = 0;
     int failed = 0;

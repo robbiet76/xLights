@@ -1,11 +1,14 @@
 #pragma once
 
 #include <functional>
+#include <utility>
 
 #include "../models/ElementModels.h"
 
 namespace xLightsDesigner::api::services {
 
+// Element service facade for sequence rows and display ordering. This exposes
+// ordering state without opening native xLights effect-block mutation.
 class ElementService {
 public:
     using ReadElementsFn = std::function<models::ElementsSummary()>;

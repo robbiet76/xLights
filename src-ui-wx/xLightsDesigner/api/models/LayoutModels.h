@@ -6,6 +6,8 @@
 
 namespace xLightsDesigner::api::models {
 
+// Layout models describe the existing xLights display skeleton. This API is
+// read-only: callers use it to generate and map pixels/nodes, not to edit layout.
 struct LayoutModelSummary {
     std::string name;
     std::string displayAs;
@@ -122,40 +124,6 @@ struct LayoutChannelMapSummary {
     bool usableForFseq = false;
     std::vector<LayoutChannelMapTarget> targets;
     std::vector<std::string> warnings;
-};
-
-struct CustomModelNode {
-    int x = -1;
-    int y = -1;
-    int z = 0;
-    int node = -1;
-    int string = 1;
-};
-
-struct CreateCustomModelRequest {
-    std::string name;
-    std::string startChannel = "1";
-    std::string layoutGroup = "Default";
-    int width = 0;
-    int height = 0;
-    int depth = 1;
-    int stringCount = 1;
-    double positionX = 0.0;
-    double positionY = 0.0;
-    bool overwrite = false;
-    bool dryRun = false;
-    std::vector<CustomModelNode> nodes;
-};
-
-struct CreateCustomModelResult {
-    bool created = false;
-    bool updated = false;
-    std::string modelName;
-    std::string errorMessage;
-    int nodeCount = 0;
-    int width = 0;
-    int height = 0;
-    int depth = 0;
 };
 
 struct LayoutSettingsSummary {

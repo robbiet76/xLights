@@ -1,11 +1,14 @@
 #pragma once
 
 #include <functional>
+#include <utility>
 
 #include "../models/LayoutModels.h"
 
 namespace xLightsDesigner::api::services {
 
+// Read-only display/layout service. The designer uses this structure as the
+// physical guardrail for target-render generation and direct-channel output.
 class LayoutService {
 public:
     using ReadModelsFn = std::function<models::LayoutModelsSummary()>;
@@ -14,22 +17,18 @@ public:
     using ReadChannelMapFn = std::function<models::LayoutChannelMapSummary()>;
     using ReadSettingsFn = std::function<models::LayoutSettingsSummary()>;
     using ReadGroupMembershipsFn = std::function<models::LayoutGroupMembershipsSummary()>;
-    using CreateCustomModelFn = std::function<models::CreateCustomModelResult(const models::CreateCustomModelRequest&)>;
-
     LayoutService(ReadModelsFn readModels,
                   ReadSubmodelsFn readSubmodels,
                   ReadModelNodesFn readModelNodes,
                   ReadChannelMapFn readChannelMap,
                   ReadSettingsFn readSettings,
-                  ReadGroupMembershipsFn readGroupMemberships,
-                  CreateCustomModelFn createCustomModel)
+                  ReadGroupMembershipsFn readGroupMemberships)
         : _readModels(std::move(readModels)),
           _readSubmodels(std::move(readSubmodels)),
           _readModelNodes(std::move(readModelNodes)),
           _readChannelMap(std::move(readChannelMap)),
           _readSettings(std::move(readSettings)),
-          _readGroupMemberships(std::move(readGroupMemberships)),
-          _createCustomModel(std::move(createCustomModel)) {}
+          _readGroupMemberships(std::move(readGroupMemberships)) {}
 
     [[nodiscard]] models::LayoutModelsSummary getModels() const {
         return _readModels ? _readModels() : models::LayoutModelsSummary{};
@@ -55,10 +54,6 @@ public:
         return _readSettings ? _readSettings() : models::LayoutSettingsSummary{};
     }
 
-    [[nodiscard]] models::CreateCustomModelResult createCustomModel(const models::CreateCustomModelRequest& request) const {
-        return _createCustomModel ? _createCustomModel(request) : models::CreateCustomModelResult{};
-    }
-
 private:
     ReadModelsFn _readModels;
     ReadSubmodelsFn _readSubmodels;
@@ -66,7 +61,6 @@ private:
     ReadChannelMapFn _readChannelMap;
     ReadSettingsFn _readSettings;
     ReadGroupMembershipsFn _readGroupMemberships;
-    CreateCustomModelFn _createCustomModel;
 };
 
 } // namespace xLightsDesigner::api::services

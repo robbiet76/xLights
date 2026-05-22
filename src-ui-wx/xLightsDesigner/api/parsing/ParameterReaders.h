@@ -6,6 +6,8 @@
 
 namespace xLightsDesigner::api::parsing {
 
+// Shared primitive readers for flattened request params. Invalid values fall
+// back instead of throwing so handlers can decide whether validation is needed.
 inline std::string ReadString(const std::map<std::string, std::string>& params,
                               const std::string& key,
                               const std::string& fallback = {}) {

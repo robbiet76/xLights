@@ -1,11 +1,14 @@
 #pragma once
 
 #include <functional>
+#include <utility>
 
 #include "../models/MediaModels.h"
 
 namespace xLightsDesigner::api::services {
 
+// Media service facade for current audio/show-folder state and sandbox/path
+// access validation.
 class MediaService {
 public:
     using ReadCurrentMediaFn = std::function<models::MediaSummary()>;

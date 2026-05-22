@@ -10,6 +10,8 @@
 
 namespace xLightsDesigner::api::models {
 
+// Sequence models describe lifecycle, settings, render, preview, and final
+// output state without exposing xLights UI classes through the transport layer.
 struct SequenceSummary {
     bool isOpen = false;
     std::optional<std::string> path;

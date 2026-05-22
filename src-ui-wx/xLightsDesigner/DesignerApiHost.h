@@ -26,7 +26,6 @@
 #include "diagnostics/CheckSequenceReport.h"
 #include "diagnostics/SequenceChecker.h"
 #include "layout/ModelPreview.h"
-#include "models/CustomModel.h"
 #include "models/DisplayAsType.h"
 #include "models/ModelGroup.h"
 #include "models/OutputModelManager.h"
@@ -46,6 +45,8 @@
 namespace xLightsDesigner {
 
 namespace detail {
+// Low-level xLights adapters and conversion helpers. Public handlers should
+// stay in api/handlers; this namespace is only for host-facing implementation.
 inline std::string FormatDesignerApiDateTime(const wxDateTime& value) {
     if (!value.IsValid()) {
         return std::string();
@@ -478,8 +479,8 @@ inline OwnedSequenceOpenGuardState EnterOwnedSequenceOpenState(xLightsFrame* fra
     state.renderMode = frame->_renderMode;
     state.promptBatchRenderIssues = frame->_promptBatchRenderIssues;
 
-    // Owned API sequence automation should be prompt-free. Mirror the legacy
-    // automation path by suppressing batch-render prompts while the open runs.
+    // Owned API sequence automation should be prompt-free. Suppress
+    // batch-render prompts while the open runs.
     frame->_renderMode = true;
     frame->_promptBatchRenderIssues = false;
 
@@ -509,11 +510,15 @@ inline void ExitOwnedSequenceOpenState(xLightsFrame* frame, const OwnedSequenceO
 }
 }
 
+// DesignerApiHost is the only layer that directly touches xLightsFrame and
+// xLights model/sequence objects. It returns plain API models so the transport
+// and handler layers stay independent of xLights UI classes.
 class DesignerApiHost {
 public:
     explicit DesignerApiHost(xLightsFrame* frame)
         : _frame(frame) {}
 
+    // Sequence state and lifecycle.
     [[nodiscard]] api::models::SequenceSummary readOpenSequence() const {
         api::models::SequenceSummary summary;
         if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) {
@@ -622,6 +627,8 @@ public:
         });
     }
 
+    // Layout and preview settings are shared by layout endpoints and sequence
+    // sync checks, so they live before sequence mutation methods.
     [[nodiscard]] api::models::LayoutSettingsSummary readLayoutSettings() const {
         api::models::LayoutSettingsSummary settings;
         if (_frame == nullptr) {
@@ -694,7 +701,8 @@ public:
         return future.get();
     }
 
-
+    // Sequence open/create operations deliberately suppress interactive xLights
+    // prompts so noninteractive automation can prepare a sequence predictably.
     [[nodiscard]] api::models::SequenceOpenResult openSequence(const api::models::SequenceOpenRequest& request) const {
         api::models::SequenceOpenResult result;
         result.requestedPath = request.file;
@@ -944,6 +952,8 @@ public:
         });
     }
 
+    // Sequence persistence, rendering, and validation. These methods preserve
+    // xLights' normal file formats while giving XLD explicit status evidence.
     [[nodiscard]] api::models::SequenceSaveResult saveSequence() const {
         api::models::SequenceSaveResult result;
         if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) {
@@ -1198,6 +1208,8 @@ public:
         });
     }
 
+    // Render inspection endpoints expose final FSEQ evidence for app-side
+    // review, sync checks, and generated DataLayer validation.
     [[nodiscard]] api::models::SequenceRenderSamplesResult readRenderedSamples(const api::models::SequenceRenderSamplesRequest& request) const {
         api::models::SequenceRenderSamplesResult result;
         result.sequence = readOpenSequence();
@@ -1395,6 +1407,8 @@ public:
         return health;
     }
 
+    // DataLayer operations attach generated XLD FSEQ files to the sequence and
+    // validate manifest/layout alignment before final render.
     [[nodiscard]] api::models::DataLayerListSummary readDataLayers() const {
         api::models::DataLayerListSummary summary;
         const auto sequence = readOpenSequence();
@@ -1460,8 +1474,12 @@ public:
             layer->SetName(request.name);
             layer->SetSource(request.sourceFseqPath);
             layer->SetDataSource(request.dataSourcePath.empty() ? request.sourceFseqPath : request.dataSourcePath);
-            if (request.channelCount > 0) layer->SetNumChannels(request.channelCount);
-            if (request.frameCount > 0) layer->SetNumFrames(request.frameCount);
+            if (request.channelCount > 0) {
+                layer->SetNumChannels(request.channelCount);
+            }
+            if (request.frameCount > 0) {
+                layer->SetNumFrames(request.frameCount);
+            }
             layer->SetChannelOffset(std::max(0, request.channelOffset));
 
             moveDataLayerForPlacement(layers, layerIndex, request.placement);
@@ -1604,6 +1622,7 @@ public:
         return result;
     }
 
+    // Media and show-folder state.
     [[nodiscard]] api::models::MediaSummary readCurrentMedia() const {
         api::models::MediaSummary summary;
         if (_frame == nullptr) {
@@ -1966,6 +1985,8 @@ public:
         return future.get();
     }
 
+    // Read-only layout discovery. These endpoints provide the physical display
+    // skeleton for target-render generation and direct-channel writing.
     [[nodiscard]] api::models::LayoutModelsSummary readLayoutModels() const {
         api::models::LayoutModelsSummary summary;
         if (_frame == nullptr) {
@@ -2226,126 +2247,7 @@ public:
         return summary;
     }
 
-    [[nodiscard]] api::models::CreateCustomModelResult createCustomModel(const api::models::CreateCustomModelRequest& request) const {
-        return RunOnMainThread<api::models::CreateCustomModelResult>([this, request]() {
-            api::models::CreateCustomModelResult result;
-            result.modelName = request.name;
-            result.width = request.width;
-            result.height = request.height;
-            result.depth = request.depth;
-            result.nodeCount = static_cast<int>(request.nodes.size());
-
-            if (_frame == nullptr) {
-                result.errorMessage = "xLights frame is unavailable.";
-                return result;
-            }
-            if (request.name.empty()) {
-                result.errorMessage = "layout.createCustomModel requires a model name.";
-                return result;
-            }
-            if (request.width <= 0 || request.height <= 0 || request.depth <= 0) {
-                result.errorMessage = "layout.createCustomModel requires positive width, height, and depth.";
-                return result;
-            }
-            if (request.stringCount <= 0) {
-                result.errorMessage = "layout.createCustomModel requires a positive stringCount.";
-                return result;
-            }
-            if (request.nodes.empty()) {
-                result.errorMessage = "layout.createCustomModel requires at least one node.";
-                return result;
-            }
-            if (_frame->AllModels.GetModel(request.name) != nullptr && !request.overwrite) {
-                result.errorMessage = "A model with that name already exists. Set overwrite=true to replace it.";
-                return result;
-            }
-
-            std::vector<std::vector<std::vector<int>>> modelData(
-                static_cast<size_t>(request.depth),
-                std::vector<std::vector<int>>(
-                    static_cast<size_t>(request.height),
-                    std::vector<int>(static_cast<size_t>(request.width), 0)));
-            std::set<int> nodeNumbers;
-
-            for (const auto& node : request.nodes) {
-                if (node.x < 0 || node.x >= request.width ||
-                    node.y < 0 || node.y >= request.height ||
-                    node.z < 0 || node.z >= request.depth) {
-                    result.errorMessage = "Custom model node coordinate is outside the declared dimensions.";
-                    return result;
-                }
-                if (node.node <= 0) {
-                    result.errorMessage = "Custom model node numbers must be positive.";
-                    return result;
-                }
-                if (node.string <= 0 || node.string > request.stringCount) {
-                    result.errorMessage = "Custom model node string values must be between 1 and stringCount.";
-                    return result;
-                }
-                auto& cell = modelData[static_cast<size_t>(node.z)][static_cast<size_t>(node.y)][static_cast<size_t>(node.x)];
-                if (cell != 0) {
-                    result.errorMessage = "Custom model contains more than one node in the same cell.";
-                    return result;
-                }
-                cell = node.node;
-                nodeNumbers.insert(node.node);
-            }
-
-            if (nodeNumbers.size() != request.nodes.size()) {
-                result.errorMessage = "Custom model node numbers must be unique.";
-                return result;
-            }
-
-            const bool replacing = _frame->AllModels.GetModel(request.name) != nullptr;
-            if (request.dryRun) {
-                return result;
-            }
-
-            std::unique_ptr<Model> model(_frame->AllModels.CreateDefaultModel("Custom", request.startChannel.empty() ? "1" : request.startChannel));
-            auto* customModel = dynamic_cast<CustomModel*>(model.get());
-            if (customModel == nullptr) {
-                result.errorMessage = "xLights did not create a CustomModel instance.";
-                return result;
-            }
-
-            customModel->SetName(request.name);
-            customModel->SetStartChannel(request.startChannel.empty() ? "1" : request.startChannel);
-            customModel->SetNumStrings(std::max(1, request.stringCount));
-            customModel->UpdateModel(request.width, request.height, request.depth, modelData);
-            customModel->SetLayoutGroup(request.layoutGroup.empty() ? "Default" : request.layoutGroup);
-            customModel->SetPosition(request.positionX, request.positionY);
-            customModel->GetModelScreenLocation().SetMWidth(static_cast<float>(request.width));
-            customModel->GetModelScreenLocation().SetMHeight(static_cast<float>(request.height));
-            customModel->GetModelScreenLocation().SetMDepth(static_cast<float>(request.depth));
-
-            if (replacing && !_frame->AllModels.Delete(request.name)) {
-                result.errorMessage = "Existing model could not be replaced.";
-                return result;
-            }
-
-            _frame->AllModels.AddModel(model.release());
-            _frame->MarkModelsAsNeedingRender();
-            if (_frame->GetOutputModelManager() != nullptr) {
-                _frame->GetOutputModelManager()->AddASAPWork(
-                    OutputModelManager::WORK_MODELS_REWORK_STARTCHANNELS |
-                    OutputModelManager::WORK_CALCULATE_START_CHANNELS |
-                    OutputModelManager::WORK_RGBEFFECTS_CHANGE |
-                    OutputModelManager::WORK_MODELS_CHANGE_REQUIRING_RERENDER |
-                    OutputModelManager::WORK_RELOAD_MODELLIST |
-                    OutputModelManager::WORK_RELOAD_ALLMODELS |
-                    OutputModelManager::WORK_REDRAW_LAYOUTPREVIEW,
-                    "xLightsDesigner::createCustomModel",
-                    nullptr,
-                    nullptr,
-                    request.name);
-            }
-
-            result.created = !replacing;
-            result.updated = replacing;
-            return result;
-        });
-    }
-
+    // Sequence element inventory and row ordering.
     [[nodiscard]] api::models::ElementsSummary readElements() const {
         api::models::ElementsSummary summary;
         if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) {
@@ -2458,6 +2360,7 @@ public:
         });
     }
 
+    // Timing track read/write operations.
     [[nodiscard]] api::models::TimingMarksSummary readTimingMarks(const api::models::TimingMarksRequest& request) const {
         api::models::TimingMarksSummary summary;
         summary.trackName = request.trackName;
@@ -2507,11 +2410,15 @@ public:
             api::models::EnsureTimingTrackResult result;
             result.requestedTrackName = request.trackName;
             result.subType = request.subType;
-            if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) return result;
+            if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) {
+                return result;
+            }
             result.sequenceOpen = true;
             if (TimingElement* existing = _frame->GetSequenceElements().GetTimingElement(request.trackName); existing != nullptr) {
                 result.actualTrackName = existing->GetName();
-                if (result.subType.empty()) result.subType = existing->GetSubType();
+                if (result.subType.empty()) {
+                    result.subType = existing->GetSubType();
+                }
                 return result;
             }
             TimingElement* created = _frame->AddTimingElement(request.trackName, request.subType);
@@ -2528,20 +2435,30 @@ public:
         return RunOnMainThread<api::models::AddTimingMarksResult>([this, request]() {
             api::models::AddTimingMarksResult result;
             result.requestedTrackName = request.trackName;
-            if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) return result;
+            if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) {
+                return result;
+            }
             result.sequenceOpen = true;
             TimingElement* track = _frame->GetSequenceElements().GetTimingElement(request.trackName);
             if (track == nullptr) {
                 track = _frame->AddTimingElement(request.trackName, request.subType);
                 result.trackCreated = track != nullptr;
             }
-            if (track == nullptr) return result;
+            if (track == nullptr) {
+                return result;
+            }
             result.trackFound = true;
             result.actualTrackName = track->GetName();
             EffectLayer* layer = track->GetEffectLayer(0);
-            if (layer == nullptr) layer = track->AddEffectLayer();
-            if (layer == nullptr) return result;
-            if (request.replaceExisting) layer->RemoveAllEffects(nullptr);
+            if (layer == nullptr) {
+                layer = track->AddEffectLayer();
+            }
+            if (layer == nullptr) {
+                return result;
+            }
+            if (request.replaceExisting) {
+                layer->RemoveAllEffects(nullptr);
+            }
             for (const auto& mark : request.marks) {
                 layer->AddEffect(0, mark.label, "", "", mark.startMs, mark.endMs, EFFECT_NOT_SELECTED, false);
                 result.addedMarkCount++;
@@ -2586,6 +2503,8 @@ public:
     }
 
 private:
+    // Serialization helpers for xLights-owned DataLayer objects and XLD
+    // manifest validation.
     [[nodiscard]] static api::models::LayoutGroupMemberSummary makeLayoutGroupMemberSummary(Model* model) {
         api::models::LayoutGroupMemberSummary summary;
         if (model == nullptr) {
@@ -2898,6 +2817,8 @@ private:
         return summary;
     }
 
+    // Marshals xLights UI access to the main thread when requests arrive on
+    // the listener thread.
     template <typename Result, typename Fn>
     [[nodiscard]] Result RunOnMainThread(Fn&& fn) const {
         if (_frame == nullptr) {

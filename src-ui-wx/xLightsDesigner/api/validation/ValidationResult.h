@@ -5,6 +5,8 @@
 
 namespace xLightsDesigner::api::validation {
 
+// Lightweight validation collector for request-level checks before work is
+// queued against xLights.
 struct ValidationIssue {
     std::string field;
     std::string code;

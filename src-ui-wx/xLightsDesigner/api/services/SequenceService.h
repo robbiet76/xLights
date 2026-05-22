@@ -1,11 +1,15 @@
 #pragma once
 
 #include <functional>
+#include <utility>
 
 #include "../models/SequenceModels.h"
 
 namespace xLightsDesigner::api::services {
 
+// Thin service facade over xLights host callbacks for sequence lifecycle,
+// render/export, and sync state. It keeps handlers independent of xLights UI
+// classes and makes command validation testable.
 class SequenceService {
 public:
     using ReadOpenSequenceFn = std::function<models::SequenceSummary()>;

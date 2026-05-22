@@ -1,11 +1,14 @@
 #pragma once
 
 #include <functional>
+#include <utility>
 
 #include "../models/TimingModels.h"
 
 namespace xLightsDesigner::api::services {
 
+// Timing service facade for tracks visible in xLights. Marks are used as
+// auditable musical structure, lyric, and custom cue references.
 class TimingService {
 public:
     using ReadTimingTracksFn = std::function<models::TimingTracksSummary()>;

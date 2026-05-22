@@ -6,13 +6,17 @@
 
 namespace xLightsDesigner::api::transport {
 
+// Maps the stable HTTP surface to internal command names. Keeping this table
+// separate from RequestRouter makes the externally supported API easy to audit.
 class EndpointRouter {
 public:
     [[nodiscard]] std::optional<std::string> resolve(const std::string& method, const std::string& path) const {
+        // Runtime and job state.
         if (method == "GET" && path == "/xlightsdesigner/api/health") return "health.get";
         if (method == "GET" && path == "/xlightsdesigner/api/capabilities") return "runtime.getCapabilities";
         if (method == "GET" && path == "/xlightsdesigner/api/jobs/get") return "jobs.get";
 
+        // Sequence lifecycle, render feedback, and final-output sync.
         if (method == "GET" && path == "/xlightsdesigner/api/sequence/open") return "sequence.getOpen";
         if (method == "GET" && path == "/xlightsdesigner/api/sequence/revision") return "sequence.getRevision";
         if (method == "GET" && path == "/xlightsdesigner/api/sequence/state") return "sequence.getState";
@@ -30,17 +34,21 @@ public:
         if (method == "POST" && path == "/xlightsdesigner/api/sequence/render-samples") return "sequence.getRenderSamples";
         if (method == "GET" && path == "/xlightsdesigner/api/sequence/final-fseq") return "sequence.getFinalFseq";
         if (method == "GET" && path == "/xlightsdesigner/api/sequence/sync-health") return "sequence.getSyncHealth";
+
+        // Generated AI FSEQ files enter xLights through DataLayers.
         if (method == "GET" && path == "/xlightsdesigner/api/sequence/data-layers") return "sequence.dataLayers.list";
         if (method == "POST" && path == "/xlightsdesigner/api/sequence/data-layers/upsert") return "sequence.dataLayers.upsert";
         if (method == "POST" && path == "/xlightsdesigner/api/sequence/data-layers/remove") return "sequence.dataLayers.remove";
         if (method == "POST" && path == "/xlightsdesigner/api/sequence/data-layers/reorder") return "sequence.dataLayers.reorder";
         if (method == "POST" && path == "/xlightsdesigner/api/sequence/data-layers/validate") return "sequence.dataLayers.validate";
 
+        // Timing tracks are visible in xLights and keep AI decisions auditable.
         if (method == "GET" && path == "/xlightsdesigner/api/timing/tracks") return "timing.getTracks";
         if (method == "GET" && path == "/xlightsdesigner/api/timing/marks") return "timing.getMarks";
         if (method == "POST" && path == "/xlightsdesigner/api/timing/ensure-track") return "timing.ensureTrack";
         if (method == "POST" && path == "/xlightsdesigner/api/timing/add-marks") return "timing.addMarks";
 
+        // Media and show-folder operations are the project-to-xLights bridge.
         if (method == "GET" && path == "/xlightsdesigner/api/media/current") return "media.getCurrent";
         if (method == "GET" && path == "/xlightsdesigner/api/media/directories") return "media.getDirectories";
         if (method == "POST" && path == "/xlightsdesigner/api/media/show-directory") return "media.setShowDirectory";
@@ -48,6 +56,7 @@ public:
         if (method == "POST" && path == "/xlightsdesigner/api/media/paths/validate-access") return "media.validatePathAccess";
         if (method == "GET" && path == "/xlightsdesigner/api/media/audio/capabilities") return "media.audio.getCapabilities";
 
+        // Layout endpoints are read-only display discovery for generation.
         if (method == "GET" && path == "/xlightsdesigner/api/layout/models") return "layout.getModels";
         if (method == "GET" && path == "/xlightsdesigner/api/layout/submodels") return "layout.getSubmodels";
         if (method == "GET" && path == "/xlightsdesigner/api/layout/model-nodes") return "layout.getModelNodes";
@@ -55,7 +64,8 @@ public:
         if (method == "GET" && path == "/xlightsdesigner/api/layout/scene") return "layout.getScene";
         if (method == "GET" && path == "/xlightsdesigner/api/layout/settings") return "layout.getSettings";
         if (method == "GET" && path == "/xlightsdesigner/api/layout/group-members") return "layout.getGroupMembers";
-        if (method == "POST" && path == "/xlightsdesigner/api/layout/models/custom") return "layout.createCustomModel";
+
+        // Sequence elements expose row/order state without native effect authoring.
         if (method == "GET" && path == "/xlightsdesigner/api/elements/summary") return "elements.getSummary";
         if (method == "GET" && path == "/xlightsdesigner/api/elements/display-order") return "elements.getDisplayOrder";
         if (method == "POST" && path == "/xlightsdesigner/api/elements/display-order") return "elements.setDisplayOrder";

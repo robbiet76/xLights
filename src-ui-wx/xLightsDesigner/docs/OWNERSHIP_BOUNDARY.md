@@ -25,7 +25,7 @@ Reason:
 - `xLightsMain.*` provides env-gated prompt suppression callbacks and the narrow requested-size House Preview export hook.
 - `TabSequence.cpp`, `TabSetup.cpp`, `SeqFileUtilities.cpp`, and `wxUtilities.cpp` prevent noninteractive prompt deadlocks only when xLightsDesigner explicitly launched xLights.
 - `VideoExporter.*` converts preview export file-open/header failures into ordinary API-visible errors instead of uncaught exceptions.
-- `xLightsAutomations.cpp` keeps legacy preview automation dialog-free when it is invoked.
+- `xLightsAutomations.cpp` keeps existing preview automation dialog-free when it is invoked.
 - `tabSequencer.cpp` contains small null/stale-pointer guards observed during noninteractive launch testing.
 
 Modal boundary:
@@ -40,4 +40,4 @@ Baseline-preserved surfaces:
 Owned API rule:
 - native xLights effect-block authoring is out of scope for the xLightsDesigner API
 - generated FSEQ DataLayers are the sequencing integration path
-- if compatibility with xLights-owned automation is ever needed, keep that compatibility in a narrow seam rather than shaping the owned API architecture around it
+- if xLights-owned automation ever needs to call into this API, keep that bridge narrow rather than shaping the owned API architecture around it

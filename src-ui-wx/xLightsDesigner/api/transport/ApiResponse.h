@@ -6,12 +6,15 @@
 
 namespace xLightsDesigner::api::transport {
 
+// Structured error envelope returned consistently by every owned API handler.
 struct ApiError {
     std::string code;
     std::string message;
     nlohmann::json details = nlohmann::json::object();
 };
 
+// Internal handler response. The listener converts this into the public JSON
+// envelope, preserving statusCode for both HTTP and job-status responses.
 struct ApiResponse {
     int statusCode = 200;
     std::string command;

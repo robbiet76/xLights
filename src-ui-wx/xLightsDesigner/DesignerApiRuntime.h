@@ -22,6 +22,7 @@
 
 namespace xLightsDesigner {
 
+// Public runtime snapshot returned by health endpoints and launch smoke tests.
 struct DesignerApiHealthSnapshot {
     bool listenerConfigured = false;
     bool listenerRunning = false;
@@ -60,6 +61,8 @@ struct DesignerApiJobSnapshot {
 };
 
 namespace detail {
+// Runtime queue state. Mutating operations run through this worker to keep
+// request handling responsive and serialize xLights UI access.
 struct PendingDesignerApiJob {
     std::string jobId;
     std::function<api::transport::ApiResponse()> operation;
@@ -237,6 +240,7 @@ inline void RunDesignerApiWorkerLoop() {
 
 } // namespace detail
 
+// Starts the queued-job runtime used by mutation endpoints.
 inline void StartDesignerApiRuntime() {
     std::lock_guard<std::mutex> lock(detail::DesignerApiJobMutex());
     if (detail::DesignerApiWorkerRunningFlag()) {
@@ -252,6 +256,7 @@ inline void StartDesignerApiRuntime() {
     detail::DesignerApiWorkerRunningFlag() = true;
 }
 
+// Marks xLights startup as complete enough for sequence mutations.
 inline void MarkDesignerApiAppReady() {
     std::lock_guard<std::mutex> lock(detail::DesignerApiJobMutex());
     detail::DesignerApiAppReadyFlag() = true;
@@ -259,6 +264,7 @@ inline void MarkDesignerApiAppReady() {
     detail::DesignerApiAppReadyAt() = detail::RuntimeNowUtcIso8601();
 }
 
+// Startup settle protects callers from racing xLights frame initialization.
 inline bool IsDesignerApiStartupSettled() {
     std::lock_guard<std::mutex> lock(detail::DesignerApiJobMutex());
     if (!detail::DesignerApiAppReadyFlag() || !detail::DesignerApiAppReadySteady().has_value()) {
@@ -302,6 +308,7 @@ inline void StopDesignerApiRuntime() {
     detail::DesignerApiPendingJobs().clear();
 }
 
+// Enqueues a command that must run asynchronously against xLights state.
 inline std::string SubmitDesignerApiJob(
     const std::string& command,
     const std::string& requestId,
@@ -394,6 +401,7 @@ inline api::transport::ApiResponse BuildQueuedJobAcceptedResponse(
     return response;
 }
 
+// Converts queue snapshots into the same response envelope used by direct calls.
 inline api::transport::ApiResponse BuildDesignerApiJobStatusResponse(
     const api::transport::ApiRequest& request,
     const DesignerApiJobSnapshot& snapshot) {

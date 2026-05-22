@@ -5,6 +5,7 @@
 
 namespace xLightsDesigner::api::parsing {
 
+// Converts transport-level params into the command object consumed by handlers.
 inline transport::ApiRequest ParseRequest(const std::string& command,
                                           const std::map<std::string, std::string>& params,
                                           const std::string& requestId = {}) {

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <utility>
+
 #include "../../DesignerApiRuntime.h"
 #include "../models/SequenceModels.h"
 #include "../services/SequenceService.h"
@@ -10,6 +12,8 @@
 
 namespace xLightsDesigner::api::handlers {
 
+// Sequence endpoints own xLights sequence lifecycle, render/export requests,
+// preview readback, and final FSEQ/DataLayer sync inspection.
 class SequenceHandler {
 public:
     explicit SequenceHandler(services::SequenceService service)
@@ -101,6 +105,8 @@ public:
         response.command = request.command;
         response.requestId = request.requestId;
 
+        // Sequence settings update is intentionally explicit so the app can
+        // modify one field without silently resetting unrelated metadata.
         models::SequenceSettingsUpdateRequest updateRequest;
         if (auto it = request.params.find("sequenceType"); it != request.params.end()) {
             updateRequest.sequenceType = it->second;
@@ -212,6 +218,8 @@ public:
             return response;
         }
 
+        // xLights can report a healthy listener before its UI/model state is
+        // ready for sequence mutation, so opens are gated by startup settle.
         if (!IsDesignerApiStartupSettled()) {
             response.statusCode = 409;
             response.error = transport::ApiError{

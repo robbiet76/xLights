@@ -9,6 +9,8 @@
 
 namespace xLightsDesigner::api::transport {
 
+// Flattens GET query params and POST JSON bodies into one string map. Complex
+// JSON values remain serialized JSON so handlers can opt into structured parse.
 inline std::map<std::string, std::string> MergeRequestParams(
     const std::map<std::string, std::string>& queryParams,
     const nlohmann::json& body) {
@@ -37,6 +39,7 @@ inline std::map<std::string, std::string> MergeRequestParams(
     return params;
 }
 
+// Adds the public ok flag while preserving the handler's structured payload.
 inline nlohmann::json BuildJsonHttpEnvelope(const ApiResponse& response) {
     nlohmann::json envelope = response.toJson();
     envelope["ok"] = response.ok();

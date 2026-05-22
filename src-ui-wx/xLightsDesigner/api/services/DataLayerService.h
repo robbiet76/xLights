@@ -7,6 +7,8 @@
 
 namespace xLightsDesigner::api::services {
 
+// DataLayer service facade for attaching generated XLD FSEQ files to an open
+// xLights sequence and validating that they still match the current layout.
 class DataLayerService {
 public:
     using ReadDataLayersFn = std::function<models::DataLayerListSummary()>;

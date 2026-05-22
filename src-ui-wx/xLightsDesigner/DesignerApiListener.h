@@ -27,6 +27,8 @@
 
 namespace xLightsDesigner {
 
+// Minimal HTTP endpoint used only by xLightsDesigner. It intentionally avoids a
+// broader web framework so the xLights fork carries a small, auditable surface.
 using DesignerEndpointHandler = std::function<std::optional<api::transport::ApiResponse>(
     const std::string& method,
     const std::string& path,
@@ -47,6 +49,8 @@ struct DesignerApiListenerSnapshot {
 };
 
 namespace detail {
+// Listener state is held in function-local statics to keep this header-only
+// integration easy to include from the existing xLights build.
 inline int& DesignerApiServerFd() {
     static int fd = -1;
     return fd;
@@ -563,6 +567,7 @@ inline void StopDesignerApiWatchdog() {
 
 } // namespace detail
 
+// Starts the local listener and watchdog when XLD explicitly enables the API.
 inline bool StartDesignerApiListener(const DesignerEndpointHandler& handler) {
     std::lock_guard<std::mutex> lock(detail::DesignerApiListenerMutex());
     const bool started = detail::StartDesignerApiListenerLocked(handler, false);
@@ -593,6 +598,7 @@ inline DesignerApiListenerSnapshot GetDesignerApiListenerSnapshot() {
     };
 }
 
+// Stops both the listener and watchdog before xLights exits.
 inline void StopDesignerApiListener() {
     detail::StopDesignerApiWatchdog();
     std::lock_guard<std::mutex> lock(detail::DesignerApiListenerMutex());

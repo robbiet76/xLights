@@ -69,9 +69,11 @@ Routes:
 - `GET /xlightsdesigner/api/layout/scene`
 - `GET /xlightsdesigner/api/layout/settings`
 - `GET /xlightsdesigner/api/layout/group-members`
-- `POST /xlightsdesigner/api/layout/models/custom`
 
-`layout/channel-map` is the authoritative channel mapping source for generated FSEQ alignment.
+The layout API is read-only. It exposes existing xLights layout geometry,
+submodels, group membership, channel spans, node coordinates, preview settings,
+and background-image references. `layout/channel-map` is the authoritative
+channel mapping source for generated FSEQ alignment.
 
 ## Timing
 

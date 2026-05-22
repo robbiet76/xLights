@@ -14,6 +14,8 @@
 
 namespace xLightsDesigner {
 namespace detail {
+// Diagnostics are intentionally file-backed and bounded so noninteractive runs
+// can report suppressed prompts without requiring an attached UI.
 inline std::mutex& DesignerDiagnosticsMutex() {
     static std::mutex mutex;
     return mutex;

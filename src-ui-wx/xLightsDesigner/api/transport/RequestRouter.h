@@ -14,6 +14,8 @@
 
 namespace xLightsDesigner::api::transport {
 
+// Dispatches normalized commands to cohesive handler groups. A command must be
+// present in EndpointRouter and here to be externally reachable.
 class RequestRouter {
 public:
     RequestRouter(handlers::RuntimeHandler runtimeHandler,
@@ -32,10 +34,12 @@ public:
           _elementHandler(std::move(elementHandler)) {}
 
     [[nodiscard]] std::optional<ApiResponse> route(const ApiRequest& request) const {
+        // Runtime.
         if (request.command == "health.get") return _runtimeHandler.handleHealth(request);
         if (request.command == "runtime.getCapabilities") return _runtimeHandler.handleGetCapabilities(request);
         if (request.command == "jobs.get") return _runtimeHandler.handleGetJob(request);
 
+        // Sequence lifecycle and render/readback operations.
         if (request.command == "sequence.getOpen") return _sequenceHandler.handleGetOpen(request);
         if (request.command == "sequence.getRevision") return _sequenceHandler.handleGetRevision(request);
         if (request.command == "sequence.getState") return _sequenceHandler.handleGetState(request);
@@ -54,17 +58,20 @@ public:
         if (request.command == "sequence.getFinalFseq") return _sequenceHandler.handleGetFinalFseq(request);
         if (request.command == "sequence.getSyncHealth") return _sequenceHandler.handleGetSyncHealth(request);
 
+        // DataLayer management for generated XLD FSEQ files.
         if (request.command == "sequence.dataLayers.list") return _dataLayerHandler.handleList(request);
         if (request.command == "sequence.dataLayers.upsert") return _dataLayerHandler.handleUpsert(request);
         if (request.command == "sequence.dataLayers.remove") return _dataLayerHandler.handleRemove(request);
         if (request.command == "sequence.dataLayers.reorder") return _dataLayerHandler.handleReorder(request);
         if (request.command == "sequence.dataLayers.validate") return _dataLayerHandler.handleValidate(request);
 
+        // Timing tracks and marks.
         if (request.command == "timing.getTracks") return _timingHandler.handleGetTracks(request);
         if (request.command == "timing.getMarks") return _timingHandler.handleGetMarks(request);
         if (request.command == "timing.ensureTrack") return _timingHandler.handleEnsureTrack(request);
         if (request.command == "timing.addMarks") return _timingHandler.handleAddMarks(request);
 
+        // Media, show-folder, and path-access operations.
         if (request.command == "media.getCurrent") return _mediaHandler.handleGetCurrent(request);
         if (request.command == "media.getDirectories") return _mediaHandler.handleGetDirectories(request);
         if (request.command == "media.setShowDirectory") return _mediaHandler.handleSetShowDirectory(request);
@@ -72,6 +79,7 @@ public:
         if (request.command == "media.validatePathAccess") return _mediaHandler.handleValidatePathAccess(request);
         if (request.command == "media.audio.getCapabilities") return _mediaHandler.handleGetAudioCapabilities(request);
 
+        // Read-only layout/display structure.
         if (request.command == "layout.getModels") return _layoutHandler.handleGetModels(request);
         if (request.command == "layout.getSubmodels") return _layoutHandler.handleGetSubmodels(request);
         if (request.command == "layout.getModelNodes") return _layoutHandler.handleGetModelNodes(request);
@@ -79,8 +87,8 @@ public:
         if (request.command == "layout.getScene") return _layoutHandler.handleGetScene(request);
         if (request.command == "layout.getSettings") return _layoutHandler.handleGetSettings(request);
         if (request.command == "layout.getGroupMembers") return _layoutHandler.handleGetGroupMembers(request);
-        if (request.command == "layout.createCustomModel") return _layoutHandler.handleCreateCustomModel(request);
 
+        // Display element row/order state.
         if (request.command == "elements.getSummary") return _elementHandler.handleGetSummary(request);
         if (request.command == "elements.getDisplayOrder") return _elementHandler.handleGetDisplayOrder(request);
         if (request.command == "elements.setDisplayOrder") return _elementHandler.handleSetDisplayOrder(request);

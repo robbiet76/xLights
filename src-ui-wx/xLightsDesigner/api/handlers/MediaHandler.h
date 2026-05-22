@@ -1,5 +1,7 @@
 #pragma once
 
+#include <utility>
+
 #include "../../DesignerApiRuntime.h"
 #include "../parsing/ParameterReaders.h"
 #include "../services/MediaService.h"
@@ -8,6 +10,8 @@
 
 namespace xLightsDesigner::api::handlers {
 
+// Media endpoints cover current song/show-folder state and path validation.
+// They are the only supported way for the app to switch xLights show folders.
 class MediaHandler {
 public:
     explicit MediaHandler(services::MediaService service)
@@ -48,6 +52,8 @@ public:
     }
 
     [[nodiscard]] transport::ApiResponse handleValidatePathAccess(const transport::ApiRequest& request) const {
+        // Batch validation lets the app preflight audio, sequence, image, and
+        // generated-output paths before asking xLights to use them.
         transport::ApiResponse response;
         response.command = request.command;
         response.requestId = request.requestId;

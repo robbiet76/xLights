@@ -6,6 +6,8 @@
 
 namespace xLightsDesigner::api::models {
 
+// Media models cover current show-folder/audio state and sandbox-safe path
+// access checks.
 struct MediaSummary {
     bool sequenceOpen = false;
     std::optional<std::string> sequencePath;

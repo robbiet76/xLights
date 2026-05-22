@@ -10,6 +10,8 @@
 
 namespace xLightsDesigner::api::handlers {
 
+// Runtime endpoints report process readiness, modal state, async job status,
+// and the supported DataLayer-first capability set.
 class RuntimeHandler {
 public:
     RuntimeHandler() = default;
@@ -133,6 +135,8 @@ public:
             {"validate", true},
             {"relativePaths", "reported"}
         };
+        // Native effect-block authoring remains intentionally absent from the
+        // owned API; XLD-generated FSEQ DataLayers are the product path.
         response.data["nativeEffectControl"] = {
             {"inScope", false},
             {"reason", "xLightsDesigner uses generated FSEQ DataLayers and does not require native effect block authoring endpoints."}

@@ -1,7 +1,7 @@
 #pragma once
 
-#include <exception>
 #include <map>
+#include <utility>
 
 #include "../parsing/ParameterReaders.h"
 #include "../services/LayoutService.h"
@@ -10,6 +10,8 @@
 
 namespace xLightsDesigner::api::handlers {
 
+// Layout endpoints expose the physical display skeleton used by target-render
+// generation: models, submodels, groups, node coordinates, and channel spans.
 class LayoutHandler {
 public:
     explicit LayoutHandler(services::LayoutService service)
@@ -57,6 +59,8 @@ public:
         response.command = request.command;
         response.requestId = request.requestId;
 
+        // Scene packages xLights preview settings with model transforms so the
+        // designer can generate against the same display frame of reference.
         const auto summary = _service.getModels();
         const auto settings = _service.getSettings();
         response.data["models"] = nlohmann::json::array();
@@ -174,6 +178,8 @@ public:
         response.command = request.command;
         response.requestId = request.requestId;
 
+        // Node coordinates are optional by coordinate system to keep large
+        // displays from returning data the caller does not need.
         models::LayoutModelNodesRequest nodesRequest;
         nodesRequest.name = parsing::ReadString(request.params, "name");
         nodesRequest.includeBufferCoords = parsing::ReadBool(request.params, "includeBufferCoords", true);
@@ -196,8 +202,7 @@ public:
         response.data["modelName"] = summary.modelName;
         response.data["nodes"] = nlohmann::json::array();
         response.data["source"] = {
-            {"isCustomModel", summary.isCustomModel},
-            {"customModelParsed", summary.isCustomModel}
+            {"isCustomModel", summary.isCustomModel}
         };
         response.data["requested"] = {
             {"includeBufferCoords", summary.includeBufferCoords},
@@ -331,81 +336,6 @@ public:
                 {"flattenedAllMembers", serializeMembers(group.flattenedAllMembers)}
             });
         }
-        return response;
-    }
-
-    [[nodiscard]] transport::ApiResponse handleCreateCustomModel(const transport::ApiRequest& request) const {
-        transport::ApiResponse response;
-        response.command = request.command;
-        response.requestId = request.requestId;
-
-        models::CreateCustomModelRequest createRequest;
-        createRequest.name = parsing::ReadString(request.params, "name");
-        createRequest.startChannel = parsing::ReadString(request.params, "startChannel", "1");
-        createRequest.layoutGroup = parsing::ReadString(request.params, "layoutGroup", "Default");
-        createRequest.width = parsing::ReadInt(request.params, "width", 0);
-        createRequest.height = parsing::ReadInt(request.params, "height", 0);
-        createRequest.depth = parsing::ReadInt(request.params, "depth", 1);
-        createRequest.stringCount = parsing::ReadInt(request.params, "stringCount", 1);
-        createRequest.positionX = readDouble(request.params, "positionX", 0.0);
-        createRequest.positionY = readDouble(request.params, "positionY", 0.0);
-        createRequest.overwrite = parsing::ReadBool(request.params, "overwrite", false);
-        const bool dryRun = request.dryRun || parsing::ReadBool(request.params, "dryRun", false);
-        createRequest.dryRun = dryRun;
-
-        const auto nodesJsonText = parsing::ReadString(request.params, "nodes");
-        if (nodesJsonText.empty()) {
-            response.statusCode = 400;
-            response.error = transport::ApiError{"BAD_REQUEST", "layout.createCustomModel requires nodes.", nlohmann::json::object()};
-            return response;
-        }
-
-        try {
-            const auto nodes = nlohmann::json::parse(nodesJsonText);
-            if (!nodes.is_array()) {
-                response.statusCode = 400;
-                response.error = transport::ApiError{"BAD_REQUEST", "layout.createCustomModel nodes must be an array.", nlohmann::json::object()};
-                return response;
-            }
-            for (const auto& row : nodes) {
-                models::CustomModelNode node;
-                node.x = row.value("x", -1);
-                node.y = row.value("y", -1);
-                node.z = row.value("z", 0);
-                node.node = row.value("node", -1);
-                node.string = row.value("string", 1);
-                createRequest.nodes.push_back(node);
-            }
-        } catch (const std::exception& ex) {
-            response.statusCode = 400;
-            response.error = transport::ApiError{"BAD_REQUEST", std::string("Invalid custom model nodes JSON: ") + ex.what(), nlohmann::json::object()};
-            return response;
-        }
-
-        const auto result = _service.createCustomModel(createRequest);
-        if (!result.created && !result.updated) {
-            if (dryRun && result.errorMessage.empty()) {
-                response.data["created"] = false;
-                response.data["updated"] = false;
-                response.data["dryRun"] = true;
-                response.data["modelName"] = result.modelName;
-                response.data["nodeCount"] = result.nodeCount;
-                response.data["width"] = result.width;
-                response.data["height"] = result.height;
-                response.data["depth"] = result.depth;
-                return response;
-            }
-            response.statusCode = 409;
-            response.error = transport::ApiError{"CUSTOM_MODEL_NOT_CREATED", result.errorMessage.empty() ? "Custom model could not be created." : result.errorMessage, nlohmann::json::object()};
-            return response;
-        }
-        response.data["created"] = result.created;
-        response.data["updated"] = result.updated;
-        response.data["modelName"] = result.modelName;
-        response.data["nodeCount"] = result.nodeCount;
-        response.data["width"] = result.width;
-        response.data["height"] = result.height;
-        response.data["depth"] = result.depth;
         return response;
     }
 

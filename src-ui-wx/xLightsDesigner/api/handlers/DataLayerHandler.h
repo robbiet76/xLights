@@ -10,6 +10,8 @@
 
 namespace xLightsDesigner::api::handlers {
 
+// DataLayer endpoints are the bridge between direct-channel XLD output and
+// xLights final rendering. They do not create native effect blocks.
 class DataLayerHandler {
 public:
     explicit DataLayerHandler(services::DataLayerService service)
@@ -24,6 +26,8 @@ public:
     }
 
     [[nodiscard]] transport::ApiResponse handleUpsert(const transport::ApiRequest& request) const {
+        // Upsert requires enough FSEQ evidence for later sync-health checks to
+        // detect stale or mismatched generated output.
         models::DataLayerUpsertRequest upsertRequest;
         upsertRequest.name = parsing::ReadString(request.params, "name");
         upsertRequest.sourceFseqPath = parsing::ReadString(request.params, "sourceFseqPath");

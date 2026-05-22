@@ -10,6 +10,8 @@
 
 namespace xLightsDesigner {
 
+// In-process harness used by smoke and self-tests. It exercises the same
+// request routing path as HTTP without opening sockets.
 std::optional<api::transport::ApiResponse> HandleDesignerApiRequest(
     const std::string& command,
     const std::map<std::string, std::string>& params,

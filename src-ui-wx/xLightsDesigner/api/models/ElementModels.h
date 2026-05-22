@@ -6,6 +6,8 @@
 
 namespace xLightsDesigner::api::models {
 
+// Element models expose sequence row inventory and display order without
+// exposing native effect mutation.
 struct ElementLayerSummary {
     int layerNumber = 0;
     int effectCount = 0;

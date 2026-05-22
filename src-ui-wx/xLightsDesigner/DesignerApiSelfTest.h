@@ -15,6 +15,8 @@
 
 namespace xLightsDesigner {
 
+// Self-tests validate route shape, request normalization, and response envelope
+// behavior without requiring an open sequence or show folder.
 struct DesignerApiSelfTestResult {
     int passed = 0;
     int failed = 0;
@@ -63,8 +65,8 @@ inline DesignerApiSelfTestResult RunDesignerApiSelfTests() {
               "EndpointRouter should map media path access validation endpoint.", result);
         Check(router.resolve("GET", "/xlightsdesigner/api/media/audio/capabilities") == std::optional<std::string>("media.audio.getCapabilities"),
               "EndpointRouter should map media audio capabilities endpoint.", result);
-        Check(router.resolve("POST", "/xlightsdesigner/api/layout/models/custom") == std::optional<std::string>("layout.createCustomModel"),
-              "EndpointRouter should map custom model creation endpoint.", result);
+        Check(!router.resolve("POST", "/xlightsdesigner/api/layout/models/custom").has_value(),
+              "EndpointRouter should not expose layout model creation endpoints.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/sequence/settings") == std::optional<std::string>("sequence.setSettings"),
               "EndpointRouter should map sequence settings mutation endpoint.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/timing/add-marks") == std::optional<std::string>("timing.addMarks"),
@@ -115,44 +117,6 @@ inline DesignerApiSelfTestResult RunDesignerApiSelfTests() {
               "MergeRequestParams should normalize integer bodies.", result);
         Check(!merged["marks"].empty() && merged["marks"].front() == '[',
               "MergeRequestParams should serialize structured JSON values.", result);
-    }
-
-    {
-        std::optional<api::models::CreateCustomModelRequest> capturedRequest;
-        api::services::LayoutService service(
-            []() { return api::models::LayoutModelsSummary{}; },
-            []() { return api::models::LayoutSubmodelsSummary{}; },
-            [](const api::models::LayoutModelNodesRequest&) { return api::models::LayoutModelNodesSummary{}; },
-            []() { return api::models::LayoutChannelMapSummary{}; },
-            []() { return api::models::LayoutSettingsSummary{}; },
-            []() { return api::models::LayoutGroupMembershipsSummary{}; },
-            [&capturedRequest](const api::models::CreateCustomModelRequest& request) {
-                capturedRequest = request;
-                return api::models::CreateCustomModelResult{};
-            });
-        api::handlers::LayoutHandler handler(std::move(service));
-
-        api::transport::ApiRequest request;
-        request.command = "layout.createCustomModel";
-        request.params = {
-            {"name", "SelfTestCustom"},
-            {"startChannel", "1"},
-            {"layoutGroup", "Default"},
-            {"width", "1"},
-            {"height", "1"},
-            {"depth", "1"},
-            {"stringCount", "1"},
-            {"positionX", "0"},
-            {"positionY", "0"},
-            {"dryRun", "true"},
-            {"nodes", R"([{"x":0,"y":0,"z":0,"node":1,"string":1}])"}
-        };
-
-        const auto response = handler.handleCreateCustomModel(request);
-        Check(response.data.value("dryRun", false) == true,
-              "LayoutHandler should report dryRun=true when custom model creation is requested in dry-run mode.", result);
-        Check(capturedRequest.has_value() && capturedRequest->dryRun,
-              "LayoutHandler should pass body dryRun=true through to CreateCustomModelRequest.", result);
     }
 
     {

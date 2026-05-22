@@ -18,6 +18,8 @@
 
 namespace xLightsDesigner {
 
+// Launch policy centralizes env-gated behavior for noninteractive XLD sessions.
+// Normal xLights launches do not pass these flags and keep baseline behavior.
 inline bool IsTruthyLaunchFlagValue(const char* value)
 {
     if (value == nullptr) {

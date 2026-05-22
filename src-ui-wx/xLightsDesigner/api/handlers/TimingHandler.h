@@ -1,5 +1,7 @@
 #pragma once
 
+#include <utility>
+
 #include <nlohmann/json.hpp>
 
 #include "../../DesignerApiRuntime.h"
@@ -11,6 +13,8 @@
 
 namespace xLightsDesigner::api::handlers {
 
+// Timing endpoints expose and create visible xLights timing tracks. Track names
+// are labels; semantic meaning belongs in the app handoff metadata.
 class TimingHandler {
 public:
     explicit TimingHandler(services::TimingService service)
@@ -81,6 +85,8 @@ public:
     }
 
     [[nodiscard]] transport::ApiResponse handleAddMarks(const transport::ApiRequest& request) const {
+        // Mark creation can touch xLights UI state, so it runs through the
+        // owned runtime queue after lightweight request validation.
         const auto trackName = parsing::ReadString(request.params, "track");
         if (trackName.empty()) {
             transport::ApiResponse response; response.command = request.command; response.requestId = request.requestId; response.statusCode = 400;

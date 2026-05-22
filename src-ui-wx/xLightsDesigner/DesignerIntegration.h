@@ -52,6 +52,8 @@ inline std::optional<api::transport::ApiResponse> HandleDesignerApiEndpoint(
     const std::string& requestId);
 
 namespace detail {
+// Integration state is process-local and only activated by explicit
+// xLightsDesigner environment flags.
 inline xLightsFrame*& IntegrationFrame() {
     static xLightsFrame* frame = nullptr;
     return frame;
@@ -89,6 +91,8 @@ inline bool IsDesignerIntegrationEnabled() {
     return IsTruthyFlagValue(std::getenv("XLIGHTS_DESIGNER_ENABLED"));
 }
 
+// Called from xLights startup once the main frame exists. This wires the owned
+// API runtime/listener without changing normal xLights behavior when disabled.
 inline void InitializeDesignerIntegration(xLightsFrame* frame) {
     if (detail::IntegrationInitialized()) {
         return;
@@ -183,6 +187,8 @@ inline xLightsFrame* GetDesignerIntegrationFrame() {
     return detail::IntegrationFrame();
 }
 
+// Builds the service/handler graph for one request. The graph is cheap and
+// request-scoped so callbacks always capture the current xLights frame state.
 inline std::optional<api::transport::ApiResponse> HandleDesignerApiRequest(
     const std::string& command,
     const std::map<std::string, std::string>& params,
@@ -232,8 +238,7 @@ inline std::optional<api::transport::ApiResponse> HandleDesignerApiRequest(
         [host](const api::models::LayoutModelNodesRequest& request) { return host->readLayoutModelNodes(request); },
         [host]() { return host->readLayoutChannelMap(); },
         [host]() { return host->readLayoutSettings(); },
-        [host]() { return host->readLayoutGroupMemberships(); },
-        [host](const api::models::CreateCustomModelRequest& request) { return host->createCustomModel(request); });
+        [host]() { return host->readLayoutGroupMemberships(); });
     api::services::ElementService elementService(
         [host]() { return host->readElements(); },
         [host]() { return host->readDisplayElementOrder(); },

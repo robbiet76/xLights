@@ -6,6 +6,8 @@
 
 namespace xLightsDesigner::api::models {
 
+// Timing models represent visible xLights timing tracks and marks. The app may
+// add owned tracks, but semantic meaning comes from handoff metadata.
 struct TimingTrackSummary {
     std::string name;
     std::string type;
