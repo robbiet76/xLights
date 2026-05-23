@@ -67,13 +67,17 @@ inline std::mutex& DesignerApiListenerMutex() {
 }
 
 inline std::thread& DesignerApiAcceptThread() {
-    static std::thread thread;
-    return thread;
+    // Keep API service threads alive for process lifetime. macOS AppleEvent
+    // termination can reach C++ static cleanup before wx OnExit has joined
+    // every XLD thread; a joinable static std::thread destructor calls
+    // std::terminate. Normal shutdown still joins through StopDesignerApiListener.
+    static auto* thread = new std::thread();
+    return *thread;
 }
 
 inline std::thread& DesignerApiWatchdogThread() {
-    static std::thread watchdog;
-    return watchdog;
+    static auto* watchdog = new std::thread();
+    return *watchdog;
 }
 
 inline std::atomic<bool>& DesignerApiStopRequested() {

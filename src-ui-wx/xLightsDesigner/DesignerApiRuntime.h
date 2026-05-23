@@ -89,8 +89,10 @@ inline std::map<std::string, DesignerApiJobSnapshot>& DesignerApiJobs() {
 }
 
 inline std::thread& DesignerApiWorkerThread() {
-    static std::thread worker;
-    return worker;
+    // See DesignerApiListener.h for why XLD background thread handles are
+    // process-lifetime objects instead of destructible function-local statics.
+    static auto* worker = new std::thread();
+    return *worker;
 }
 
 inline bool& DesignerApiWorkerStopRequested() {
