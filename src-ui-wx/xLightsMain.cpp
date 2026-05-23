@@ -4151,8 +4151,22 @@ void xLightsFrame::CheckUnsavedChanges()
         // to the user what this prompt is for
         Notebook1->SetSelection(LAYOUTTAB);
 
-        if (wxYES == wxMessageBox("Save Models, Views, Perspectives, and Preset changes?",
-                                  "RGB Effects File Changes Confirmation", wxICON_QUESTION | wxYES_NO | wxNO_DEFAULT)) {
+        bool saveRgbEffectsChanges = false;
+        if (xLightsDesigner::ShouldSuppressPrompt()) {
+            saveRgbEffectsChanges = xLightsDesigner::ShouldUseAutosaveBackup();
+            xLightsDesigner::RecordSuppressedDialog(
+                "warning",
+                "CheckUnsavedChanges",
+                "RGB Effects File Changes Confirmation",
+                saveRgbEffectsChanges
+                    ? "RGB effects save prompt was suppressed; saving because modal policy is save."
+                    : "RGB effects save prompt was suppressed; discarding because modal policy is not save.");
+        } else {
+            saveRgbEffectsChanges = wxYES == wxMessageBox("Save Models, Views, Perspectives, and Preset changes?",
+                                                          "RGB Effects File Changes Confirmation", wxICON_QUESTION | wxYES_NO | wxNO_DEFAULT);
+        }
+
+        if (saveRgbEffectsChanges) {
             SaveEffectsFile();
         } else {
             wxFileName effectsFile;
@@ -4170,8 +4184,22 @@ void xLightsFrame::CheckUnsavedChanges()
         // to the user what this prompt is for
         Notebook1->SetSelection(SETUPTAB);
 
-        if (wxYES == wxMessageBox("Save Network Setup changes?",
-                                  "Networks Changes Confirmation", wxICON_QUESTION | wxYES_NO | wxNO_DEFAULT)) {
+        bool saveNetworkChanges = false;
+        if (xLightsDesigner::ShouldSuppressPrompt()) {
+            saveNetworkChanges = xLightsDesigner::ShouldUseAutosaveBackup();
+            xLightsDesigner::RecordSuppressedDialog(
+                "warning",
+                "CheckUnsavedChanges",
+                "Networks Changes Confirmation",
+                saveNetworkChanges
+                    ? "Network setup save prompt was suppressed; saving because modal policy is save."
+                    : "Network setup save prompt was suppressed; discarding because modal policy is not save.");
+        } else {
+            saveNetworkChanges = wxYES == wxMessageBox("Save Network Setup changes?",
+                                                       "Networks Changes Confirmation", wxICON_QUESTION | wxYES_NO | wxNO_DEFAULT);
+        }
+
+        if (saveNetworkChanges) {
             SaveNetworksFile();
         }
     }

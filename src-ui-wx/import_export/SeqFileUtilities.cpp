@@ -56,6 +56,7 @@
 #include "models/DMX/DmxModel.h"
 #include "models/ModelGroup.h"
 #include "sequencer/MainSequencer.h"
+#include "xLightsDesigner/DesignerDiagnostics.h"
 #include "xLightsDesigner/DesignerLaunchPolicy.h"
 
 #include "render/SequencePackage.h"
@@ -1139,11 +1140,24 @@ bool xLightsFrame::CloseSequence()
     }
 
     if (mSavedChangeCount != (unsigned int)_sequenceElements.GetChangeCount() && !_renderMode && !_checkSequenceMode) {
-        SaveChangesDialog* dlg = new SaveChangesDialog(this);
-        if (dlg->ShowModal() == wxID_CANCEL) {
-            return false;
+        bool saveChanges = false;
+        if (xLightsDesigner::ShouldSuppressPrompt()) {
+            saveChanges = xLightsDesigner::ShouldUseAutosaveBackup();
+            xLightsDesigner::RecordSuppressedDialog(
+                "warning",
+                "CloseSequence",
+                "Save Sequence Changes",
+                saveChanges
+                    ? "Sequence close save prompt was suppressed; saving because modal policy is save."
+                    : "Sequence close save prompt was suppressed; discarding because modal policy is not save.");
+        } else {
+            SaveChangesDialog* dlg = new SaveChangesDialog(this);
+            if (dlg->ShowModal() == wxID_CANCEL) {
+                return false;
+            }
+            saveChanges = dlg->GetSaveChanges();
         }
-        if (dlg->GetSaveChanges()) {
+        if (saveChanges) {
             SaveSequence();
             // must wait for the rendering to complete
             while (!_renderEngine->IsRenderDone()) {
