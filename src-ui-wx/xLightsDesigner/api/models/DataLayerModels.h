@@ -43,6 +43,7 @@ struct XldManifestValidationSummary {
     int frameMs = 0;
     int frameCount = 0;
     int channelCount = 0;
+    int maxChannel = 0;
     std::string dataLayerName;
     std::string generatedAt;
 };

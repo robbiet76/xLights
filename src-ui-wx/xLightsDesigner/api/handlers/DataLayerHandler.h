@@ -180,6 +180,7 @@ private:
             {"frameMs", manifest.frameMs},
             {"frameCount", manifest.frameCount},
             {"channelCount", manifest.channelCount},
+            {"maxChannel", manifest.maxChannel},
             {"dataLayerName", manifest.dataLayerName},
             {"generatedAt", manifest.generatedAt}
         };

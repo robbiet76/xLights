@@ -2724,6 +2724,10 @@ private:
         result.frameMs = readManifestInt(manifest, "frameTimeMs");
         result.frameCount = readManifestInt(manifest, "frameCount");
         result.channelCount = readManifestInt(manifest, "channelCount");
+        result.maxChannel = readManifestInt(manifest, "maxChannel");
+        if (result.maxChannel <= 0) {
+            result.maxChannel = result.channelCount;
+        }
         result.dataLayerName = readManifestString(manifest, "dataLayerName");
         result.generatedAt = readManifestString(manifest, "generatedAt");
 
@@ -2760,6 +2764,9 @@ private:
         if (layer.fseq.has_value() && layer.fseq->readable) {
             if (result.channelCount > 0 && layer.fseq->channelCount != result.channelCount) {
                 addXldManifestIssue(result, "xld_manifest_fseq_header_mismatch", "The generated XLD FSEQ channel count does not match the manifest.", true);
+            }
+            if (result.maxChannel > 0 && layer.fseq->maxChannel != result.maxChannel) {
+                addXldManifestIssue(result, "xld_manifest_fseq_header_mismatch", "The generated XLD FSEQ max channel does not match the manifest.", true);
             }
             if (result.frameCount > 0 && layer.fseq->frameCount != result.frameCount) {
                 addXldManifestIssue(result, "xld_manifest_fseq_header_mismatch", "The generated XLD FSEQ frame count does not match the manifest.", true);
