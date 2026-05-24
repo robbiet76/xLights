@@ -1,8 +1,8 @@
 # xLightsDesigner API Current State
 
 Baseline:
-- xLights release tag: `2026.08`
-- xLightsDesigner branch: `xld-2026.08-migration`
+- Built into the active xLights source tree.
+- API identity is capability-based, not tied to a specific xLights release.
 
 ## Architecture
 

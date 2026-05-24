@@ -77,7 +77,7 @@ public:
         transport::ApiResponse response;
         response.command = request.command;
         response.requestId = request.requestId;
-        response.data["apiVersion"] = "2026.08-xld-datalayer-v1";
+        response.data["apiVersion"] = "xld-datalayer-v1";
         response.data["architecture"] = "direct-channel-fseq-datalayer";
         response.data["runtime"] = {
             {"health", true},
