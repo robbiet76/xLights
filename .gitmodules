@@ -9,7 +9,7 @@
 	url = https://github.com/x42/libltc.git
 [submodule "macOS"]
 	path = macOS
-	url = https://github.com/xLightsSequencer/xLights-macOS.git
+	url = git@github.com:robbiet76/xLights-macOS.git
 	branch = main
 [submodule "dependencies/libxlsxwriter"]
 	path = dependencies/libxlsxwriter
