@@ -843,8 +843,12 @@ bool xLightsApp::OnInit()
             spdlog::info("Show directory not set");
         }
         if (xLightsDesigner::ShouldSuppressPrompt()) {
-            spdlog::info("Suppressing xLights main window activation during xLightsDesigner noninteractive launch.");
-            Frame->Show(false);
+            spdlog::info("Showing xLights main window without prompting during xLightsDesigner noninteractive launch.");
+            // Keep a real top-level window alive so macOS does not automatically
+            // terminate the app before the owned API listener is ready. The
+            // launcher is responsible for using LaunchServices no-activate
+            // flags when focus should stay with the caller.
+            Frame->Show();
         } else {
             Frame->Show();
         }
