@@ -47,6 +47,7 @@ struct LayoutSubmodelSummary {
     std::string type;
     std::string bufferStyle;
     std::string lines;
+    std::vector<std::string> nodeIds;
     int startChannel = 0;
     int endChannel = 0;
     int nodeCount = 0;

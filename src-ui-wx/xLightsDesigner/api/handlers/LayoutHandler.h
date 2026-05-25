@@ -163,6 +163,7 @@ public:
                 {"type", submodel.type},
                 {"bufferStyle", submodel.bufferStyle},
                 {"lines", submodel.lines},
+                {"nodeIds", submodel.nodeIds},
                 {"startChannel", submodel.startChannel},
                 {"endChannel", submodel.endChannel},
                 {"nodeCount", submodel.nodeCount},

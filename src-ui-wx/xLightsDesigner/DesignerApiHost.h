@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <functional>
 #include <cstdint>
+#include <unordered_map>
 #include <nlohmann/json.hpp>
 
 #include "FSEQFile.h"
@@ -2047,6 +2048,14 @@ public:
             if (model == nullptr || model->GetDisplayAs() == DisplayAsType::SubModel) {
                 continue;
             }
+            std::unordered_map<int, std::string> parentNodeIdByActChan;
+            parentNodeIdByActChan.reserve(model->GetNodeCount());
+            for (uint32_t parentNodeIndex = 0; parentNodeIndex < model->GetNodeCount(); ++parentNodeIndex) {
+                const auto* parentNode = model->GetNode(parentNodeIndex);
+                if (parentNode != nullptr) {
+                    parentNodeIdByActChan.emplace(parentNode->ActChan, std::to_string(parentNodeIndex + 1));
+                }
+            }
             for (const auto* child : model->GetSubModels()) {
                 const auto* submodel = dynamic_cast<const SubModel*>(child);
                 if (submodel == nullptr) {
@@ -2066,6 +2075,17 @@ public:
                 row.nodeCount = static_cast<int>(submodel->GetNodeCount());
                 row.vertical = submodel->IsVertical();
                 row.ranges = submodel->IsRanges();
+                row.nodeIds.reserve(submodel->GetNodeCount());
+                for (uint32_t submodelNodeIndex = 0; submodelNodeIndex < submodel->GetNodeCount(); ++submodelNodeIndex) {
+                    const auto* submodelNode = submodel->GetNode(submodelNodeIndex);
+                    if (submodelNode == nullptr) {
+                        continue;
+                    }
+                    auto parentNodeId = parentNodeIdByActChan.find(submodelNode->ActChan);
+                    if (parentNodeId != parentNodeIdByActChan.end()) {
+                        row.nodeIds.push_back(parentNodeId->second);
+                    }
+                }
                 summary.submodels.push_back(std::move(row));
             }
         }
