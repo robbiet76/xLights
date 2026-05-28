@@ -231,7 +231,8 @@ inline std::optional<api::transport::ApiResponse> HandleDesignerApiRequest(
         [host](const api::models::MediaShowDirectoryRequest& request) { return host->setShowDirectory(request); },
         [host](const api::models::MediaShowDirectoryRequest& request) { return host->requestShowDirectoryAccess(request); },
         [host](const api::models::MediaPathAccessValidationRequest& request) { return host->validateMediaPathAccess(request); },
-        [host]() { return host->readAudioCapabilities(); });
+        [host]() { return host->readAudioCapabilities(); },
+        [host]() { return host->analyzeAudio(); });
     api::services::LayoutService layoutService(
         [host]() { return host->readLayoutModels(); },
         [host]() { return host->readLayoutSubmodels(); },

@@ -55,6 +55,7 @@ public:
         if (method == "POST" && path == "/xlightsdesigner/api/media/request-show-directory-access") return "media.requestShowDirectoryAccess";
         if (method == "POST" && path == "/xlightsdesigner/api/media/paths/validate-access") return "media.validatePathAccess";
         if (method == "GET" && path == "/xlightsdesigner/api/media/audio/capabilities") return "media.audio.getCapabilities";
+        if (method == "POST" && path == "/xlightsdesigner/api/media/audio/analyze") return "media.audio.analyze";
 
         // Layout endpoints are read-only display discovery for generation.
         if (method == "GET" && path == "/xlightsdesigner/api/layout/models") return "layout.getModels";

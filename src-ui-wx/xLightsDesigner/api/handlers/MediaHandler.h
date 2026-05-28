@@ -27,6 +27,9 @@ public:
         response.data["sequencePath"] = summary.sequencePath.value_or("");
         response.data["mediaFile"] = summary.mediaFile.value_or("");
         response.data["showDirectory"] = summary.showDirectory.value_or("");
+        if (summary.durationMs.has_value()) response.data["durationMs"] = summary.durationMs.value();
+        if (summary.sampleRate.has_value()) response.data["sampleRate"] = summary.sampleRate.value();
+        if (summary.channelCount.has_value()) response.data["channelCount"] = summary.channelCount.value();
         return response;
     }
 
@@ -149,6 +152,74 @@ public:
                 {"reason", capability.reason}
             });
         }
+        response.data["warnings"] = nlohmann::json::array();
+        for (const auto& warning : summary.warnings) {
+            response.data["warnings"].push_back(warning);
+        }
+        return response;
+    }
+
+    [[nodiscard]] transport::ApiResponse handleAnalyzeAudio(const transport::ApiRequest& request) const {
+        transport::ApiResponse response;
+        response.command = request.command;
+        response.requestId = request.requestId;
+
+        const auto summary = _service.analyzeAudio();
+        if (!summary.sequenceOpen) {
+            response.statusCode = 409;
+            response.error = transport::ApiError{"NO_SEQUENCE_OPEN", "Open a sequence with media before running xLights audio analysis.", nlohmann::json::object()};
+            return response;
+        }
+        if (!summary.mediaAvailable) {
+            response.statusCode = 409;
+            response.error = transport::ApiError{"NO_MEDIA_AVAILABLE", "The current sequence does not have readable media for xLights audio analysis.", nlohmann::json::object()};
+            return response;
+        }
+
+        response.data["sequenceOpen"] = summary.sequenceOpen;
+        response.data["mediaAvailable"] = summary.mediaAvailable;
+        response.data["sequencePath"] = summary.sequencePath.value_or("");
+        response.data["mediaFile"] = summary.mediaFile.value_or("");
+        response.data["mediaHash"] = summary.mediaHash.value_or("");
+        if (summary.durationMs.has_value()) response.data["durationMs"] = summary.durationMs.value();
+        if (summary.sampleRate.has_value()) response.data["sampleRate"] = summary.sampleRate.value();
+        if (summary.channelCount.has_value()) response.data["channelCount"] = summary.channelCount.value();
+
+        response.data["timingTracks"] = nlohmann::json::array();
+        for (const auto& track : summary.timingTracks) {
+            nlohmann::json marks = nlohmann::json::array();
+            for (const auto& mark : track.marks) {
+                nlohmann::json row = {
+                    {"startMs", mark.startMs},
+                    {"label", mark.label},
+                    {"markType", mark.markType}
+                };
+                if (mark.endMs.has_value()) row["endMs"] = mark.endMs.value();
+                if (mark.confidence.has_value()) row["confidence"] = mark.confidence.value();
+                marks.push_back(row);
+            }
+            nlohmann::json row = {
+                {"trackName", track.trackName},
+                {"trackType", track.trackType},
+                {"description", track.description},
+                {"timingGranularity", track.timingGranularity},
+                {"marks", marks}
+            };
+            if (track.confidence.has_value()) row["confidence"] = track.confidence.value();
+            response.data["timingTracks"].push_back(row);
+        }
+
+        response.data["analysisEvidence"] = nlohmann::json::array();
+        for (const auto& evidence : summary.evidence) {
+            nlohmann::json row = {
+                {"evidenceType", evidence.evidenceType},
+                {"description", evidence.description},
+                {"summary", evidence.summary}
+            };
+            if (evidence.confidence.has_value()) row["confidence"] = evidence.confidence.value();
+            response.data["analysisEvidence"].push_back(row);
+        }
+
         response.data["warnings"] = nlohmann::json::array();
         for (const auto& warning : summary.warnings) {
             response.data["warnings"].push_back(warning);

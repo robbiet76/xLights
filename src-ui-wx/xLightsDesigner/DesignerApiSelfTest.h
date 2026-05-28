@@ -65,6 +65,8 @@ inline DesignerApiSelfTestResult RunDesignerApiSelfTests() {
               "EndpointRouter should map media path access validation endpoint.", result);
         Check(router.resolve("GET", "/xlightsdesigner/api/media/audio/capabilities") == std::optional<std::string>("media.audio.getCapabilities"),
               "EndpointRouter should map media audio capabilities endpoint.", result);
+        Check(router.resolve("POST", "/xlightsdesigner/api/media/audio/analyze") == std::optional<std::string>("media.audio.analyze"),
+              "EndpointRouter should map media audio analysis endpoint.", result);
         Check(!router.resolve("POST", "/xlightsdesigner/api/layout/models/custom").has_value(),
               "EndpointRouter should not expose layout model creation endpoints.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/sequence/settings") == std::optional<std::string>("sequence.setSettings"),

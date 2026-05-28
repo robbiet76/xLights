@@ -22,6 +22,9 @@
 
 #include "FSEQFile.h"
 #include "AudioManager.h"
+#include "media/ChordDetector.h"
+#include "media/OnsetDetector.h"
+#include "media/TempoDetector.h"
 #include "SequenceFile.h"
 #include "xLightsMain.h"
 #include "diagnostics/CheckSequenceReport.h"
@@ -1641,7 +1644,17 @@ public:
 
         summary.sequenceOpen = true;
         summary.sequencePath = _frame->CurrentSeqXmlFile->GetFullPath();
-        summary.mediaFile = _frame->CurrentSeqXmlFile->GetMediaFile();
+        wxFileName mediaName(_frame->CurrentSeqXmlFile->GetMediaFile());
+        if (!mediaName.GetFullPath().empty() && !mediaName.IsAbsolute() && !_frame->CurrentDir.empty()) {
+            mediaName.MakeAbsolute(_frame->CurrentDir);
+        }
+        summary.mediaFile = mediaName.GetFullPath().ToStdString();
+        summary.durationMs = static_cast<int>(_frame->CurrentSeqXmlFile->GetSequenceDurationMS());
+        if (auto* media = _frame->CurrentSeqXmlFile->GetMedia(); media != nullptr && media->IsOk()) {
+            summary.durationMs = static_cast<int>(media->LengthMS());
+            summary.sampleRate = static_cast<int>(media->GetRate());
+            summary.channelCount = media->GetChannels();
+        }
         return summary;
     }
 
@@ -1757,10 +1770,164 @@ public:
             summary.warnings.push_back("No sequence is open.");
         }
 
+        const bool mediaLoaded = _frame->CurrentSeqXmlFile != nullptr &&
+            _frame->CurrentSeqXmlFile->GetMedia() != nullptr &&
+            _frame->CurrentSeqXmlFile->GetMedia()->IsOk();
         summary.capabilities.push_back({"mediaReference", summary.mediaAvailable, "xLights", summary.mediaAvailable ? "Current sequence media file is available." : "Current sequence media file is not available."});
         summary.capabilities.push_back({"waveform", false, "xLights", "Owned API waveform extraction is not implemented in this contract slice."});
         summary.capabilities.push_back({"timingTracks", true, "xLights", "Timing tracks are exposed through the timing API."});
-        summary.capabilities.push_back({"audioAnalysisHandoff", false, "xLightsDesigner", "Audio analysis handoff execution remains app-side work and is intentionally deferred."});
+        summary.capabilities.push_back({"audioOnsets", mediaLoaded, "xLights", mediaLoaded ? "Spectral-flux onset detection is available for the current audio." : "Current sequence audio is not loaded."});
+        summary.capabilities.push_back({"audioTempo", mediaLoaded, "xLights", mediaLoaded ? "Autocorrelation tempo detection is available for the current audio." : "Current sequence audio is not loaded."});
+        summary.capabilities.push_back({"audioChords", mediaLoaded, "xLights", mediaLoaded ? "Chromagram chord/key detection is available for the current audio." : "Current sequence audio is not loaded."});
+        summary.capabilities.push_back({"audioAnalysisHandoff", mediaLoaded, "xLightsDesigner", mediaLoaded ? "Owned API can return normalized xLights audio-analysis tracks." : "Open a sequence with loaded audio before running analysis."});
+        return summary;
+    }
+
+    [[nodiscard]] api::models::MediaAudioAnalysisSummary analyzeAudio() const {
+        api::models::MediaAudioAnalysisSummary summary;
+        if (_frame == nullptr) {
+            summary.warnings.push_back("xLights frame is not available.");
+            return summary;
+        }
+        if (_frame->CurrentSeqXmlFile == nullptr) {
+            summary.warnings.push_back("No sequence is open.");
+            return summary;
+        }
+
+        summary.sequenceOpen = true;
+        summary.sequencePath = _frame->CurrentSeqXmlFile->GetFullPath();
+        wxFileName mediaName(_frame->CurrentSeqXmlFile->GetMediaFile());
+        if (!mediaName.GetFullPath().empty() && !mediaName.IsAbsolute() && !_frame->CurrentDir.empty()) {
+            mediaName.MakeAbsolute(_frame->CurrentDir);
+        }
+        summary.mediaFile = mediaName.GetFullPath().ToStdString();
+        summary.mediaAvailable = mediaName.FileExists();
+        summary.durationMs = static_cast<int>(_frame->CurrentSeqXmlFile->GetSequenceDurationMS());
+
+        AudioManager* media = _frame->CurrentSeqXmlFile->GetMedia();
+        if (media == nullptr || !media->IsOk()) {
+            summary.mediaAvailable = false;
+            summary.warnings.push_back("The current sequence audio is not loaded.");
+            return summary;
+        }
+
+        const int lengthMs = static_cast<int>(std::max<long>(0, media->LengthMS()));
+        summary.mediaAvailable = true;
+        summary.mediaHash = media->Hash();
+        summary.durationMs = lengthMs;
+        summary.sampleRate = static_cast<int>(media->GetRate());
+        summary.channelCount = media->GetChannels();
+
+        std::vector<long> onsets = DetectOnsets(media);
+        if (onsets.empty()) {
+            summary.warnings.push_back("xLights Audio Onsets did not find usable onset marks.");
+        } else {
+            api::models::MediaAudioAnalysisTrack track;
+            track.trackName = "xLights Audio Onsets";
+            track.trackType = "onsets";
+            track.description = "xLights spectral-flux onset detection. Track name is a display label only; the description defines its meaning.";
+            track.timingGranularity = "percussive-onset-region";
+            track.confidence = 0.72;
+            for (size_t i = 0; i < onsets.size(); i++) {
+                const long start = std::clamp<long>(onsets[i], 0, lengthMs);
+                const long end = (i + 1 < onsets.size()) ? std::clamp<long>(onsets[i + 1], 0, lengthMs) : lengthMs;
+                if (end <= start) {
+                    continue;
+                }
+                track.marks.push_back({
+                    static_cast<int>(start),
+                    static_cast<int>(end),
+                    std::to_string(i + 1),
+                    0.72,
+                    "onset"
+                });
+            }
+            summary.timingTracks.push_back(std::move(track));
+        }
+
+        TempoResult tempo = DetectTempo(media);
+        if (tempo.beatMS.empty() || tempo.bpm <= 0) {
+            summary.warnings.push_back("xLights Audio Tempo did not find a usable beat grid.");
+        } else {
+            api::models::MediaAudioAnalysisTrack track;
+            track.trackName = wxString::Format("xLights Audio Tempo %.1f BPM", tempo.bpm).ToStdString();
+            track.trackType = "tempo";
+            track.description = "xLights tempo detection from autocorrelation of the onset envelope. Marks are beat-to-beat regions.";
+            track.timingGranularity = "beat-region";
+            track.confidence = tempo.confidence;
+            for (size_t i = 0; i < tempo.beatMS.size(); i++) {
+                const long start = std::clamp<long>(tempo.beatMS[i], 0, lengthMs);
+                const long end = (i + 1 < tempo.beatMS.size()) ? std::clamp<long>(tempo.beatMS[i + 1], 0, lengthMs) : lengthMs;
+                if (end <= start) {
+                    continue;
+                }
+                track.marks.push_back({
+                    static_cast<int>(start),
+                    static_cast<int>(end),
+                    std::to_string(i + 1),
+                    tempo.confidence,
+                    "beat"
+                });
+            }
+            summary.timingTracks.push_back(std::move(track));
+            summary.evidence.push_back({
+                "tempo",
+                "xLights detected tempo using onset-envelope autocorrelation.",
+                tempo.confidence,
+                {
+                    {"bpm", wxString::Format("%.2f", tempo.bpm).ToStdString()},
+                    {"beatCount", std::to_string(tempo.beatMS.size())}
+                }
+            });
+        }
+
+        HarmonyAnalysis harmony = DetectChords(media);
+        if (harmony.chords.empty()) {
+            summary.warnings.push_back("xLights Audio Chords did not find usable chord segments.");
+        } else {
+            api::models::MediaAudioAnalysisTrack track;
+            track.trackName = harmony.key.empty() ? "xLights Audio Chords" : std::string("xLights Audio Chords in ") + harmony.key;
+            track.trackType = "chords";
+            track.description = "xLights chromagram chord and key detection. Labels are detected chord names for harmonic color and mood planning.";
+            track.timingGranularity = "chord-segment";
+            track.confidence = 0.68;
+            for (const auto& chord : harmony.chords) {
+                const long start = std::clamp<long>(chord.startMS, 0, lengthMs);
+                const long end = std::clamp<long>(chord.endMS, 0, lengthMs);
+                if (end <= start) {
+                    continue;
+                }
+                track.marks.push_back({
+                    static_cast<int>(start),
+                    static_cast<int>(end),
+                    chord.name,
+                    0.68,
+                    "chord"
+                });
+            }
+            summary.timingTracks.push_back(std::move(track));
+            summary.evidence.push_back({
+                "harmony",
+                "xLights detected key and chord segments using chromagram analysis.",
+                0.68,
+                {
+                    {"detectedKey", harmony.key.empty() ? "unknown" : harmony.key},
+                    {"chordSegmentCount", std::to_string(harmony.chords.size())}
+                }
+            });
+        }
+
+        summary.evidence.push_back({
+            "mediaIdentity",
+            "Current xLights sequence media identity used for audio-analysis provenance.",
+            0.9,
+            {
+                {"durationMs", std::to_string(lengthMs)},
+                {"sampleRate", std::to_string(media->GetRate())},
+                {"channelCount", std::to_string(media->GetChannels())},
+                {"mediaHash", summary.mediaHash.value_or("")}
+            }
+        });
         return summary;
     }
 

@@ -78,6 +78,7 @@ public:
         if (request.command == "media.requestShowDirectoryAccess") return _mediaHandler.handleRequestShowDirectoryAccess(request);
         if (request.command == "media.validatePathAccess") return _mediaHandler.handleValidatePathAccess(request);
         if (request.command == "media.audio.getCapabilities") return _mediaHandler.handleGetAudioCapabilities(request);
+        if (request.command == "media.audio.analyze") return _mediaHandler.handleAnalyzeAudio(request);
 
         // Read-only layout/display structure.
         if (request.command == "layout.getModels") return _layoutHandler.handleGetModels(request);

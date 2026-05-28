@@ -3,6 +3,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <map>
 
 namespace xLightsDesigner::api::models {
 
@@ -13,6 +14,9 @@ struct MediaSummary {
     std::optional<std::string> sequencePath;
     std::optional<std::string> mediaFile;
     std::optional<std::string> showDirectory;
+    std::optional<int> durationMs;
+    std::optional<int> sampleRate;
+    std::optional<int> channelCount;
 };
 
 struct MediaDirectoriesSummary {
@@ -77,6 +81,44 @@ struct MediaAudioCapabilitiesSummary {
     bool mediaAvailable = false;
     std::optional<std::string> mediaFile;
     std::vector<MediaAudioCapability> capabilities;
+    std::vector<std::string> warnings;
+};
+
+struct MediaAudioAnalysisMark {
+    int startMs = 0;
+    std::optional<int> endMs;
+    std::string label;
+    std::optional<double> confidence;
+    std::string markType;
+};
+
+struct MediaAudioAnalysisTrack {
+    std::string trackName;
+    std::string trackType;
+    std::string description;
+    std::string timingGranularity;
+    std::optional<double> confidence;
+    std::vector<MediaAudioAnalysisMark> marks;
+};
+
+struct MediaAudioAnalysisEvidence {
+    std::string evidenceType;
+    std::string description;
+    std::optional<double> confidence;
+    std::map<std::string, std::string> summary;
+};
+
+struct MediaAudioAnalysisSummary {
+    bool sequenceOpen = false;
+    bool mediaAvailable = false;
+    std::optional<std::string> sequencePath;
+    std::optional<std::string> mediaFile;
+    std::optional<std::string> mediaHash;
+    std::optional<int> durationMs;
+    std::optional<int> sampleRate;
+    std::optional<int> channelCount;
+    std::vector<MediaAudioAnalysisTrack> timingTracks;
+    std::vector<MediaAudioAnalysisEvidence> evidence;
     std::vector<std::string> warnings;
 };
 

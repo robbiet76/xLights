@@ -96,7 +96,7 @@ public:
             {"directories", true},
             {"pathAccessValidation", true},
             {"audioCapabilityDiscovery", true},
-            {"audioAnalysisExecution", false}
+            {"audioAnalysisExecution", true}
         };
         response.data["layout"] = {
             {"models", true},

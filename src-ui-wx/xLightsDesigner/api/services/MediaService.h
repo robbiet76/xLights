@@ -17,19 +17,22 @@ public:
     using RequestShowDirectoryAccessFn = std::function<models::MediaShowDirectoryResult(const models::MediaShowDirectoryRequest&)>;
     using ValidatePathAccessFn = std::function<models::MediaPathAccessValidationResult(const models::MediaPathAccessValidationRequest&)>;
     using ReadAudioCapabilitiesFn = std::function<models::MediaAudioCapabilitiesSummary()>;
+    using AnalyzeAudioFn = std::function<models::MediaAudioAnalysisSummary()>;
 
     MediaService(ReadCurrentMediaFn readCurrentMedia,
                  ReadMediaDirectoriesFn readMediaDirectories,
                  SetShowDirectoryFn setShowDirectory,
                  RequestShowDirectoryAccessFn requestShowDirectoryAccess,
                  ValidatePathAccessFn validatePathAccess,
-                 ReadAudioCapabilitiesFn readAudioCapabilities)
+                 ReadAudioCapabilitiesFn readAudioCapabilities,
+                 AnalyzeAudioFn analyzeAudio)
         : _readCurrentMedia(std::move(readCurrentMedia)),
           _readMediaDirectories(std::move(readMediaDirectories)),
           _setShowDirectory(std::move(setShowDirectory)),
           _requestShowDirectoryAccess(std::move(requestShowDirectoryAccess)),
           _validatePathAccess(std::move(validatePathAccess)),
-          _readAudioCapabilities(std::move(readAudioCapabilities)) {}
+          _readAudioCapabilities(std::move(readAudioCapabilities)),
+          _analyzeAudio(std::move(analyzeAudio)) {}
 
     [[nodiscard]] models::MediaSummary getCurrent() const {
         return _readCurrentMedia ? _readCurrentMedia() : models::MediaSummary{};
@@ -55,6 +58,10 @@ public:
         return _readAudioCapabilities ? _readAudioCapabilities() : models::MediaAudioCapabilitiesSummary{};
     }
 
+    [[nodiscard]] models::MediaAudioAnalysisSummary analyzeAudio() const {
+        return _analyzeAudio ? _analyzeAudio() : models::MediaAudioAnalysisSummary{};
+    }
+
 private:
     ReadCurrentMediaFn _readCurrentMedia;
     ReadMediaDirectoriesFn _readMediaDirectories;
@@ -62,6 +69,7 @@ private:
     RequestShowDirectoryAccessFn _requestShowDirectoryAccess;
     ValidatePathAccessFn _validatePathAccess;
     ReadAudioCapabilitiesFn _readAudioCapabilities;
+    AnalyzeAudioFn _analyzeAudio;
 };
 
 } // namespace xLightsDesigner::api::services
