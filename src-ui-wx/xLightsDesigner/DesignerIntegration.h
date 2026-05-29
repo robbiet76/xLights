@@ -237,6 +237,7 @@ inline std::optional<api::transport::ApiResponse> HandleDesignerApiRequest(
         [host]() { return host->readLayoutModels(); },
         [host]() { return host->readLayoutSubmodels(); },
         [host](const api::models::LayoutModelNodesRequest& request) { return host->readLayoutModelNodes(request); },
+        [host](const api::models::LayoutRenderBufferNodesRequest& request) { return host->readLayoutRenderBufferNodes(request); },
         [host]() { return host->readLayoutChannelMap(); },
         [host]() { return host->readLayoutSettings(); },
         [host]() { return host->readLayoutGroupMemberships(); });

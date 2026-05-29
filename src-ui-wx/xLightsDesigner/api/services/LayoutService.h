@@ -14,18 +14,21 @@ public:
     using ReadModelsFn = std::function<models::LayoutModelsSummary()>;
     using ReadSubmodelsFn = std::function<models::LayoutSubmodelsSummary()>;
     using ReadModelNodesFn = std::function<models::LayoutModelNodesSummary(const models::LayoutModelNodesRequest&)>;
+    using ReadRenderBufferNodesFn = std::function<models::LayoutRenderBufferNodesSummary(const models::LayoutRenderBufferNodesRequest&)>;
     using ReadChannelMapFn = std::function<models::LayoutChannelMapSummary()>;
     using ReadSettingsFn = std::function<models::LayoutSettingsSummary()>;
     using ReadGroupMembershipsFn = std::function<models::LayoutGroupMembershipsSummary()>;
     LayoutService(ReadModelsFn readModels,
                   ReadSubmodelsFn readSubmodels,
                   ReadModelNodesFn readModelNodes,
+                  ReadRenderBufferNodesFn readRenderBufferNodes,
                   ReadChannelMapFn readChannelMap,
                   ReadSettingsFn readSettings,
                   ReadGroupMembershipsFn readGroupMemberships)
         : _readModels(std::move(readModels)),
           _readSubmodels(std::move(readSubmodels)),
           _readModelNodes(std::move(readModelNodes)),
+          _readRenderBufferNodes(std::move(readRenderBufferNodes)),
           _readChannelMap(std::move(readChannelMap)),
           _readSettings(std::move(readSettings)),
           _readGroupMemberships(std::move(readGroupMemberships)) {}
@@ -46,6 +49,10 @@ public:
         return _readModelNodes ? _readModelNodes(request) : models::LayoutModelNodesSummary{};
     }
 
+    [[nodiscard]] models::LayoutRenderBufferNodesSummary getRenderBufferNodes(const models::LayoutRenderBufferNodesRequest& request) const {
+        return _readRenderBufferNodes ? _readRenderBufferNodes(request) : models::LayoutRenderBufferNodesSummary{};
+    }
+
     [[nodiscard]] models::LayoutChannelMapSummary getChannelMap() const {
         return _readChannelMap ? _readChannelMap() : models::LayoutChannelMapSummary{};
     }
@@ -58,6 +65,7 @@ private:
     ReadModelsFn _readModels;
     ReadSubmodelsFn _readSubmodels;
     ReadModelNodesFn _readModelNodes;
+    ReadRenderBufferNodesFn _readRenderBufferNodes;
     ReadChannelMapFn _readChannelMap;
     ReadSettingsFn _readSettings;
     ReadGroupMembershipsFn _readGroupMemberships;

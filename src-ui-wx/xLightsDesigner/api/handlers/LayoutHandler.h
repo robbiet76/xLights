@@ -48,7 +48,8 @@ public:
                 {"scaleZ", model.scaleZ},
                 {"renderWidth", model.renderWidth},
                 {"renderHeight", model.renderHeight},
-                {"renderDepth", model.renderDepth}
+                {"renderDepth", model.renderDepth},
+                {"supportedRenderStyles", model.supportedRenderStyles}
             });
         }
         return response;
@@ -164,12 +165,24 @@ public:
                 {"bufferStyle", submodel.bufferStyle},
                 {"lines", submodel.lines},
                 {"nodeIds", submodel.nodeIds},
+                {"nodeRows", nlohmann::json::array()},
+                {"supportedRenderStyles", submodel.supportedRenderStyles},
                 {"startChannel", submodel.startChannel},
                 {"endChannel", submodel.endChannel},
                 {"nodeCount", submodel.nodeCount},
                 {"vertical", submodel.vertical},
                 {"ranges", submodel.ranges}
             });
+            auto& jsonSubmodel = response.data["submodels"].back();
+            for (const auto& row : submodel.nodeRows) {
+                jsonSubmodel["nodeRows"].push_back({
+                    {"rowId", row.rowId},
+                    {"label", row.label},
+                    {"rawLine", row.rawLine},
+                    {"order", row.order},
+                    {"nodeIds", row.nodeIds}
+                });
+            }
         }
         return response;
     }
@@ -239,6 +252,73 @@ public:
                         {"x", *coord.screenX},
                         {"y", *coord.screenY},
                         {"z", *coord.screenZ}
+                    };
+                }
+                nodeJson["coords"].push_back(std::move(coordJson));
+            }
+            response.data["nodes"].push_back(std::move(nodeJson));
+        }
+        return response;
+    }
+
+    [[nodiscard]] transport::ApiResponse handleGetRenderBufferNodes(const transport::ApiRequest& request) const {
+        transport::ApiResponse response;
+        response.command = request.command;
+        response.requestId = request.requestId;
+
+        // Render-buffer coordinates are materialized by xLights for the exact
+        // style/camera/transform tuple the render board will use.
+        models::LayoutRenderBufferNodesRequest nodesRequest;
+        nodesRequest.targetName = parsing::ReadString(request.params, "target", parsing::ReadString(request.params, "name"));
+        nodesRequest.renderStyle = parsing::ReadString(request.params, "renderStyle", "Default");
+        nodesRequest.camera = parsing::ReadString(request.params, "camera", "2D");
+        nodesRequest.transform = parsing::ReadString(request.params, "transform", "None");
+        nodesRequest.stagger = parsing::ReadInt(request.params, "stagger", 0);
+        nodesRequest.deep = parsing::ReadBool(request.params, "deep", false);
+
+        if (nodesRequest.targetName.empty()) {
+            response.statusCode = 400;
+            response.error = transport::ApiError{"BAD_REQUEST", "layout.getRenderBufferNodes requires target.", nlohmann::json::object()};
+            return response;
+        }
+
+        const auto summary = _service.getRenderBufferNodes(nodesRequest);
+        if (!summary.found) {
+            response.statusCode = 404;
+            response.error = transport::ApiError{"TARGET_NOT_FOUND", "Layout target not found.", nlohmann::json{{"target", nodesRequest.targetName}}};
+            return response;
+        }
+
+        response.data["targetName"] = summary.targetName;
+        response.data["requestedRenderStyle"] = summary.requestedRenderStyle;
+        response.data["adjustedRenderStyle"] = summary.adjustedRenderStyle;
+        response.data["camera"] = summary.camera;
+        response.data["transform"] = summary.transform;
+        response.data["stagger"] = summary.stagger;
+        response.data["deep"] = summary.deep;
+        response.data["bufferWidth"] = summary.bufferWidth;
+        response.data["bufferHeight"] = summary.bufferHeight;
+        response.data["supportedRenderStyles"] = summary.supportedRenderStyles;
+        response.data["warnings"] = summary.warnings;
+        response.data["nodes"] = nlohmann::json::array();
+        for (const auto& node : summary.nodes) {
+            nlohmann::json nodeJson{
+                {"nodeId", node.nodeId},
+                {"nodeIndex", node.nodeIndex},
+                {"stringIndex", node.stringIndex},
+                {"name", node.name},
+                {"parentModelName", node.parentModelName},
+                {"channelStart", node.channelStart},
+                {"channelStartZeroBased", node.channelStartZeroBased},
+                {"channelCount", node.channelCount},
+                {"coords", nlohmann::json::array()}
+            };
+            for (const auto& coord : node.coords) {
+                nlohmann::json coordJson = nlohmann::json::object();
+                if (coord.bufferX.has_value() && coord.bufferY.has_value()) {
+                    coordJson["buffer"] = {
+                        {"x", *coord.bufferX},
+                        {"y", *coord.bufferY}
                     };
                 }
                 nodeJson["coords"].push_back(std::move(coordJson));

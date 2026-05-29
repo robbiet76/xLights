@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <set>
 #include <cstdlib>
+#include <cctype>
 #include <functional>
 #include <cstdint>
 #include <unordered_map>
@@ -84,6 +85,53 @@ inline int ReadDesignerApiEnvIntMs(const char* name, int fallbackMs, int minimum
         }
     }
     return fallbackMs;
+}
+
+inline std::string TrimDesignerApiToken(std::string value) {
+    value.erase(value.begin(), std::find_if(value.begin(), value.end(), [](unsigned char ch) {
+        return !std::isspace(ch);
+    }));
+    value.erase(std::find_if(value.rbegin(), value.rend(), [](unsigned char ch) {
+        return !std::isspace(ch);
+    }).base(), value.end());
+    return value;
+}
+
+inline std::vector<std::string> MaterializeDesignerSubmodelLine(const Model* parent, const std::string& line) {
+    std::vector<std::string> nodeIds;
+    if (parent == nullptr) {
+        return nodeIds;
+    }
+    std::stringstream stream(line);
+    std::string token;
+    while (std::getline(stream, token, ',')) {
+        token = TrimDesignerApiToken(token);
+        if (token.empty()) {
+            continue;
+        }
+        const auto dash = token.find('-');
+        int start = 0;
+        int end = 0;
+        if (dash == std::string::npos) {
+            start = end = std::atoi(token.c_str());
+        } else {
+            start = std::atoi(token.substr(0, dash).c_str());
+            end = std::atoi(token.substr(dash + 1).c_str());
+        }
+        if (start <= 0 || end <= 0) {
+            continue;
+        }
+        const int step = start <= end ? 1 : -1;
+        for (int nodeId = start;; nodeId += step) {
+            if (nodeId <= static_cast<int>(parent->GetNodeCount())) {
+                nodeIds.push_back(std::to_string(nodeId));
+            }
+            if (nodeId == end) {
+                break;
+            }
+        }
+    }
+    return nodeIds;
 }
 
 inline std::string BuildDesignerSequenceRevisionToken(xLightsFrame* frame) {
@@ -2199,6 +2247,7 @@ public:
             modelSummary.renderWidth = static_cast<double>(location.GetRenderWi());
             modelSummary.renderHeight = static_cast<double>(location.GetRenderHt());
             modelSummary.renderDepth = static_cast<double>(location.GetRenderDp());
+            modelSummary.supportedRenderStyles = model->GetBufferStyles();
             summary.models.push_back(std::move(modelSummary));
         }
         return summary;
@@ -2237,11 +2286,24 @@ public:
                 row.type = submodel->GetSubModelType();
                 row.bufferStyle = submodel->GetSubModelBufferStyle();
                 row.lines = submodel->GetSubModelLines();
+                row.supportedRenderStyles = submodel->GetBufferStyles();
                 row.startChannel = static_cast<int>(submodel->GetFirstChannel()) + 1;
                 row.endChannel = static_cast<int>(submodel->GetLastChannel()) + 1;
                 row.nodeCount = static_cast<int>(submodel->GetNodeCount());
                 row.vertical = submodel->IsVertical();
                 row.ranges = submodel->IsRanges();
+                row.nodeRows.reserve(static_cast<size_t>(submodel->GetNumRanges()));
+                for (int rangeIndex = 0; rangeIndex < submodel->GetNumRanges(); ++rangeIndex) {
+                    api::models::LayoutSubmodelRowSummary nodeRow;
+                    nodeRow.order = rangeIndex;
+                    nodeRow.rowId = "row-" + std::to_string(rangeIndex + 1);
+                    nodeRow.label = "Row " + std::to_string(rangeIndex + 1);
+                    nodeRow.rawLine = submodel->GetRange(rangeIndex);
+                    nodeRow.nodeIds = detail::MaterializeDesignerSubmodelLine(model, nodeRow.rawLine);
+                    if (!nodeRow.nodeIds.empty()) {
+                        row.nodeRows.push_back(std::move(nodeRow));
+                    }
+                }
                 row.nodeIds.reserve(submodel->GetNodeCount());
                 for (uint32_t submodelNodeIndex = 0; submodelNodeIndex < submodel->GetNodeCount(); ++submodelNodeIndex) {
                     const auto* submodelNode = submodel->GetNode(submodelNodeIndex);
@@ -2315,6 +2377,132 @@ public:
             summary.nodes.push_back(std::move(row));
         }
 
+        return summary;
+    }
+
+    [[nodiscard]] api::models::LayoutRenderBufferNodesSummary readLayoutRenderBufferNodes(const api::models::LayoutRenderBufferNodesRequest& request) const {
+        api::models::LayoutRenderBufferNodesSummary summary;
+        summary.targetName = request.targetName;
+        summary.requestedRenderStyle = request.renderStyle.empty() ? "Default" : request.renderStyle;
+        summary.camera = request.camera.empty() ? "2D" : request.camera;
+        summary.transform = request.transform.empty() ? "None" : request.transform;
+        summary.stagger = request.stagger;
+        summary.deep = request.deep;
+        if (_frame == nullptr || request.targetName.empty()) {
+            return summary;
+        }
+
+        auto* target = _frame->AllModels.GetModel(request.targetName);
+        if (target == nullptr) {
+            return summary;
+        }
+
+        summary.found = true;
+        summary.targetName = target->GetFullName();
+        summary.supportedRenderStyles = target->GetBufferStyles();
+        summary.adjustedRenderStyle = target->AdjustBufferStyle(summary.requestedRenderStyle);
+        if (summary.adjustedRenderStyle != summary.requestedRenderStyle) {
+            summary.warnings.push_back("Requested render style was adjusted by xLights for this target.");
+        }
+
+        std::vector<NodeBaseClassPtr> renderNodes;
+        target->InitRenderBufferNodes(summary.adjustedRenderStyle,
+                                      summary.camera,
+                                      summary.transform,
+                                      renderNodes,
+                                      summary.bufferWidth,
+                                      summary.bufferHeight,
+                                      summary.stagger,
+                                      summary.deep);
+        if (renderNodes.empty()) {
+            summary.warnings.push_back("xLights materialized no render-buffer nodes for this target/style.");
+            return summary;
+        }
+
+        auto resolveNode = [this, target](const NodeBaseClass* node, size_t fallbackIndex) {
+            struct ResolvedNode {
+                const Model* model = nullptr;
+                uint32_t index = 0;
+                bool matched = false;
+            };
+            ResolvedNode result;
+            if (node == nullptr || _frame == nullptr) {
+                return result;
+            }
+            auto matchesNode = [node](const NodeBaseClass* candidate) {
+                return candidate != nullptr
+                    && candidate->ActChan == node->ActChan
+                    && candidate->GetChanCount() == node->GetChanCount();
+            };
+            auto findInModel = [&](const Model* model) {
+                if (model == nullptr) {
+                    return false;
+                }
+                for (uint32_t nodeIndex = 0; nodeIndex < model->GetNodeCount(); ++nodeIndex) {
+                    if (matchesNode(model->GetNode(nodeIndex))) {
+                        result.model = model;
+                        result.index = nodeIndex;
+                        result.matched = true;
+                        return true;
+                    }
+                }
+                return false;
+            };
+
+            if (findInModel(node->model)) {
+                return result;
+            }
+            if (findInModel(target)) {
+                return result;
+            }
+            for (auto it = _frame->AllModels.begin(); it != _frame->AllModels.end(); ++it) {
+                if (findInModel(it->second)) {
+                    return result;
+                }
+            }
+            result.index = static_cast<uint32_t>(fallbackIndex);
+            return result;
+        };
+
+        summary.nodes.reserve(renderNodes.size());
+        int unmatchedNodes = 0;
+        for (size_t renderNodeIndex = 0; renderNodeIndex < renderNodes.size(); ++renderNodeIndex) {
+            const auto* node = renderNodes[renderNodeIndex].get();
+            if (node == nullptr) {
+                continue;
+            }
+
+            const auto resolved = resolveNode(node, renderNodeIndex);
+            api::models::LayoutRenderBufferNodeSummary row;
+            row.nodeId = static_cast<int>(resolved.index + 1);
+            row.nodeIndex = static_cast<int>(resolved.index);
+            row.stringIndex = static_cast<int>(node->StringNum);
+            row.channelStartZeroBased = static_cast<int>(node->ActChan);
+            row.channelStart = row.channelStartZeroBased + 1;
+            row.channelCount = static_cast<int>(node->GetChanCount());
+            if (resolved.model != nullptr) {
+                row.parentModelName = resolved.model->GetName();
+                row.name = resolved.model->GetNodeName(resolved.index, true);
+            } else {
+                row.parentModelName = target->GetName();
+                if (node->name != nullptr) {
+                    row.name = *node->name;
+                }
+                ++unmatchedNodes;
+            }
+            for (uint32_t coordIndex = 0; coordIndex < node->Coords.size(); ++coordIndex) {
+                const auto& coord = node->Coords[coordIndex];
+                api::models::LayoutNodeCoordSummary coordRow;
+                coordRow.bufferX = coord.bufX;
+                coordRow.bufferY = coord.bufY;
+                row.coords.push_back(std::move(coordRow));
+            }
+            summary.nodes.push_back(std::move(row));
+        }
+
+        if (unmatchedNodes > 0) {
+            summary.warnings.push_back("Some render-buffer nodes could not be matched back to a source model by channel.");
+        }
         return summary;
     }
 

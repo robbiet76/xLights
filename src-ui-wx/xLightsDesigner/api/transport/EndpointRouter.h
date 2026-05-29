@@ -61,6 +61,7 @@ public:
         if (method == "GET" && path == "/xlightsdesigner/api/layout/models") return "layout.getModels";
         if (method == "GET" && path == "/xlightsdesigner/api/layout/submodels") return "layout.getSubmodels";
         if (method == "GET" && path == "/xlightsdesigner/api/layout/model-nodes") return "layout.getModelNodes";
+        if (method == "GET" && path == "/xlightsdesigner/api/layout/render-buffer-nodes") return "layout.getRenderBufferNodes";
         if (method == "GET" && path == "/xlightsdesigner/api/layout/channel-map") return "layout.getChannelMap";
         if (method == "GET" && path == "/xlightsdesigner/api/layout/scene") return "layout.getScene";
         if (method == "GET" && path == "/xlightsdesigner/api/layout/settings") return "layout.getSettings";

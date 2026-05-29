@@ -32,10 +32,19 @@ struct LayoutModelSummary {
     double renderWidth = 0.0;
     double renderHeight = 0.0;
     double renderDepth = 0.0;
+    std::vector<std::string> supportedRenderStyles;
 };
 
 struct LayoutModelsSummary {
     std::vector<LayoutModelSummary> models;
+};
+
+struct LayoutSubmodelRowSummary {
+    std::string rowId;
+    std::string label;
+    std::string rawLine;
+    std::vector<std::string> nodeIds;
+    int order = 0;
 };
 
 struct LayoutSubmodelSummary {
@@ -48,6 +57,8 @@ struct LayoutSubmodelSummary {
     std::string bufferStyle;
     std::string lines;
     std::vector<std::string> nodeIds;
+    std::vector<LayoutSubmodelRowSummary> nodeRows;
+    std::vector<std::string> supportedRenderStyles;
     int startChannel = 0;
     int endChannel = 0;
     int nodeCount = 0;
@@ -92,6 +103,43 @@ struct LayoutModelNodesSummary {
     bool includeWorldCoords = true;
     bool includeScreenCoords = false;
     std::vector<LayoutModelNodeSummary> nodes;
+};
+
+struct LayoutRenderBufferNodesRequest {
+    std::string targetName;
+    std::string renderStyle = "Default";
+    std::string camera = "2D";
+    std::string transform = "None";
+    int stagger = 0;
+    bool deep = false;
+};
+
+struct LayoutRenderBufferNodeSummary {
+    int nodeId = 0;
+    int nodeIndex = 0;
+    int stringIndex = 0;
+    std::string name;
+    std::string parentModelName;
+    int channelStart = 0; // 1-based
+    int channelStartZeroBased = 0;
+    int channelCount = 0;
+    std::vector<LayoutNodeCoordSummary> coords;
+};
+
+struct LayoutRenderBufferNodesSummary {
+    bool found = false;
+    std::string targetName;
+    std::string requestedRenderStyle;
+    std::string adjustedRenderStyle;
+    std::string camera;
+    std::string transform;
+    int stagger = 0;
+    bool deep = false;
+    int bufferWidth = 0;
+    int bufferHeight = 0;
+    std::vector<std::string> supportedRenderStyles;
+    std::vector<LayoutRenderBufferNodeSummary> nodes;
+    std::vector<std::string> warnings;
 };
 
 struct LayoutChannelMapNode {

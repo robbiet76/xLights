@@ -65,6 +65,7 @@ Routes:
 - `GET /xlightsdesigner/api/layout/models`
 - `GET /xlightsdesigner/api/layout/submodels`
 - `GET /xlightsdesigner/api/layout/model-nodes`
+- `GET /xlightsdesigner/api/layout/render-buffer-nodes`
 - `GET /xlightsdesigner/api/layout/channel-map`
 - `GET /xlightsdesigner/api/layout/scene`
 - `GET /xlightsdesigner/api/layout/settings`
@@ -74,6 +75,9 @@ The layout API is read-only. It exposes existing xLights layout geometry,
 submodels, group membership, channel spans, node coordinates, preview settings,
 and background-image references. `layout/channel-map` is the authoritative
 channel mapping source for generated FSEQ alignment.
+`layout/render-buffer-nodes` materializes a requested target and xLights render
+style through xLights' own render-buffer pipeline so external render boards do
+not recreate buffer-style geometry in app code.
 
 ## Timing
 

@@ -84,6 +84,7 @@ public:
         if (request.command == "layout.getModels") return _layoutHandler.handleGetModels(request);
         if (request.command == "layout.getSubmodels") return _layoutHandler.handleGetSubmodels(request);
         if (request.command == "layout.getModelNodes") return _layoutHandler.handleGetModelNodes(request);
+        if (request.command == "layout.getRenderBufferNodes") return _layoutHandler.handleGetRenderBufferNodes(request);
         if (request.command == "layout.getChannelMap") return _layoutHandler.handleGetChannelMap(request);
         if (request.command == "layout.getScene") return _layoutHandler.handleGetScene(request);
         if (request.command == "layout.getSettings") return _layoutHandler.handleGetSettings(request);
