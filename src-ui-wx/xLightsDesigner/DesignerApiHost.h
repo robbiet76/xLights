@@ -66,6 +66,23 @@ inline std::string ReadDesignerApiFileModifiedAt(const wxFileName& fileName) {
     return FormatDesignerApiDateTime(fileName.GetModificationTime());
 }
 
+inline wxDateTime ReadDesignerApiFileModifiedTime(const std::string& path) {
+    if (path.empty()) {
+        return wxDateTime();
+    }
+    const wxFileName fileName(wxString::FromUTF8(path));
+    if (!fileName.FileExists()) {
+        return wxDateTime();
+    }
+    return fileName.GetModificationTime();
+}
+
+inline bool DesignerApiFileIsOlderThan(const std::string& candidatePath, const std::string& referencePath) {
+    const wxDateTime candidate = ReadDesignerApiFileModifiedTime(candidatePath);
+    const wxDateTime reference = ReadDesignerApiFileModifiedTime(referencePath);
+    return candidate.IsValid() && reference.IsValid() && candidate.IsEarlierThan(reference);
+}
+
 inline std::string ToLowerCopy(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
         return static_cast<char>(std::tolower(ch));
@@ -154,29 +171,6 @@ inline api::models::SequenceSummary ReadDesignerOpenSequenceSummary(xLightsFrame
     return summary;
 }
 
-inline std::string ResolveDesignerRenderedFseqPath(xLightsFrame* frame) {
-    if (frame == nullptr || frame->CurrentSeqXmlFile == nullptr) {
-        return std::string();
-    }
-    const auto xsqPath = frame->CurrentSeqXmlFile->GetFullPath();
-    if (!xsqPath.empty()) {
-        wxFileName adjacent(xsqPath);
-        adjacent.SetExt("fseq");
-        if (wxFileExists(adjacent.GetFullPath())) {
-            return adjacent.GetFullPath().ToStdString();
-        }
-        const auto resolved = SequenceFile::GetFSEQForXSQ(xsqPath, frame->GetFseqDirectory());
-        if (!resolved.empty()) {
-            return resolved;
-        }
-    }
-    const auto currentFilename = xLightsFrame::GetFilename();
-    if (!currentFilename.empty() && wxFileExists(currentFilename)) {
-        return currentFilename;
-    }
-    return std::string();
-}
-
 inline wxString BuildDesignerRenderedFseqPath(xLightsFrame* frame) {
     if (frame == nullptr || frame->CurrentSeqXmlFile == nullptr) {
         return wxString();
@@ -185,6 +179,13 @@ inline wxString BuildDesignerRenderedFseqPath(xLightsFrame* frame) {
     wxFileName output(frame->CurrentSeqXmlFile->GetFullPath());
     output.SetExt("fseq");
     return output.GetFullPath();
+}
+
+inline std::string ResolveDesignerRenderedFseqPath(xLightsFrame* frame) {
+    if (frame == nullptr || frame->CurrentSeqXmlFile == nullptr) {
+        return std::string();
+    }
+    return BuildDesignerRenderedFseqPath(frame).ToStdString();
 }
 
 inline api::models::FseqFileSummary ReadDesignerFseqSummary(const std::string& path) {
@@ -212,6 +213,26 @@ inline api::models::FseqFileSummary ReadDesignerFseqSummary(const std::string& p
     summary.channelCount = static_cast<int>(file->getChannelCount());
     summary.maxChannel = static_cast<int>(file->getMaxChannel());
     return summary;
+}
+
+inline std::string ComputeDesignerFinalFseqFreshness(xLightsFrame* frame,
+                                                     const api::models::SequenceFinalFseqState& state) {
+    if (!state.exists) {
+        return "missing";
+    }
+    if (!state.readable || !state.fseq.has_value()) {
+        return "unreadable";
+    }
+    if (state.fseq->frameCount <= 0 || state.fseq->frameMs <= 0 || state.fseq->maxChannel <= 0) {
+        return "invalid";
+    }
+    if (frame != nullptr && frame->CurrentSeqXmlFile != nullptr) {
+        const std::string sequencePath = frame->CurrentSeqXmlFile->GetFullPath();
+        if (DesignerApiFileIsOlderThan(state.finalFseqPath, sequencePath)) {
+            return "stale-sequence-newer";
+        }
+    }
+    return "current";
 }
 
 inline bool WaitDesignerRenderComplete(xLightsFrame* frame) {
@@ -1411,7 +1432,7 @@ public:
         state.fseq = detail::ReadDesignerFseqSummary(state.finalFseqPath);
         state.exists = state.fseq->exists;
         state.readable = state.fseq->readable;
-        state.freshness = state.exists ? "present-unverified" : "missing";
+        state.freshness = detail::ComputeDesignerFinalFseqFreshness(_frame, state);
         return state;
     }
 
@@ -1447,11 +1468,20 @@ public:
                         hasBlockedIssue = true;
                     }
                 }
+                if (health.finalFseq.exists && detail::DesignerApiFileIsOlderThan(health.finalFseq.finalFseqPath, layer.dataSource)) {
+                    health.status = "update-required";
+                    health.finalFseq.freshness = "stale-xld-layer-newer";
+                    health.warnings.push_back("The final controller FSEQ is older than the generated XLD DataLayer input.");
+                }
             }
         }
         if (hasXldLayer && !health.finalFseq.exists) {
             health.status = "update-required";
             health.warnings.push_back("The final controller FSEQ is missing after XLD DataLayer binding.");
+        }
+        if (hasXldLayer && health.finalFseq.exists && health.finalFseq.freshness != "current") {
+            health.status = "update-required";
+            health.warnings.push_back("The final controller FSEQ freshness is " + health.finalFseq.freshness + ".");
         }
         if (_frame->mSavedChangeCount != _frame->GetSequenceElements().GetChangeCount()) {
             health.status = "update-required";

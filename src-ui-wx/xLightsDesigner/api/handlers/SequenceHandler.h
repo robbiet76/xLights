@@ -440,13 +440,7 @@ public:
             response.requestId = request.requestId;
             const auto health = service.getSyncHealth();
             if (health.status == "blocked") {
-                response.statusCode = 409;
-                response.error = transport::ApiError{
-                    "XLD_DATALAYER_STALE_OR_UNSAFE",
-                    "The final controller FSEQ cannot be saved until the XLD DataLayer manifest is current.",
-                    nlohmann::json{{"syncHealth", SequenceHandler::serializeSyncHealth(health)}}
-                };
-                return response;
+                return SequenceHandler::blockedFinalRenderResponse(request, health);
             }
             const auto result = service.renderSequence();
             if (!result.rendered || !result.sequence.isOpen) {
@@ -471,6 +465,10 @@ public:
             transport::ApiResponse response;
             response.command = request.command;
             response.requestId = request.requestId;
+            const auto health = service.getSyncHealth();
+            if (health.status == "blocked") {
+                return SequenceHandler::blockedFinalRenderResponse(request, health);
+            }
             const auto result = service.renderSequence();
             if (!result.rendered || !result.sequence.isOpen) {
                 response.statusCode = 409;
@@ -971,6 +969,21 @@ public:
     }
 
 private:
+    static transport::ApiResponse blockedFinalRenderResponse(
+        const transport::ApiRequest& request,
+        const models::SequenceSyncHealthSummary& health) {
+        transport::ApiResponse response;
+        response.command = request.command;
+        response.requestId = request.requestId;
+        response.statusCode = 409;
+        response.error = transport::ApiError{
+            "XLD_DATALAYER_STALE_OR_UNSAFE",
+            "The final controller FSEQ cannot be saved until the XLD DataLayer manifest is current.",
+            nlohmann::json{{"syncHealth", SequenceHandler::serializeSyncHealth(health)}}
+        };
+        return response;
+    }
+
     services::SequenceService _service;
 };
 
