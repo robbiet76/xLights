@@ -11,6 +11,7 @@ namespace xLightsDesigner::api::models {
 struct TimingTrackSummary {
     std::string name;
     std::string type;
+    std::string subType;
     int markCount = 0;
     int layerCount = 0;
     std::string revisionToken;

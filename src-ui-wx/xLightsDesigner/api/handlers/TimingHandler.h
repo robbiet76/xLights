@@ -35,6 +35,7 @@ public:
             response.data["tracks"].push_back({
                 {"name", track.name},
                 {"type", track.type},
+                {"subType", track.subType},
                 {"markCount", track.markCount},
                 {"layerCount", track.layerCount},
                 {"revisionToken", track.revisionToken}

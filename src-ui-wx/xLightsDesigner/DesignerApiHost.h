@@ -2903,6 +2903,7 @@ public:
             summary.tracks.push_back({
                 track->GetName(),
                 track->IsFixedTiming() ? "fixed" : "variable",
+                track->GetSubType(),
                 markCount,
                 layerCount,
                 detail::BuildTimingTrackRevisionToken(track)
