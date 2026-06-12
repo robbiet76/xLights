@@ -2545,7 +2545,10 @@ public:
         }
 
         std::ostringstream fingerprint;
-        fingerprint << "models=" << _frame->AllModels.size() << ";change=" << _frame->modelsChangeCount << ";";
+        // Keep this fingerprint tied to channel-map content only.  Volatile
+        // layout dirty counters can change after sequence/data-layer edits and
+        // would incorrectly mark an otherwise aligned XLD FSEQ as stale.
+        fingerprint << "models=" << _frame->AllModels.size() << ";";
         int maxChannel = 0;
         bool hasWarnings = false;
         for (auto it = _frame->AllModels.begin(); it != _frame->AllModels.end(); ++it) {
