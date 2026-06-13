@@ -6,8 +6,8 @@
 
 namespace xLightsDesigner::api::models {
 
-// Element models expose sequence row inventory and display order without
-// exposing native effect mutation.
+// Element models expose sequence row inventory, display order, and sequencer
+// selection state. Native effect mutation lives in EffectModels.
 struct ElementLayerSummary {
     int layerNumber = 0;
     int effectCount = 0;
@@ -17,6 +17,7 @@ struct ElementLayerSummary {
 struct SequenceElementSummary {
     std::string name;
     std::string type;
+    bool selected = false;
     int totalEffectCount = 0;
     std::vector<ElementLayerSummary> layers;
 };
@@ -35,6 +36,25 @@ struct DisplayElementOrderEntry {
 struct DisplayElementOrderSummary {
     bool sequenceOpen = false;
     std::vector<DisplayElementOrderEntry> elements;
+};
+
+struct SelectedDisplayElementsSummary {
+    bool sequenceOpen = false;
+    std::vector<std::string> selectedElementNames;
+};
+
+struct SetSelectedDisplayElementsRequest {
+    std::vector<std::string> elementNames;
+    bool replaceExisting = true;
+};
+
+struct SetSelectedDisplayElementsResult {
+    bool sequenceOpen = false;
+    bool ok = false;
+    int selectedCount = 0;
+    std::vector<std::string> missingNames;
+    std::optional<std::string> errorCode;
+    std::optional<std::string> errorMessage;
 };
 
 struct SetDisplayElementOrderRequest {

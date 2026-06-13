@@ -7,23 +7,17 @@
 
 namespace xLightsDesigner::api::services {
 
-// Timing service facade for tracks visible in xLights. Marks are used as
-// auditable musical structure, lyric, and custom cue references.
+// Read-only timing service facade for tracks visible in xLights. Marks are used
+// as auditable musical structure, lyric, and custom cue references.
 class TimingService {
 public:
     using ReadTimingTracksFn = std::function<models::TimingTracksSummary()>;
     using ReadTimingMarksFn = std::function<models::TimingMarksSummary(const models::TimingMarksRequest&)>;
-    using EnsureTimingTrackFn = std::function<models::EnsureTimingTrackResult(const models::EnsureTimingTrackRequest&)>;
-    using AddTimingMarksFn = std::function<models::AddTimingMarksResult(const models::AddTimingMarksRequest&)>;
 
     TimingService(ReadTimingTracksFn readTimingTracks,
-                  ReadTimingMarksFn readTimingMarks,
-                  EnsureTimingTrackFn ensureTimingTrack,
-                  AddTimingMarksFn addTimingMarks)
+                  ReadTimingMarksFn readTimingMarks)
         : _readTimingTracks(std::move(readTimingTracks)),
-          _readTimingMarks(std::move(readTimingMarks)),
-          _ensureTimingTrack(std::move(ensureTimingTrack)),
-          _addTimingMarks(std::move(addTimingMarks)) {}
+          _readTimingMarks(std::move(readTimingMarks)) {}
 
     [[nodiscard]] models::TimingTracksSummary getTracks() const {
         return _readTimingTracks ? _readTimingTracks() : models::TimingTracksSummary{};
@@ -33,19 +27,9 @@ public:
         return _readTimingMarks ? _readTimingMarks(request) : models::TimingMarksSummary{};
     }
 
-    [[nodiscard]] models::EnsureTimingTrackResult ensureTrack(const models::EnsureTimingTrackRequest& request) const {
-        return _ensureTimingTrack ? _ensureTimingTrack(request) : models::EnsureTimingTrackResult{};
-    }
-
-    [[nodiscard]] models::AddTimingMarksResult addMarks(const models::AddTimingMarksRequest& request) const {
-        return _addTimingMarks ? _addTimingMarks(request) : models::AddTimingMarksResult{};
-    }
-
 private:
     ReadTimingTracksFn _readTimingTracks;
     ReadTimingMarksFn _readTimingMarks;
-    EnsureTimingTrackFn _ensureTimingTrack;
-    AddTimingMarksFn _addTimingMarks;
 };
 
 } // namespace xLightsDesigner::api::services

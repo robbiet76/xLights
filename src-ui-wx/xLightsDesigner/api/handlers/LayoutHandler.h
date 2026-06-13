@@ -10,7 +10,7 @@
 
 namespace xLightsDesigner::api::handlers {
 
-// Layout endpoints expose the physical display skeleton used by target-render
+// Layout endpoints expose the physical display skeleton used by native-effect
 // generation: models, submodels, groups, node coordinates, and channel spans.
 class LayoutHandler {
 public:

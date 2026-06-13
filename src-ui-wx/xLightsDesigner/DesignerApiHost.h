@@ -40,6 +40,7 @@
 #include "DesignerApiRuntime.h"
 #include "DesignerLaunchPolicy.h"
 #include "api/models/DataLayerModels.h"
+#include "api/models/EffectModels.h"
 #include "api/models/ElementModels.h"
 #include "api/models/LayoutModels.h"
 #include "api/models/MediaModels.h"
@@ -487,6 +488,75 @@ inline std::string BuildTimingTrackRevisionToken(TimingElement* track) {
         }
     }
     return BuildStableRevisionToken(stream.str());
+}
+
+inline bool NativeEffectIsXldOwned(const Effect* effect) {
+    return effect != nullptr && !effect->GetSettings().Get("XLD_OWNER", "").empty();
+}
+
+inline std::string BuildNativeEffectApiId(const std::string& elementName, int layerIndex, const Effect* effect) {
+    if (effect == nullptr) {
+        return std::string();
+    }
+    std::ostringstream stream;
+    stream << elementName << '|' << layerIndex << '|' << effect->GetID();
+    return stream.str();
+}
+
+inline std::string AddNativeEffectOwnershipSettings(const std::string& settings, const std::string& owner, const std::string& xldId) {
+    SettingsMap map;
+    map.Parse(nullptr, settings, "");
+    map["XLD_OWNER"] = owner.empty() ? "xLightsDesigner" : owner;
+    if (!xldId.empty()) {
+        map["XLD_ID"] = xldId;
+    }
+    return map.AsString();
+}
+
+inline api::models::NativeEffectSummary BuildNativeEffectSummary(const std::string& elementName, int layerIndex, const Effect* effect, bool includeSettings = true) {
+    api::models::NativeEffectSummary summary;
+    if (effect == nullptr) {
+        return summary;
+    }
+    summary.id = BuildNativeEffectApiId(elementName, layerIndex, effect);
+    summary.elementName = elementName;
+    summary.layerIndex = layerIndex;
+    summary.effectIndex = effect->GetEffectIndex();
+    summary.nativeId = effect->GetID();
+    summary.effectName = effect->GetEffectName();
+    summary.startMs = effect->GetStartTimeMS();
+    summary.endMs = effect->GetEndTimeMS();
+    if (includeSettings) {
+        summary.settings = effect->GetSettingsAsString();
+        summary.palette = effect->GetPaletteAsString();
+    }
+    summary.protectedEffect = effect->GetProtected();
+    summary.locked = effect->IsLocked();
+    summary.renderDisabled = effect->IsRenderDisabled();
+    summary.xldOwner = effect->GetSettings().Get("XLD_OWNER", "");
+    summary.xldId = effect->GetSettings().Get("XLD_ID", "");
+    summary.xldOwned = !summary.xldOwner.empty();
+    return summary;
+}
+
+inline api::models::NativeEffectLayerSummary BuildNativeEffectLayerSummary(const std::string& elementName, int layerIndex, const EffectLayer* layer) {
+    api::models::NativeEffectLayerSummary summary;
+    if (layer == nullptr) {
+        return summary;
+    }
+    summary.elementName = elementName;
+    summary.layerIndex = layerIndex;
+    summary.layerNumber = layer->GetLayerNumber();
+    summary.layerName = layer->GetLayerName();
+    summary.effectCount = layer->GetEffectCount();
+    for (auto* effect : layer->GetEffects()) {
+        if (NativeEffectIsXldOwned(effect)) {
+            summary.hasXldOwnedEffects = true;
+        } else {
+            summary.hasUserOwnedEffects = true;
+        }
+    }
+    return summary;
 }
 
 inline bool CanReuseCurrentShowForTrustedWorkspace(xLightsFrame* frame, const wxString& targetShowDir) {
@@ -2236,7 +2306,8 @@ public:
     }
 
     // Read-only layout discovery. These endpoints provide the physical display
-    // skeleton for target-render generation and direct-channel writing.
+    // skeleton for native-effect planning, proof validation, and optional
+    // advanced direct-channel writing.
     [[nodiscard]] api::models::LayoutModelsSummary readLayoutModels() const {
         api::models::LayoutModelsSummary summary;
         if (_frame == nullptr) {
@@ -2678,6 +2749,9 @@ public:
             api::models::SequenceElementSummary elementSummary;
             elementSummary.name = element->GetName();
             elementSummary.type = element->GetTypeDescription();
+            if (auto* modelElement = dynamic_cast<ModelElement*>(element); modelElement != nullptr) {
+                elementSummary.selected = modelElement->GetSelected();
+            }
             elementSummary.totalEffectCount = element->GetEffectCount();
             elementSummary.layers.reserve(element->GetEffectLayerCount());
 
@@ -2772,7 +2846,344 @@ public:
         });
     }
 
-    // Timing track read/write operations.
+    [[nodiscard]] api::models::SelectedDisplayElementsSummary readSelectedDisplayElements() const {
+        api::models::SelectedDisplayElementsSummary summary;
+        if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) {
+            return summary;
+        }
+
+        summary.sequenceOpen = true;
+        auto& sequenceElements = _frame->GetSequenceElements();
+        for (size_t i = 0; i < sequenceElements.GetElementCount(); ++i) {
+            auto* element = dynamic_cast<ModelElement*>(sequenceElements.GetElement(i));
+            if (element != nullptr && element->GetSelected()) {
+                summary.selectedElementNames.push_back(element->GetName());
+            }
+        }
+        return summary;
+    }
+
+    [[nodiscard]] api::models::SetSelectedDisplayElementsResult setSelectedDisplayElements(const api::models::SetSelectedDisplayElementsRequest& request) const {
+        return RunOnMainThread<api::models::SetSelectedDisplayElementsResult>([this, request]() {
+            api::models::SetSelectedDisplayElementsResult result;
+            if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) {
+                return result;
+            }
+            result.sequenceOpen = true;
+            auto& sequenceElements = _frame->GetSequenceElements();
+
+            std::vector<ModelElement*> requested;
+            for (const auto& name : request.elementNames) {
+                auto* element = dynamic_cast<ModelElement*>(sequenceElements.GetElement(name));
+                if (element == nullptr) {
+                    result.missingNames.push_back(name);
+                    continue;
+                }
+                requested.push_back(element);
+            }
+            if (!result.missingNames.empty()) {
+                result.errorCode = std::string("VALIDATION_ERROR");
+                result.errorMessage = std::string("Selection contains unknown display elements.");
+                return result;
+            }
+
+            if (request.replaceExisting) {
+                sequenceElements.UnSelectAllElements();
+            }
+            for (auto* element : requested) {
+                element->SetSelected(true);
+            }
+            result.ok = true;
+            result.selectedCount = static_cast<int>(requested.size());
+            wxCommandEvent eventRowHeaderChanged(EVT_ROW_HEADINGS_CHANGED);
+            wxPostEvent(_frame, eventRowHeaderChanged);
+            return result;
+        });
+    }
+
+    // Native effect and layer operations.
+    [[nodiscard]] api::models::NativeEffectListResult readNativeEffects(const api::models::NativeEffectListRequest& request) const {
+        api::models::NativeEffectListResult result;
+        if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) {
+            return result;
+        }
+
+        result.sequenceOpen = true;
+        auto& sequenceElements = _frame->GetSequenceElements();
+        const size_t elementCount = request.elementName.empty() ? sequenceElements.GetElementCount() : 1;
+        for (size_t elementIndex = 0; elementIndex < elementCount; ++elementIndex) {
+            Element* element = request.elementName.empty()
+                ? sequenceElements.GetElement(elementIndex)
+                : sequenceElements.GetElement(request.elementName);
+            if (element == nullptr) {
+                continue;
+            }
+            result.elementFound = true;
+            const std::string elementName = element->GetName();
+            for (size_t layerIndex = 0; layerIndex < element->GetEffectLayerCount(); ++layerIndex) {
+                EffectLayer* layer = element->GetEffectLayer(static_cast<int>(layerIndex));
+                if (layer == nullptr) {
+                    continue;
+                }
+                for (auto* effect : layer->GetEffects()) {
+                    if (effect == nullptr) {
+                        continue;
+                    }
+                    if (request.startMs.has_value() && effect->GetEndTimeMS() < *request.startMs) {
+                        continue;
+                    }
+                    if (request.endMs.has_value() && effect->GetStartTimeMS() > *request.endMs) {
+                        continue;
+                    }
+                    if (request.xldOnly && !detail::NativeEffectIsXldOwned(effect)) {
+                        continue;
+                    }
+                    result.effects.push_back(detail::BuildNativeEffectSummary(elementName, static_cast<int>(layerIndex), effect, request.includeSettings));
+                }
+            }
+            if (!request.elementName.empty()) {
+                break;
+            }
+        }
+        return result;
+    }
+
+    [[nodiscard]] api::models::NativeEffectLayerListResult readNativeEffectLayers(const api::models::NativeEffectLayerListRequest& request) const {
+        api::models::NativeEffectLayerListResult result;
+        if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) {
+            return result;
+        }
+
+        result.sequenceOpen = true;
+        auto& sequenceElements = _frame->GetSequenceElements();
+        const size_t elementCount = request.elementName.empty() ? sequenceElements.GetElementCount() : 1;
+        for (size_t elementIndex = 0; elementIndex < elementCount; ++elementIndex) {
+            Element* element = request.elementName.empty()
+                ? sequenceElements.GetElement(elementIndex)
+                : sequenceElements.GetElement(request.elementName);
+            if (element == nullptr) {
+                continue;
+            }
+            result.elementFound = true;
+            for (size_t layerIndex = 0; layerIndex < element->GetEffectLayerCount(); ++layerIndex) {
+                result.layers.push_back(detail::BuildNativeEffectLayerSummary(element->GetName(), static_cast<int>(layerIndex), element->GetEffectLayer(static_cast<int>(layerIndex))));
+            }
+            if (!request.elementName.empty()) {
+                break;
+            }
+        }
+        return result;
+    }
+
+    [[nodiscard]] api::models::NativeEffectLayerMutationResult ensureNativeEffectLayer(const api::models::NativeEffectLayerEnsureRequest& request) const {
+        return RunOnMainThread<api::models::NativeEffectLayerMutationResult>([this, request]() {
+            api::models::NativeEffectLayerMutationResult result;
+            if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) {
+                return result;
+            }
+            result.sequenceOpen = true;
+            Element* element = _frame->GetSequenceElements().GetElement(request.elementName);
+            if (element == nullptr) {
+                result.errorCode = std::string("VALIDATION_ERROR");
+                result.errorMessage = std::string("Requested sequence element was not found.");
+                return result;
+            }
+            result.elementFound = true;
+
+            int targetIndex = request.layerIndex;
+            if (targetIndex < 0) {
+                targetIndex = static_cast<int>(element->GetEffectLayerCount());
+            }
+            while (static_cast<int>(element->GetEffectLayerCount()) <= targetIndex) {
+                element->AddEffectLayer();
+                result.created = true;
+            }
+            EffectLayer* layer = element->GetEffectLayer(targetIndex);
+            if (layer == nullptr) {
+                result.errorCode = std::string("INTERNAL_ERROR");
+                result.errorMessage = std::string("Requested layer could not be created.");
+                return result;
+            }
+            if (!request.layerName.empty()) {
+                layer->SetLayerName(request.layerName);
+            }
+            _frame->MarkEffectsFileDirty();
+            wxCommandEvent eventRowHeaderChanged(EVT_ROW_HEADINGS_CHANGED);
+            wxPostEvent(_frame, eventRowHeaderChanged);
+            result.layerFound = true;
+            result.ok = true;
+            result.layer = detail::BuildNativeEffectLayerSummary(element->GetName(), targetIndex, layer);
+            return result;
+        });
+    }
+
+    [[nodiscard]] api::models::NativeEffectLayerMutationResult removeNativeEffectLayer(const api::models::NativeEffectLayerRemoveRequest& request) const {
+        return RunOnMainThread<api::models::NativeEffectLayerMutationResult>([this, request]() {
+            api::models::NativeEffectLayerMutationResult result;
+            if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) {
+                return result;
+            }
+            result.sequenceOpen = true;
+            Element* element = _frame->GetSequenceElements().GetElement(request.elementName);
+            if (element == nullptr) {
+                result.errorCode = std::string("VALIDATION_ERROR");
+                result.errorMessage = std::string("Requested sequence element was not found.");
+                return result;
+            }
+            result.elementFound = true;
+            EffectLayer* layer = element->GetEffectLayer(request.layerIndex);
+            if (layer == nullptr) {
+                result.errorCode = std::string("VALIDATION_ERROR");
+                result.errorMessage = std::string("Requested effect layer was not found.");
+                return result;
+            }
+            result.layerFound = true;
+            result.layer = detail::BuildNativeEffectLayerSummary(element->GetName(), request.layerIndex, layer);
+            if (result.layer.hasUserOwnedEffects && !request.allowUserOwned) {
+                result.errorCode = std::string("OWNERSHIP_ERROR");
+                result.errorMessage = std::string("Refusing to remove a layer containing user-owned native effects.");
+                return result;
+            }
+            element->RemoveEffectLayer(request.layerIndex);
+            _frame->MarkEffectsFileDirty();
+            wxCommandEvent eventRowHeaderChanged(EVT_ROW_HEADINGS_CHANGED);
+            wxPostEvent(_frame, eventRowHeaderChanged);
+            result.ok = true;
+            result.removed = true;
+            return result;
+        });
+    }
+
+    [[nodiscard]] api::models::NativeEffectMutationResult upsertNativeEffect(const api::models::NativeEffectUpsertRequest& request) const {
+        return RunOnMainThread<api::models::NativeEffectMutationResult>([this, request]() {
+            api::models::NativeEffectMutationResult result;
+            if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) {
+                return result;
+            }
+            result.sequenceOpen = true;
+            Element* element = _frame->GetSequenceElements().GetElement(request.elementName);
+            if (element == nullptr) {
+                result.errorCode = std::string("VALIDATION_ERROR");
+                result.errorMessage = std::string("Requested sequence element was not found.");
+                return result;
+            }
+            result.elementFound = true;
+            while (static_cast<int>(element->GetEffectLayerCount()) <= request.layerIndex) {
+                element->AddEffectLayer();
+            }
+            EffectLayer* layer = element->GetEffectLayer(request.layerIndex);
+            if (layer == nullptr) {
+                result.errorCode = std::string("VALIDATION_ERROR");
+                result.errorMessage = std::string("Requested effect layer was not found.");
+                return result;
+            }
+            result.layerFound = true;
+
+            Effect* target = request.nativeId >= 0 ? layer->GetEffectFromID(request.nativeId) : nullptr;
+            if (target == nullptr && !request.xldId.empty()) {
+                for (auto* effect : layer->GetEffects()) {
+                    if (effect != nullptr && effect->GetSettings().Get("XLD_ID", "") == request.xldId) {
+                        target = effect;
+                        break;
+                    }
+                }
+            }
+            if (target != nullptr && !detail::NativeEffectIsXldOwned(target)) {
+                result.errorCode = std::string("OWNERSHIP_ERROR");
+                result.errorMessage = std::string("Refusing to update a user-owned native effect.");
+                return result;
+            }
+
+            const std::string settings = detail::AddNativeEffectOwnershipSettings(request.settings, request.xldOwner, request.xldId);
+            if (target == nullptr) {
+                if (request.replaceExistingXld && !request.xldId.empty()) {
+                    for (int i = layer->GetEffectCount() - 1; i >= 0; --i) {
+                        Effect* effect = layer->GetEffect(i);
+                        if (effect != nullptr && effect->GetSettings().Get("XLD_ID", "") == request.xldId) {
+                            layer->DeleteEffect(effect->GetID());
+                        }
+                    }
+                }
+                target = layer->AddEffect(0, request.effectName, settings, request.palette, request.startMs, request.endMs, EFFECT_NOT_SELECTED, false);
+                result.created = target != nullptr;
+            } else {
+                target->SetEffectName(request.effectName);
+                target->SetEffectIndex(_frame->GetEffectManager().GetEffectIndex(request.effectName));
+                target->SetStartTimeMS(request.startMs);
+                target->SetEndTimeMS(request.endMs);
+                target->SetSettings(settings, false);
+                target->SetPalette(request.palette);
+                result.updated = true;
+            }
+
+            if (target == nullptr) {
+                result.errorCode = std::string("VALIDATION_ERROR");
+                result.errorMessage = std::string("xLights rejected the native effect name or timing.");
+                return result;
+            }
+            _frame->MarkEffectsFileDirty();
+            wxCommandEvent eventRowHeaderChanged(EVT_ROW_HEADINGS_CHANGED);
+            wxPostEvent(_frame, eventRowHeaderChanged);
+            result.ok = true;
+            result.effect = detail::BuildNativeEffectSummary(element->GetName(), request.layerIndex, target, true);
+            return result;
+        });
+    }
+
+    [[nodiscard]] api::models::NativeEffectMutationResult removeNativeEffect(const api::models::NativeEffectRemoveRequest& request) const {
+        return RunOnMainThread<api::models::NativeEffectMutationResult>([this, request]() {
+            api::models::NativeEffectMutationResult result;
+            if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) {
+                return result;
+            }
+            result.sequenceOpen = true;
+            Element* element = _frame->GetSequenceElements().GetElement(request.elementName);
+            if (element == nullptr) {
+                result.errorCode = std::string("VALIDATION_ERROR");
+                result.errorMessage = std::string("Requested sequence element was not found.");
+                return result;
+            }
+            result.elementFound = true;
+            EffectLayer* layer = element->GetEffectLayer(request.layerIndex);
+            if (layer == nullptr) {
+                result.errorCode = std::string("VALIDATION_ERROR");
+                result.errorMessage = std::string("Requested effect layer was not found.");
+                return result;
+            }
+            result.layerFound = true;
+
+            Effect* target = request.nativeId >= 0 ? layer->GetEffectFromID(request.nativeId) : nullptr;
+            if (target == nullptr && !request.xldId.empty()) {
+                for (auto* effect : layer->GetEffects()) {
+                    if (effect != nullptr && effect->GetSettings().Get("XLD_ID", "") == request.xldId) {
+                        target = effect;
+                        break;
+                    }
+                }
+            }
+            if (target == nullptr) {
+                result.errorCode = std::string("VALIDATION_ERROR");
+                result.errorMessage = std::string("Requested native effect was not found.");
+                return result;
+            }
+            if (!request.allowUserOwned && !detail::NativeEffectIsXldOwned(target)) {
+                result.errorCode = std::string("OWNERSHIP_ERROR");
+                result.errorMessage = std::string("Refusing to remove a user-owned native effect.");
+                return result;
+            }
+
+            result.effect = detail::BuildNativeEffectSummary(element->GetName(), request.layerIndex, target, true);
+            layer->DeleteEffect(target->GetID());
+            _frame->MarkEffectsFileDirty();
+            wxCommandEvent eventRowHeaderChanged(EVT_ROW_HEADINGS_CHANGED);
+            wxPostEvent(_frame, eventRowHeaderChanged);
+            result.ok = true;
+            result.removed = true;
+            return result;
+        });
+    }
+
+    // Timing track read operations.
     [[nodiscard]] api::models::TimingMarksSummary readTimingMarks(const api::models::TimingMarksRequest& request) const {
         api::models::TimingMarksSummary summary;
         summary.trackName = request.trackName;
@@ -2815,71 +3226,6 @@ public:
             }
         }
         return summary;
-    }
-
-    [[nodiscard]] api::models::EnsureTimingTrackResult ensureTimingTrack(const api::models::EnsureTimingTrackRequest& request) const {
-        return RunOnMainThread<api::models::EnsureTimingTrackResult>([this, request]() {
-            api::models::EnsureTimingTrackResult result;
-            result.requestedTrackName = request.trackName;
-            result.subType = request.subType;
-            if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) {
-                return result;
-            }
-            result.sequenceOpen = true;
-            if (TimingElement* existing = _frame->GetSequenceElements().GetTimingElement(request.trackName); existing != nullptr) {
-                result.actualTrackName = existing->GetName();
-                if (result.subType.empty()) {
-                    result.subType = existing->GetSubType();
-                }
-                return result;
-            }
-            TimingElement* created = _frame->AddTimingElement(request.trackName, request.subType);
-            if (created != nullptr) {
-                result.created = true;
-                result.actualTrackName = created->GetName();
-                result.subType = created->GetSubType();
-            }
-            return result;
-        });
-    }
-
-    [[nodiscard]] api::models::AddTimingMarksResult addTimingMarks(const api::models::AddTimingMarksRequest& request) const {
-        return RunOnMainThread<api::models::AddTimingMarksResult>([this, request]() {
-            api::models::AddTimingMarksResult result;
-            result.requestedTrackName = request.trackName;
-            if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) {
-                return result;
-            }
-            result.sequenceOpen = true;
-            TimingElement* track = _frame->GetSequenceElements().GetTimingElement(request.trackName);
-            if (track == nullptr) {
-                track = _frame->AddTimingElement(request.trackName, request.subType);
-                result.trackCreated = track != nullptr;
-            }
-            if (track == nullptr) {
-                return result;
-            }
-            result.trackFound = true;
-            result.actualTrackName = track->GetName();
-            EffectLayer* layer = track->GetEffectLayer(0);
-            if (layer == nullptr) {
-                layer = track->AddEffectLayer();
-            }
-            if (layer == nullptr) {
-                return result;
-            }
-            if (request.replaceExisting) {
-                layer->RemoveAllEffects(nullptr);
-            }
-            for (const auto& mark : request.marks) {
-                layer->AddEffect(0, mark.label, "", "", mark.startMs, mark.endMs, EFFECT_NOT_SELECTED, false);
-                result.addedMarkCount++;
-            }
-            _frame->MarkEffectsFileDirty();
-            wxCommandEvent eventRowHeaderChanged(EVT_ROW_HEADINGS_CHANGED);
-            wxPostEvent(_frame, eventRowHeaderChanged);
-            return result;
-        });
     }
 
     [[nodiscard]] api::models::TimingTracksSummary readTimingTracks() const {

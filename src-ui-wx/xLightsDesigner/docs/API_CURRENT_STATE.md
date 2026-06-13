@@ -6,16 +6,17 @@ Baseline:
 
 ## Architecture
 
-xLightsDesigner uses generated FSEQ DataLayers, not native xLights effect authoring.
+xLightsDesigner uses native xLights effect blocks for editable sequencing.
 
 Primary flow:
 1. Launch xLights with `XLIGHTS_DESIGNER_ENABLED=1`.
 2. Read show folder, layout, channel map, timing tracks, media, and sequence state.
-3. Generate an adjacent `<sequence>.xld.fseq` and `<sequence>.xld.manifest.json`.
-4. Attach or update the `XLD AI Layer` DataLayer.
-5. Save the `.xsq`, render/save the final controller `.fseq`, and validate sync health.
+3. Generate a design/sequence plan in xLightsDesigner.
+4. Write XLD-owned native effect blocks and layers to the `.xsq`.
+5. Save the `.xsq`, render/save the final controller `.fseq`, and validate sequence state.
 
-Native effect-control endpoints are intentionally not exposed.
+DataLayer routes remain available for direct FSEQ proof/readback workflows, but
+native effect control is the primary editable sequencing integration.
 
 ## Runtime
 
@@ -57,7 +58,23 @@ Routes:
 - `POST /xlightsdesigner/api/sequence/data-layers/reorder`
 - `POST /xlightsdesigner/api/sequence/data-layers/validate`
 
-The XLD DataLayer manifest carries display snapshot, channel-map fingerprint, timing revision, generated FSEQ path, size, and channel/frame dimensions. `sequence/sync-health` validates this manifest against the current xLights sequence and layout.
+The XLD DataLayer manifest carries display snapshot, channel-map fingerprint, timing revision, generated FSEQ path, size, and channel/frame dimensions. `sequence/sync-health` validates this manifest against the current xLights sequence and layout. These routes are retained for direct-channel proof workflows, not as the default editable sequence authoring path.
+
+## Native Effects
+
+Routes:
+- `GET /xlightsdesigner/api/effects`
+- `POST /xlightsdesigner/api/effects/upsert`
+- `POST /xlightsdesigner/api/effects/remove`
+- `GET /xlightsdesigner/api/effects/layers`
+- `POST /xlightsdesigner/api/effects/layers/ensure`
+- `POST /xlightsdesigner/api/effects/layers/remove`
+
+Effect writes use xLights' native effect name, settings string, palette string,
+layer index, and millisecond timing. XLD-owned effects are marked in native
+settings with `XLD_OWNER` and optional `XLD_ID`; mutation endpoints refuse to
+update or remove user-owned effects unless the request explicitly opts into it.
+The API does not define effect-specific setting schemas.
 
 ## Layout
 
@@ -84,10 +101,9 @@ not recreate buffer-style geometry in app code.
 Routes:
 - `GET /xlightsdesigner/api/timing/tracks`
 - `GET /xlightsdesigner/api/timing/marks`
-- `POST /xlightsdesigner/api/timing/ensure-track`
-- `POST /xlightsdesigner/api/timing/add-marks`
 
-Timing track names are labels. Consumers should use track descriptions and explicit metadata from xLightsDesigner handoff files for semantic meaning.
+Timing track names are labels. xLights owns timing track creation/editing.
+XLD reads timing tracks and marks as musical anchors for design and sequencing.
 
 ## Media And Show Folder
 
@@ -107,5 +123,7 @@ Routes:
 - `GET /xlightsdesigner/api/elements/summary`
 - `GET /xlightsdesigner/api/elements/display-order`
 - `POST /xlightsdesigner/api/elements/display-order`
+- `GET /xlightsdesigner/api/elements/selected`
+- `POST /xlightsdesigner/api/elements/selected`
 
-Element APIs support ordering/readback. They do not expose native effect authoring.
+Element APIs support ordering/readback and sequencer display-element selection.

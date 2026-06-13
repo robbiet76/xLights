@@ -25,6 +25,7 @@
 #include "DesignerApiSmoke.h"
 #include "api/handlers/DataLayerHandler.h"
 #include "api/handlers/ElementHandler.h"
+#include "api/handlers/EffectHandler.h"
 #include "api/handlers/LayoutHandler.h"
 #include "api/handlers/MediaHandler.h"
 #include "api/handlers/SequenceHandler.h"
@@ -32,6 +33,7 @@
 #include "api/parsing/RequestParser.h"
 #include "api/services/DataLayerService.h"
 #include "api/services/ElementService.h"
+#include "api/services/EffectService.h"
 #include "api/services/LayoutService.h"
 #include "api/services/MediaService.h"
 #include "api/services/SequenceService.h"
@@ -222,9 +224,14 @@ inline std::optional<api::transport::ApiResponse> HandleDesignerApiRequest(
         [host](const api::models::DataLayerValidateRequest& request) { return host->validateDataLayer(request); });
     api::services::TimingService timingService(
         [host]() { return host->readTimingTracks(); },
-        [host](const api::models::TimingMarksRequest& request) { return host->readTimingMarks(request); },
-        [host](const api::models::EnsureTimingTrackRequest& request) { return host->ensureTimingTrack(request); },
-        [host](const api::models::AddTimingMarksRequest& request) { return host->addTimingMarks(request); });
+        [host](const api::models::TimingMarksRequest& request) { return host->readTimingMarks(request); });
+    api::services::EffectService effectService(
+        [host](const api::models::NativeEffectListRequest& request) { return host->readNativeEffects(request); },
+        [host](const api::models::NativeEffectUpsertRequest& request) { return host->upsertNativeEffect(request); },
+        [host](const api::models::NativeEffectRemoveRequest& request) { return host->removeNativeEffect(request); },
+        [host](const api::models::NativeEffectLayerListRequest& request) { return host->readNativeEffectLayers(request); },
+        [host](const api::models::NativeEffectLayerEnsureRequest& request) { return host->ensureNativeEffectLayer(request); },
+        [host](const api::models::NativeEffectLayerRemoveRequest& request) { return host->removeNativeEffectLayer(request); });
     api::services::MediaService mediaService(
         [host]() { return host->readCurrentMedia(); },
         [host]() { return host->readMediaDirectories(); },
@@ -244,15 +251,18 @@ inline std::optional<api::transport::ApiResponse> HandleDesignerApiRequest(
     api::services::ElementService elementService(
         [host]() { return host->readElements(); },
         [host]() { return host->readDisplayElementOrder(); },
-        [host](const api::models::SetDisplayElementOrderRequest& request) { return host->setDisplayElementOrder(request); });
+        [host](const api::models::SetDisplayElementOrderRequest& request) { return host->setDisplayElementOrder(request); },
+        [host]() { return host->readSelectedDisplayElements(); },
+        [host](const api::models::SetSelectedDisplayElementsRequest& request) { return host->setSelectedDisplayElements(request); });
     api::handlers::RuntimeHandler runtimeHandler([host]() { return host->readModalState(); });
     api::handlers::SequenceHandler sequenceHandler(std::move(sequenceService));
     api::handlers::DataLayerHandler dataLayerHandler(std::move(dataLayerService));
+    api::handlers::EffectHandler effectHandler(std::move(effectService));
     api::handlers::TimingHandler timingHandler(std::move(timingService));
     api::handlers::MediaHandler mediaHandler(std::move(mediaService));
     api::handlers::LayoutHandler layoutHandler(std::move(layoutService));
     api::handlers::ElementHandler elementHandler(std::move(elementService));
-    api::transport::RequestRouter router(std::move(runtimeHandler), std::move(sequenceHandler), std::move(dataLayerHandler), std::move(timingHandler), std::move(mediaHandler), std::move(layoutHandler), std::move(elementHandler));
+    api::transport::RequestRouter router(std::move(runtimeHandler), std::move(sequenceHandler), std::move(dataLayerHandler), std::move(effectHandler), std::move(timingHandler), std::move(mediaHandler), std::move(layoutHandler), std::move(elementHandler));
 
     return router.route(api::parsing::ParseRequest(command, params, requestId));
 }

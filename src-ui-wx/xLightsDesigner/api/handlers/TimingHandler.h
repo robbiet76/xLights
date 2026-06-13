@@ -4,7 +4,6 @@
 
 #include <nlohmann/json.hpp>
 
-#include "../../DesignerApiRuntime.h"
 #include "../parsing/ParameterReaders.h"
 #include "../services/TimingService.h"
 #include "../transport/ApiRequest.h"
@@ -13,8 +12,8 @@
 
 namespace xLightsDesigner::api::handlers {
 
-// Timing endpoints expose and create visible xLights timing tracks. Track names
-// are labels; semantic meaning belongs in the app handoff metadata.
+// Timing endpoints read visible xLights timing tracks. Track names are labels;
+// semantic meaning belongs in the app handoff metadata.
 class TimingHandler {
 public:
     explicit TimingHandler(services::TimingService service)
@@ -91,104 +90,6 @@ public:
         for (const auto& mark : summary.marks) {
             response.data["marks"].push_back({{"startMs", mark.startMs}, {"endMs", mark.endMs}, {"label", mark.label}, {"layerNumber", mark.layerNumber}});
         }
-        return response;
-    }
-
-    [[nodiscard]] transport::ApiResponse handleAddMarks(const transport::ApiRequest& request) const {
-        // Mark creation can touch xLights UI state, so it runs through the
-        // owned runtime queue after lightweight request validation.
-        const auto trackName = readTrackName(request);
-        if (trackName.empty()) {
-            transport::ApiResponse response; response.command = request.command; response.requestId = request.requestId; response.statusCode = 400;
-            response.error = transport::ApiError{
-                std::string(transport::errors::ValidationError),
-                "timing.addMarks requires trackName.",
-                nlohmann::json{{"acceptedAliases", {"trackName", "track"}}}
-            };
-            return response;
-        }
-        const auto subType = parsing::ReadString(request.params, "subType");
-        const bool replaceExisting = parsing::ReadBool(request.params, "replaceExisting", false);
-        const auto marksJsonText = parsing::ReadString(request.params, "marks");
-        if (marksJsonText.empty()) {
-            transport::ApiResponse response; response.command = request.command; response.requestId = request.requestId; response.statusCode = 400;
-            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "timing.addMarks requires marks JSON.", nlohmann::json::object()};
-            return response;
-        }
-        nlohmann::json marksJson;
-        try { marksJson = nlohmann::json::parse(marksJsonText); } catch (const std::exception& ex) {
-            transport::ApiResponse response; response.command = request.command; response.requestId = request.requestId; response.statusCode = 400;
-            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "timing.addMarks received invalid marks JSON.", {{"reason", ex.what()}}};
-            return response;
-        }
-        if (!marksJson.is_array()) {
-            transport::ApiResponse response; response.command = request.command; response.requestId = request.requestId; response.statusCode = 400;
-            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "timing.addMarks requires marks to be a JSON array.", nlohmann::json::object()};
-            return response;
-        }
-        models::AddTimingMarksRequest addRequest;
-        addRequest.trackName = trackName;
-        addRequest.subType = subType;
-        addRequest.replaceExisting = replaceExisting;
-        for (const auto& item : marksJson) {
-            if (!item.is_object() || !item.contains("startMs") || !item.contains("endMs")) {
-                transport::ApiResponse response; response.command = request.command; response.requestId = request.requestId; response.statusCode = 400;
-                response.error = transport::ApiError{std::string(transport::errors::ValidationError), "Each timing mark must include startMs and endMs.", {{"item", item}}};
-                return response;
-            }
-            const int startMs = item.value("startMs", -1);
-            const int endMs = item.value("endMs", -1);
-            if (startMs < 0 || endMs < 0 || endMs < startMs) {
-                transport::ApiResponse response; response.command = request.command; response.requestId = request.requestId; response.statusCode = 400;
-                response.error = transport::ApiError{std::string(transport::errors::ValidationError), "Each timing mark must have a valid non-negative range.", {{"item", item}}};
-                return response;
-            }
-            addRequest.marks.push_back({startMs, endMs, item.value("label", "")});
-        }
-
-        const auto jobId = SubmitDesignerApiJob(request.command, request.requestId, [service = _service, request, addRequest, trackName]() {
-            transport::ApiResponse response; response.command = request.command; response.requestId = request.requestId;
-            const auto result = service.addMarks(addRequest);
-            if (!result.sequenceOpen) {
-                response.statusCode = 404; response.error = transport::ApiError{std::string(transport::errors::SequenceNotOpen), "No sequence open.", nlohmann::json::object()}; return response;
-            }
-            if (!result.trackFound) {
-                response.statusCode = 500; response.error = transport::ApiError{std::string(transport::errors::InternalError), "Track could not be resolved after timing.addMarks.", {{"trackName", trackName}, {"track", trackName}}}; return response;
-            }
-            response.data["requestedTrackName"] = result.requestedTrackName;
-            response.data["actualTrackName"] = result.actualTrackName;
-            response.data["trackCreated"] = result.trackCreated;
-            response.data["addedMarkCount"] = result.addedMarkCount;
-            return response;
-        });
-        return BuildQueuedJobAcceptedResponse(request, jobId);
-    }
-
-    [[nodiscard]] transport::ApiResponse handleEnsureTrack(const transport::ApiRequest& request) const {
-        transport::ApiResponse response;
-        response.command = request.command;
-        response.requestId = request.requestId;
-        const auto trackName = readTrackName(request);
-        const auto subType = parsing::ReadString(request.params, "subType");
-        if (trackName.empty()) {
-            response.statusCode = 400;
-            response.error = transport::ApiError{
-                std::string(transport::errors::ValidationError),
-                "timing.ensureTrack requires trackName.",
-                nlohmann::json{{"acceptedAliases", {"trackName", "track"}}}
-            };
-            return response;
-        }
-        const auto result = _service.ensureTrack({trackName, subType});
-        if (!result.sequenceOpen) {
-            response.statusCode = 404;
-            response.error = transport::ApiError{std::string(transport::errors::SequenceNotOpen), "No sequence open.", nlohmann::json::object()};
-            return response;
-        }
-        response.data["requestedTrackName"] = result.requestedTrackName;
-        response.data["actualTrackName"] = result.actualTrackName;
-        response.data["subType"] = result.subType;
-        response.data["created"] = result.created;
         return response;
     }
 

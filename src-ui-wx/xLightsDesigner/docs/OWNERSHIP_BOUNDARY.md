@@ -38,6 +38,7 @@ Baseline-preserved surfaces:
 - core xLights files outside the allowed hook list should remain baseline unless a future hook is explicitly justified
 
 Owned API rule:
-- native xLights effect-block authoring is out of scope for the xLightsDesigner API
-- generated FSEQ DataLayers are the sequencing integration path
+- native xLights effect-block authoring is in scope only through XLD-owned effect metadata and the owned API under `src-ui-wx/xLightsDesigner`
+- timing track creation/editing is out of scope for XLD; xLights owns timing tracks and XLD reads them
+- generated FSEQ DataLayers remain available for direct-channel proof workflows, but native effect blocks are the editable sequencing path
 - if xLights-owned automation ever needs to call into this API, keep that bridge narrow rather than shaping the owned API architecture around it

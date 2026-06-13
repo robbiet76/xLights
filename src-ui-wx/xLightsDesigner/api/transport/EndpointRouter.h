@@ -35,18 +35,25 @@ public:
         if (method == "GET" && path == "/xlightsdesigner/api/sequence/final-fseq") return "sequence.getFinalFseq";
         if (method == "GET" && path == "/xlightsdesigner/api/sequence/sync-health") return "sequence.getSyncHealth";
 
-        // Generated AI FSEQ files enter xLights through DataLayers.
+        // Generated AI FSEQ files enter xLights through DataLayers when direct
+        // channel readback is needed.
         if (method == "GET" && path == "/xlightsdesigner/api/sequence/data-layers") return "sequence.dataLayers.list";
         if (method == "POST" && path == "/xlightsdesigner/api/sequence/data-layers/upsert") return "sequence.dataLayers.upsert";
         if (method == "POST" && path == "/xlightsdesigner/api/sequence/data-layers/remove") return "sequence.dataLayers.remove";
         if (method == "POST" && path == "/xlightsdesigner/api/sequence/data-layers/reorder") return "sequence.dataLayers.reorder";
         if (method == "POST" && path == "/xlightsdesigner/api/sequence/data-layers/validate") return "sequence.dataLayers.validate";
 
-        // Timing tracks are visible in xLights and keep AI decisions auditable.
+        // Native xLights effect and layer control for XLD-authored sequences.
+        if (method == "GET" && path == "/xlightsdesigner/api/effects") return "effects.list";
+        if (method == "POST" && path == "/xlightsdesigner/api/effects/upsert") return "effects.upsert";
+        if (method == "POST" && path == "/xlightsdesigner/api/effects/remove") return "effects.remove";
+        if (method == "GET" && path == "/xlightsdesigner/api/effects/layers") return "effects.layers.list";
+        if (method == "POST" && path == "/xlightsdesigner/api/effects/layers/ensure") return "effects.layers.ensure";
+        if (method == "POST" && path == "/xlightsdesigner/api/effects/layers/remove") return "effects.layers.remove";
+
+        // Timing tracks are owned by xLights and read by XLD.
         if (method == "GET" && path == "/xlightsdesigner/api/timing/tracks") return "timing.getTracks";
         if (method == "GET" && path == "/xlightsdesigner/api/timing/marks") return "timing.getMarks";
-        if (method == "POST" && path == "/xlightsdesigner/api/timing/ensure-track") return "timing.ensureTrack";
-        if (method == "POST" && path == "/xlightsdesigner/api/timing/add-marks") return "timing.addMarks";
 
         // Media and show-folder operations are the project-to-xLights bridge.
         if (method == "GET" && path == "/xlightsdesigner/api/media/current") return "media.getCurrent";
@@ -67,10 +74,12 @@ public:
         if (method == "GET" && path == "/xlightsdesigner/api/layout/settings") return "layout.getSettings";
         if (method == "GET" && path == "/xlightsdesigner/api/layout/group-members") return "layout.getGroupMembers";
 
-        // Sequence elements expose row/order state without native effect authoring.
+        // Sequence elements expose row/order/selection state.
         if (method == "GET" && path == "/xlightsdesigner/api/elements/summary") return "elements.getSummary";
         if (method == "GET" && path == "/xlightsdesigner/api/elements/display-order") return "elements.getDisplayOrder";
         if (method == "POST" && path == "/xlightsdesigner/api/elements/display-order") return "elements.setDisplayOrder";
+        if (method == "GET" && path == "/xlightsdesigner/api/elements/selected") return "elements.getSelected";
+        if (method == "POST" && path == "/xlightsdesigner/api/elements/selected") return "elements.setSelected";
 
         return std::nullopt;
     }

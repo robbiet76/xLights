@@ -4,6 +4,7 @@
 
 #include "../handlers/DataLayerHandler.h"
 #include "../handlers/ElementHandler.h"
+#include "../handlers/EffectHandler.h"
 #include "../handlers/LayoutHandler.h"
 #include "../handlers/MediaHandler.h"
 #include "../handlers/RuntimeHandler.h"
@@ -21,6 +22,7 @@ public:
     RequestRouter(handlers::RuntimeHandler runtimeHandler,
                   handlers::SequenceHandler sequenceHandler,
                   handlers::DataLayerHandler dataLayerHandler,
+                  handlers::EffectHandler effectHandler,
                   handlers::TimingHandler timingHandler,
                   handlers::MediaHandler mediaHandler,
                   handlers::LayoutHandler layoutHandler,
@@ -28,6 +30,7 @@ public:
         : _runtimeHandler(std::move(runtimeHandler)),
           _sequenceHandler(std::move(sequenceHandler)),
           _dataLayerHandler(std::move(dataLayerHandler)),
+          _effectHandler(std::move(effectHandler)),
           _timingHandler(std::move(timingHandler)),
           _mediaHandler(std::move(mediaHandler)),
           _layoutHandler(std::move(layoutHandler)),
@@ -65,11 +68,17 @@ public:
         if (request.command == "sequence.dataLayers.reorder") return _dataLayerHandler.handleReorder(request);
         if (request.command == "sequence.dataLayers.validate") return _dataLayerHandler.handleValidate(request);
 
+        // Native xLights effect and layer control.
+        if (request.command == "effects.list") return _effectHandler.handleListEffects(request);
+        if (request.command == "effects.upsert") return _effectHandler.handleUpsertEffect(request);
+        if (request.command == "effects.remove") return _effectHandler.handleRemoveEffect(request);
+        if (request.command == "effects.layers.list") return _effectHandler.handleListLayers(request);
+        if (request.command == "effects.layers.ensure") return _effectHandler.handleEnsureLayer(request);
+        if (request.command == "effects.layers.remove") return _effectHandler.handleRemoveLayer(request);
+
         // Timing tracks and marks.
         if (request.command == "timing.getTracks") return _timingHandler.handleGetTracks(request);
         if (request.command == "timing.getMarks") return _timingHandler.handleGetMarks(request);
-        if (request.command == "timing.ensureTrack") return _timingHandler.handleEnsureTrack(request);
-        if (request.command == "timing.addMarks") return _timingHandler.handleAddMarks(request);
 
         // Media, show-folder, and path-access operations.
         if (request.command == "media.getCurrent") return _mediaHandler.handleGetCurrent(request);
@@ -94,6 +103,8 @@ public:
         if (request.command == "elements.getSummary") return _elementHandler.handleGetSummary(request);
         if (request.command == "elements.getDisplayOrder") return _elementHandler.handleGetDisplayOrder(request);
         if (request.command == "elements.setDisplayOrder") return _elementHandler.handleSetDisplayOrder(request);
+        if (request.command == "elements.getSelected") return _elementHandler.handleGetSelectedDisplayElements(request);
+        if (request.command == "elements.setSelected") return _elementHandler.handleSetSelectedDisplayElements(request);
 
         return std::nullopt;
     }
@@ -102,6 +113,7 @@ private:
     handlers::RuntimeHandler _runtimeHandler;
     handlers::SequenceHandler _sequenceHandler;
     handlers::DataLayerHandler _dataLayerHandler;
+    handlers::EffectHandler _effectHandler;
     handlers::TimingHandler _timingHandler;
     handlers::MediaHandler _mediaHandler;
     handlers::LayoutHandler _layoutHandler;

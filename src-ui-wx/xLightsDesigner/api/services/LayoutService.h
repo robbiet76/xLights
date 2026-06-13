@@ -8,7 +8,8 @@
 namespace xLightsDesigner::api::services {
 
 // Read-only display/layout service. The designer uses this structure as the
-// physical guardrail for target-render generation and direct-channel output.
+// physical guardrail for native-effect planning, proof validation, and optional
+// advanced direct-channel output.
 class LayoutService {
 public:
     using ReadModelsFn = std::function<models::LayoutModelsSummary()>;

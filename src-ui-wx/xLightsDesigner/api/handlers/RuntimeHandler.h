@@ -11,7 +11,7 @@
 namespace xLightsDesigner::api::handlers {
 
 // Runtime endpoints report process readiness, modal state, async job status,
-// and the supported DataLayer-first capability set.
+// and the supported native-effect capability set.
 class RuntimeHandler {
 public:
     RuntimeHandler() = default;
@@ -77,8 +77,8 @@ public:
         transport::ApiResponse response;
         response.command = request.command;
         response.requestId = request.requestId;
-        response.data["apiVersion"] = "xld-datalayer-v1";
-        response.data["architecture"] = "direct-channel-fseq-datalayer";
+        response.data["apiVersion"] = "xld-native-effects-v1";
+        response.data["architecture"] = "native-xlights-effects";
         response.data["runtime"] = {
             {"health", true},
             {"modalState", true},
@@ -124,8 +124,18 @@ public:
         response.data["timing"] = {
             {"listTracks", true},
             {"readMarks", true},
-            {"upsertAppOwnedTracks", true},
+            {"upsertAppOwnedTracks", false},
             {"revisionSummary", true}
+        };
+        response.data["nativeEffectControl"] = {
+            {"listEffects", true},
+            {"upsertXldOwnedEffects", true},
+            {"removeXldOwnedEffects", true},
+            {"listLayers", true},
+            {"ensureLayers", true},
+            {"removeLayers", true},
+            {"displayElementSelection", true},
+            {"effectSpecificSettingsSchema", false}
         };
         response.data["dataLayers"] = {
             {"list", true},
@@ -134,12 +144,6 @@ public:
             {"reorder", true},
             {"validate", true},
             {"relativePaths", "reported"}
-        };
-        // Native effect-block authoring remains intentionally absent from the
-        // owned API; XLD-generated FSEQ DataLayers are the product path.
-        response.data["nativeEffectControl"] = {
-            {"inScope", false},
-            {"reason", "xLightsDesigner uses generated FSEQ DataLayers and does not require native effect block authoring endpoints."}
         };
         return response;
     }

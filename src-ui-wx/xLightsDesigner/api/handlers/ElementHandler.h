@@ -13,8 +13,8 @@
 
 namespace xLightsDesigner::api::handlers {
 
-// Element endpoints expose sequence row inventory and ordering. These APIs
-// support display organization without editing native xLights effect content.
+// Element endpoints expose sequence row inventory, ordering, and selected
+// display rows. Native effect content is handled by EffectHandler.
 class ElementHandler {
 public:
     explicit ElementHandler(services::ElementService service)
@@ -41,6 +41,7 @@ public:
             nlohmann::json jsonElement = {
                 {"name", element.name},
                 {"type", element.type},
+                {"selected", element.selected},
                 {"totalEffectCount", element.totalEffectCount},
                 {"layers", nlohmann::json::array()}
             };
@@ -54,6 +55,78 @@ public:
             response.data["elements"].push_back(std::move(jsonElement));
         }
         return response;
+    }
+
+    [[nodiscard]] transport::ApiResponse handleGetSelectedDisplayElements(const transport::ApiRequest& request) const {
+        transport::ApiResponse response;
+        response.command = request.command;
+        response.requestId = request.requestId;
+
+        const auto summary = _service.getSelectedDisplayElements();
+        if (!summary.sequenceOpen) {
+            response.statusCode = 404;
+            response.error = transport::ApiError{std::string(transport::errors::SequenceNotOpen), "No sequence open.", nlohmann::json::object()};
+            return response;
+        }
+
+        response.data["selectedElementNames"] = summary.selectedElementNames;
+        return response;
+    }
+
+    [[nodiscard]] transport::ApiResponse handleSetSelectedDisplayElements(const transport::ApiRequest& request) const {
+        const auto elementNamesText = parsing::ReadString(request.params, "elementNames");
+        if (elementNamesText.empty()) {
+            transport::ApiResponse response; response.command = request.command; response.requestId = request.requestId; response.statusCode = 400;
+            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "elements.setSelected requires elementNames JSON.", nlohmann::json::object()};
+            return response;
+        }
+
+        nlohmann::json elementNamesJson;
+        try {
+            elementNamesJson = nlohmann::json::parse(elementNamesText);
+        } catch (const std::exception& ex) {
+            transport::ApiResponse response; response.command = request.command; response.requestId = request.requestId; response.statusCode = 400;
+            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "elements.setSelected received invalid elementNames JSON.", {{"reason", ex.what()}}};
+            return response;
+        }
+        if (!elementNamesJson.is_array()) {
+            transport::ApiResponse response; response.command = request.command; response.requestId = request.requestId; response.statusCode = 400;
+            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "elements.setSelected requires elementNames to be a JSON array.", nlohmann::json::object()};
+            return response;
+        }
+
+        models::SetSelectedDisplayElementsRequest selectionRequest;
+        selectionRequest.replaceExisting = parsing::ReadBool(request.params, "replaceExisting", true);
+        for (const auto& item : elementNamesJson) {
+            if (item.is_string()) {
+                selectionRequest.elementNames.push_back(item.get<std::string>());
+            }
+        }
+
+        const auto jobId = SubmitDesignerApiJob(request.command, request.requestId, [service = _service, request, selectionRequest]() {
+            transport::ApiResponse queuedResponse;
+            queuedResponse.command = request.command;
+            queuedResponse.requestId = request.requestId;
+            const auto result = service.setSelectedDisplayElements(selectionRequest);
+            if (!result.sequenceOpen) {
+                queuedResponse.statusCode = 404;
+                queuedResponse.error = transport::ApiError{std::string(transport::errors::SequenceNotOpen), "No sequence open.", nlohmann::json::object()};
+                return queuedResponse;
+            }
+            if (!result.ok) {
+                queuedResponse.statusCode = 400;
+                queuedResponse.error = transport::ApiError{
+                    result.errorCode.value_or(std::string(transport::errors::ValidationError)),
+                    result.errorMessage.value_or("elements.setSelected failed."),
+                    {{"missingNames", result.missingNames}}
+                };
+                return queuedResponse;
+            }
+            queuedResponse.data["ok"] = true;
+            queuedResponse.data["selectedCount"] = result.selectedCount;
+            return queuedResponse;
+        });
+        return BuildQueuedJobAcceptedResponse(request, jobId);
     }
 
     [[nodiscard]] transport::ApiResponse handleGetDisplayOrder(const transport::ApiRequest& request) const {

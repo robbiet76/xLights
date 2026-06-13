@@ -2,11 +2,12 @@
 
 This directory owns the xLightsDesigner-specific API and runtime integration.
 
-The production architecture is direct channel output through xLights DataLayers:
+The production architecture is native xLights effect control:
 - xLightsDesigner reads display, timing, media, and sequence state through the owned API.
-- xLightsDesigner writes an adjacent `.xld.fseq` file.
-- xLights attaches that file as an XLD DataLayer and renders the final controller `.fseq`.
-- Native xLights effect-block authoring is intentionally out of scope for this API.
+- xLightsDesigner creates and updates XLD-owned native effect blocks on xLights sequence elements.
+- xLightsDesigner controls effect layers and sequencer display-element selection when needed.
+- xLights owns timing track creation/editing; XLD reads timing tracks and marks.
+- DataLayer routes remain available for direct FSEQ readback/proof workflows, but they are not the primary editable sequencing path.
 
 Activation:
 - The integration is inert unless launched with `XLIGHTS_DESIGNER_ENABLED=1`.
@@ -15,7 +16,7 @@ Activation:
 
 Host boundary:
 - New xLightsDesigner-owned code belongs in this directory.
-- Existing xLights files should receive only narrow, gated hooks needed for lifecycle, noninteractive prompt handling, DataLayer rendering, or display readback.
+- Existing xLights files should receive only narrow, gated hooks needed for lifecycle, noninteractive prompt handling, native effect control, DataLayer rendering, or display readback.
 - Hooks must be inert during normal xLights use.
 
 Reference:

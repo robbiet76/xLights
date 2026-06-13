@@ -73,8 +73,10 @@ inline DesignerApiSelfTestResult RunDesignerApiSelfTests() {
               "EndpointRouter should not expose layout model creation endpoints.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/sequence/settings") == std::optional<std::string>("sequence.setSettings"),
               "EndpointRouter should map sequence settings mutation endpoint.", result);
-        Check(router.resolve("POST", "/xlightsdesigner/api/timing/add-marks") == std::optional<std::string>("timing.addMarks"),
-              "EndpointRouter should map timing add-marks endpoint.", result);
+        Check(!router.resolve("POST", "/xlightsdesigner/api/timing/add-marks").has_value(),
+              "EndpointRouter should not expose timing mark write endpoints.", result);
+        Check(!router.resolve("POST", "/xlightsdesigner/api/timing/ensure-track").has_value(),
+              "EndpointRouter should not expose timing track creation endpoints.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/sequence/render-samples") == std::optional<std::string>("sequence.getRenderSamples"),
               "EndpointRouter should map render samples endpoint.", result);
         Check(router.resolve("GET", "/xlightsdesigner/api/capabilities") == std::optional<std::string>("runtime.getCapabilities"),
@@ -91,8 +93,24 @@ inline DesignerApiSelfTestResult RunDesignerApiSelfTests() {
               "EndpointRouter should map display-order read endpoint.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/elements/display-order") == std::optional<std::string>("elements.setDisplayOrder"),
               "EndpointRouter should map display-order mutation endpoint.", result);
+        Check(router.resolve("GET", "/xlightsdesigner/api/elements/selected") == std::optional<std::string>("elements.getSelected"),
+              "EndpointRouter should map selected element read endpoint.", result);
+        Check(router.resolve("POST", "/xlightsdesigner/api/elements/selected") == std::optional<std::string>("elements.setSelected"),
+              "EndpointRouter should map selected element mutation endpoint.", result);
+        Check(router.resolve("GET", "/xlightsdesigner/api/effects") == std::optional<std::string>("effects.list"),
+              "EndpointRouter should map native effect list endpoint.", result);
+        Check(router.resolve("POST", "/xlightsdesigner/api/effects/upsert") == std::optional<std::string>("effects.upsert"),
+              "EndpointRouter should map native effect upsert endpoint.", result);
+        Check(router.resolve("POST", "/xlightsdesigner/api/effects/remove") == std::optional<std::string>("effects.remove"),
+              "EndpointRouter should map native effect remove endpoint.", result);
+        Check(router.resolve("GET", "/xlightsdesigner/api/effects/layers") == std::optional<std::string>("effects.layers.list"),
+              "EndpointRouter should map native effect layer list endpoint.", result);
+        Check(router.resolve("POST", "/xlightsdesigner/api/effects/layers/ensure") == std::optional<std::string>("effects.layers.ensure"),
+              "EndpointRouter should map native effect layer ensure endpoint.", result);
+        Check(router.resolve("POST", "/xlightsdesigner/api/effects/layers/remove") == std::optional<std::string>("effects.layers.remove"),
+              "EndpointRouter should map native effect layer remove endpoint.", result);
         Check(!router.resolve("POST", "/xlightsdesigner/api/effects/update").has_value(),
-              "EndpointRouter should not expose native effect mutation endpoints.", result);
+              "EndpointRouter should reject unsupported native effect endpoint names.", result);
         Check(!router.resolve("POST", "/xlightsdesigner/api/sequencing/apply-window-plan").has_value(),
               "EndpointRouter should not expose native effect sequencing endpoints.", result);
         Check(!router.resolve("DELETE", "/xlightsdesigner/api/sequence/open").has_value(),

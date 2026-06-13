@@ -6,8 +6,8 @@
 
 namespace xLightsDesigner::api::models {
 
-// Timing models represent visible xLights timing tracks and marks. The app may
-// add owned tracks, but semantic meaning comes from handoff metadata.
+// Timing models represent visible xLights timing tracks and marks. xLights owns
+// track creation/editing; XLD reads these tracks as auditable musical anchors.
 struct TimingTrackSummary {
     std::string name;
     std::string type;
@@ -41,41 +41,6 @@ struct TimingMarksSummary {
     std::string trackName;
     std::string revisionToken;
     std::vector<TimingMarkSummary> marks;
-};
-
-struct EnsureTimingTrackRequest {
-    std::string trackName;
-    std::string subType;
-};
-
-struct EnsureTimingTrackResult {
-    bool sequenceOpen = false;
-    bool created = false;
-    std::string requestedTrackName;
-    std::string actualTrackName;
-    std::string subType;
-};
-
-struct TimingMarkInput {
-    int startMs = 0;
-    int endMs = 0;
-    std::string label;
-};
-
-struct AddTimingMarksRequest {
-    std::string trackName;
-    std::string subType;
-    bool replaceExisting = false;
-    std::vector<TimingMarkInput> marks;
-};
-
-struct AddTimingMarksResult {
-    bool sequenceOpen = false;
-    bool trackCreated = false;
-    bool trackFound = false;
-    std::string requestedTrackName;
-    std::string actualTrackName;
-    int addedMarkCount = 0;
 };
 
 } // namespace xLightsDesigner::api::models
