@@ -2861,6 +2861,67 @@ public:
         });
     }
 
+    [[nodiscard]] api::models::EnsureSequenceElementsResult ensureSequenceElements(const api::models::EnsureSequenceElementsRequest& request) const {
+        return RunOnMainThread<api::models::EnsureSequenceElementsResult>([this, request]() {
+            api::models::EnsureSequenceElementsResult result;
+            if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) {
+                return result;
+            }
+            result.sequenceOpen = true;
+            auto& sequenceElements = _frame->GetSequenceElements();
+
+            std::set<std::string> seen;
+            std::vector<std::string> names;
+            for (const auto& name : request.elementNames) {
+                if (name.empty() || !seen.insert(name).second) {
+                    continue;
+                }
+                names.push_back(name);
+                if (sequenceElements.GetElement(name) != nullptr) {
+                    result.existingNames.push_back(name);
+                    continue;
+                }
+                if (_frame->AllModels.GetModel(name) == nullptr) {
+                    result.missingNames.push_back(name);
+                }
+            }
+            if (!result.missingNames.empty()) {
+                result.errorCode = std::string("VALIDATION_ERROR");
+                result.errorMessage = std::string("Cannot add sequence elements that are not present in the xLights layout.");
+                return result;
+            }
+
+            for (const auto& name : names) {
+                if (sequenceElements.GetElement(name) != nullptr) {
+                    continue;
+                }
+                Element* element = sequenceElements.AddElement(name, "model", true, false, false, false, false);
+                if (element == nullptr) {
+                    result.missingNames.push_back(name);
+                    continue;
+                }
+                element->AddEffectLayer();
+                result.addedNames.push_back(name);
+            }
+            if (!result.missingNames.empty()) {
+                result.errorCode = std::string("VALIDATION_ERROR");
+                result.errorMessage = std::string("One or more sequence elements could not be added.");
+                return result;
+            }
+
+            if (!result.addedNames.empty()) {
+                sequenceElements.PopulateRowInformation();
+                sequenceElements.PopulateVisibleRowInformation();
+                _frame->MarkEffectsFileDirty();
+                wxCommandEvent eventRowHeaderChanged(EVT_ROW_HEADINGS_CHANGED);
+                wxPostEvent(_frame, eventRowHeaderChanged);
+            }
+            result.ok = true;
+            result.addedCount = static_cast<int>(result.addedNames.size());
+            return result;
+        });
+    }
+
     [[nodiscard]] api::models::SelectedDisplayElementsSummary readSelectedDisplayElements() const {
         api::models::SelectedDisplayElementsSummary summary;
         if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) {

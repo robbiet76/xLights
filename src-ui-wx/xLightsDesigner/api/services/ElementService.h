@@ -14,17 +14,20 @@ public:
     using ReadElementsFn = std::function<models::ElementsSummary()>;
     using ReadDisplayOrderFn = std::function<models::DisplayElementOrderSummary()>;
     using SetDisplayOrderFn = std::function<models::SetDisplayElementOrderResult(const models::SetDisplayElementOrderRequest&)>;
+    using EnsureSequenceElementsFn = std::function<models::EnsureSequenceElementsResult(const models::EnsureSequenceElementsRequest&)>;
     using ReadSelectedDisplayElementsFn = std::function<models::SelectedDisplayElementsSummary()>;
     using SetSelectedDisplayElementsFn = std::function<models::SetSelectedDisplayElementsResult(const models::SetSelectedDisplayElementsRequest&)>;
 
     ElementService(ReadElementsFn readElements,
                    ReadDisplayOrderFn readDisplayOrder,
                    SetDisplayOrderFn setDisplayOrder,
+                   EnsureSequenceElementsFn ensureSequenceElements,
                    ReadSelectedDisplayElementsFn readSelectedDisplayElements,
                    SetSelectedDisplayElementsFn setSelectedDisplayElements)
         : _readElements(std::move(readElements)),
           _readDisplayOrder(std::move(readDisplayOrder)),
           _setDisplayOrder(std::move(setDisplayOrder)),
+          _ensureSequenceElements(std::move(ensureSequenceElements)),
           _readSelectedDisplayElements(std::move(readSelectedDisplayElements)),
           _setSelectedDisplayElements(std::move(setSelectedDisplayElements)) {}
 
@@ -40,6 +43,10 @@ public:
         return _setDisplayOrder ? _setDisplayOrder(request) : models::SetDisplayElementOrderResult{};
     }
 
+    [[nodiscard]] models::EnsureSequenceElementsResult ensureSequenceElements(const models::EnsureSequenceElementsRequest& request) const {
+        return _ensureSequenceElements ? _ensureSequenceElements(request) : models::EnsureSequenceElementsResult{};
+    }
+
     [[nodiscard]] models::SelectedDisplayElementsSummary getSelectedDisplayElements() const {
         return _readSelectedDisplayElements ? _readSelectedDisplayElements() : models::SelectedDisplayElementsSummary{};
     }
@@ -52,6 +59,7 @@ private:
     ReadElementsFn _readElements;
     ReadDisplayOrderFn _readDisplayOrder;
     SetDisplayOrderFn _setDisplayOrder;
+    EnsureSequenceElementsFn _ensureSequenceElements;
     ReadSelectedDisplayElementsFn _readSelectedDisplayElements;
     SetSelectedDisplayElementsFn _setSelectedDisplayElements;
 };

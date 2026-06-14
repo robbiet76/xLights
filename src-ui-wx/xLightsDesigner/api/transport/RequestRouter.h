@@ -102,6 +102,7 @@ public:
 
         // Display element row/order state.
         if (request.command == "elements.getSummary") return _elementHandler.handleGetSummary(request);
+        if (request.command == "elements.ensure") return _elementHandler.handleEnsureSequenceElements(request);
         if (request.command == "elements.getDisplayOrder") return _elementHandler.handleGetDisplayOrder(request);
         if (request.command == "elements.setDisplayOrder") return _elementHandler.handleSetDisplayOrder(request);
         if (request.command == "elements.getSelected") return _elementHandler.handleGetSelectedDisplayElements(request);

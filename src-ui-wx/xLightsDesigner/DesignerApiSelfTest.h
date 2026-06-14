@@ -91,6 +91,8 @@ inline DesignerApiSelfTestResult RunDesignerApiSelfTests() {
               "EndpointRouter should map preview video export endpoint.", result);
         Check(router.resolve("GET", "/xlightsdesigner/api/elements/display-order") == std::optional<std::string>("elements.getDisplayOrder"),
               "EndpointRouter should map display-order read endpoint.", result);
+        Check(router.resolve("POST", "/xlightsdesigner/api/elements/ensure") == std::optional<std::string>("elements.ensure"),
+              "EndpointRouter should map sequence element ensure endpoint.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/elements/display-order") == std::optional<std::string>("elements.setDisplayOrder"),
               "EndpointRouter should map display-order mutation endpoint.", result);
         Check(router.resolve("GET", "/xlightsdesigner/api/elements/selected") == std::optional<std::string>("elements.getSelected"),

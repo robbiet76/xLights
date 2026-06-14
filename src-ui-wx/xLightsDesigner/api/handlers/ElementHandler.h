@@ -73,6 +73,68 @@ public:
         return response;
     }
 
+    [[nodiscard]] transport::ApiResponse handleEnsureSequenceElements(const transport::ApiRequest& request) const {
+        const auto elementNamesText = parsing::ReadString(request.params, "elementNames");
+        if (elementNamesText.empty()) {
+            transport::ApiResponse response; response.command = request.command; response.requestId = request.requestId; response.statusCode = 400;
+            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "elements.ensure requires elementNames JSON.", nlohmann::json::object()};
+            return response;
+        }
+
+        nlohmann::json elementNamesJson;
+        try {
+            elementNamesJson = nlohmann::json::parse(elementNamesText);
+        } catch (const std::exception& ex) {
+            transport::ApiResponse response; response.command = request.command; response.requestId = request.requestId; response.statusCode = 400;
+            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "elements.ensure received invalid elementNames JSON.", {{"reason", ex.what()}}};
+            return response;
+        }
+        if (!elementNamesJson.is_array() || elementNamesJson.empty()) {
+            transport::ApiResponse response; response.command = request.command; response.requestId = request.requestId; response.statusCode = 400;
+            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "elements.ensure requires elementNames to be a non-empty JSON array.", nlohmann::json::object()};
+            return response;
+        }
+
+        models::EnsureSequenceElementsRequest ensureRequest;
+        for (const auto& item : elementNamesJson) {
+            if (item.is_string()) {
+                ensureRequest.elementNames.push_back(item.get<std::string>());
+            }
+        }
+        if (ensureRequest.elementNames.empty()) {
+            transport::ApiResponse response; response.command = request.command; response.requestId = request.requestId; response.statusCode = 400;
+            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "elements.ensure did not receive any usable element names.", nlohmann::json::object()};
+            return response;
+        }
+
+        const auto jobId = SubmitDesignerApiJob(request.command, request.requestId, [service = _service, request, ensureRequest]() {
+            transport::ApiResponse queuedResponse;
+            queuedResponse.command = request.command;
+            queuedResponse.requestId = request.requestId;
+            const auto result = service.ensureSequenceElements(ensureRequest);
+            if (!result.sequenceOpen) {
+                queuedResponse.statusCode = 404;
+                queuedResponse.error = transport::ApiError{std::string(transport::errors::SequenceNotOpen), "No sequence open.", nlohmann::json::object()};
+                return queuedResponse;
+            }
+            if (!result.ok) {
+                queuedResponse.statusCode = 400;
+                queuedResponse.error = transport::ApiError{
+                    result.errorCode.value_or(std::string(transport::errors::ValidationError)),
+                    result.errorMessage.value_or("elements.ensure failed."),
+                    {{"missingNames", result.missingNames}}
+                };
+                return queuedResponse;
+            }
+            queuedResponse.data["ok"] = true;
+            queuedResponse.data["addedCount"] = result.addedCount;
+            queuedResponse.data["addedNames"] = result.addedNames;
+            queuedResponse.data["existingNames"] = result.existingNames;
+            return queuedResponse;
+        });
+        return BuildQueuedJobAcceptedResponse(request, jobId);
+    }
+
     [[nodiscard]] transport::ApiResponse handleSetSelectedDisplayElements(const transport::ApiRequest& request) const {
         const auto elementNamesText = parsing::ReadString(request.params, "elementNames");
         if (elementNamesText.empty()) {

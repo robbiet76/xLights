@@ -71,4 +71,19 @@ struct SetDisplayElementOrderResult {
     std::optional<std::string> errorMessage;
 };
 
+struct EnsureSequenceElementsRequest {
+    std::vector<std::string> elementNames;
+};
+
+struct EnsureSequenceElementsResult {
+    bool sequenceOpen = false;
+    bool ok = false;
+    int addedCount = 0;
+    std::vector<std::string> addedNames;
+    std::vector<std::string> existingNames;
+    std::vector<std::string> missingNames;
+    std::optional<std::string> errorCode;
+    std::optional<std::string> errorMessage;
+};
+
 } // namespace xLightsDesigner::api::models

@@ -77,6 +77,7 @@ public:
 
         // Sequence elements expose row/order/selection state.
         if (method == "GET" && path == "/xlightsdesigner/api/elements/summary") return "elements.getSummary";
+        if (method == "POST" && path == "/xlightsdesigner/api/elements/ensure") return "elements.ensure";
         if (method == "GET" && path == "/xlightsdesigner/api/elements/display-order") return "elements.getDisplayOrder";
         if (method == "POST" && path == "/xlightsdesigner/api/elements/display-order") return "elements.setDisplayOrder";
         if (method == "GET" && path == "/xlightsdesigner/api/elements/selected") return "elements.getSelected";

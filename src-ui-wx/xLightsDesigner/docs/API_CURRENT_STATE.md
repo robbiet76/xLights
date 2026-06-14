@@ -121,6 +121,7 @@ Show-folder switching is explicit and should be followed by fresh display, chann
 
 Routes:
 - `GET /xlightsdesigner/api/elements/summary`
+- `POST /xlightsdesigner/api/elements/ensure`
 - `GET /xlightsdesigner/api/elements/display-order`
 - `POST /xlightsdesigner/api/elements/display-order`
 - `GET /xlightsdesigner/api/elements/selected`

@@ -253,6 +253,7 @@ inline std::optional<api::transport::ApiResponse> HandleDesignerApiRequest(
         [host]() { return host->readElements(); },
         [host]() { return host->readDisplayElementOrder(); },
         [host](const api::models::SetDisplayElementOrderRequest& request) { return host->setDisplayElementOrder(request); },
+        [host](const api::models::EnsureSequenceElementsRequest& request) { return host->ensureSequenceElements(request); },
         [host]() { return host->readSelectedDisplayElements(); },
         [host](const api::models::SetSelectedDisplayElementsRequest& request) { return host->setSelectedDisplayElements(request); });
     api::handlers::RuntimeHandler runtimeHandler([host]() { return host->readModalState(); });
