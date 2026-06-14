@@ -44,6 +44,7 @@ public:
         if (method == "POST" && path == "/xlightsdesigner/api/sequence/data-layers/validate") return "sequence.dataLayers.validate";
 
         // Native xLights effect and layer control for XLD-authored sequences.
+        if (method == "GET" && path == "/xlightsdesigner/api/effects/schemas") return "effects.schemas";
         if (method == "GET" && path == "/xlightsdesigner/api/effects") return "effects.list";
         if (method == "POST" && path == "/xlightsdesigner/api/effects/upsert") return "effects.upsert";
         if (method == "POST" && path == "/xlightsdesigner/api/effects/remove") return "effects.remove";

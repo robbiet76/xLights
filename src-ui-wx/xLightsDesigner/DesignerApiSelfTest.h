@@ -99,6 +99,8 @@ inline DesignerApiSelfTestResult RunDesignerApiSelfTests() {
               "EndpointRouter should map selected element mutation endpoint.", result);
         Check(router.resolve("GET", "/xlightsdesigner/api/effects") == std::optional<std::string>("effects.list"),
               "EndpointRouter should map native effect list endpoint.", result);
+        Check(router.resolve("GET", "/xlightsdesigner/api/effects/schemas") == std::optional<std::string>("effects.schemas"),
+              "EndpointRouter should map native effect schema endpoint.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/effects/upsert") == std::optional<std::string>("effects.upsert"),
               "EndpointRouter should map native effect upsert endpoint.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/effects/remove") == std::optional<std::string>("effects.remove"),

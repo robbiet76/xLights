@@ -226,6 +226,7 @@ inline std::optional<api::transport::ApiResponse> HandleDesignerApiRequest(
         [host]() { return host->readTimingTracks(); },
         [host](const api::models::TimingMarksRequest& request) { return host->readTimingMarks(request); });
     api::services::EffectService effectService(
+        [host](const api::models::NativeEffectSchemaRequest& request) { return host->readNativeEffectSchemas(request); },
         [host](const api::models::NativeEffectListRequest& request) { return host->readNativeEffects(request); },
         [host](const api::models::NativeEffectUpsertRequest& request) { return host->upsertNativeEffect(request); },
         [host](const api::models::NativeEffectRemoveRequest& request) { return host->removeNativeEffect(request); },

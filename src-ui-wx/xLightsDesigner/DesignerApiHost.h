@@ -36,6 +36,7 @@
 #include "models/OutputModelManager.h"
 #include "models/SubModel.h"
 #include "ExternalHooks.h"
+#include "effects/RenderableEffect.h"
 #include "DesignerDiagnostics.h"
 #include "DesignerApiRuntime.h"
 #include "DesignerLaunchPolicy.h"
@@ -494,12 +495,24 @@ inline bool NativeEffectIsXldOwned(const Effect* effect) {
     return effect != nullptr && !effect->GetSettings().Get("XLD_OWNER", "").empty();
 }
 
-inline std::string BuildNativeEffectApiId(const std::string& elementName, int layerIndex, const Effect* effect) {
+inline Element* ResolveNativeEffectElement(SequenceElements& sequenceElements, const std::string& elementName, const std::string& submodelName) {
+    Element* element = sequenceElements.GetElement(elementName);
+    if (element == nullptr || submodelName.empty()) {
+        return element;
+    }
+    auto* modelElement = dynamic_cast<ModelElement*>(element);
+    if (modelElement == nullptr) {
+        return nullptr;
+    }
+    return modelElement->GetSubModel(submodelName);
+}
+
+inline std::string BuildNativeEffectApiId(const std::string& elementName, const std::string& submodelName, int layerIndex, const Effect* effect) {
     if (effect == nullptr) {
         return std::string();
     }
     std::ostringstream stream;
-    stream << elementName << '|' << layerIndex << '|' << effect->GetID();
+    stream << elementName << '|' << submodelName << '|' << layerIndex << '|' << effect->GetID();
     return stream.str();
 }
 
@@ -513,13 +526,14 @@ inline std::string AddNativeEffectOwnershipSettings(const std::string& settings,
     return map.AsString();
 }
 
-inline api::models::NativeEffectSummary BuildNativeEffectSummary(const std::string& elementName, int layerIndex, const Effect* effect, bool includeSettings = true) {
+inline api::models::NativeEffectSummary BuildNativeEffectSummary(const std::string& elementName, const std::string& submodelName, int layerIndex, const Effect* effect, bool includeSettings = true) {
     api::models::NativeEffectSummary summary;
     if (effect == nullptr) {
         return summary;
     }
-    summary.id = BuildNativeEffectApiId(elementName, layerIndex, effect);
+    summary.id = BuildNativeEffectApiId(elementName, submodelName, layerIndex, effect);
     summary.elementName = elementName;
+    summary.submodelName = submodelName;
     summary.layerIndex = layerIndex;
     summary.effectIndex = effect->GetEffectIndex();
     summary.nativeId = effect->GetID();
@@ -539,12 +553,13 @@ inline api::models::NativeEffectSummary BuildNativeEffectSummary(const std::stri
     return summary;
 }
 
-inline api::models::NativeEffectLayerSummary BuildNativeEffectLayerSummary(const std::string& elementName, int layerIndex, const EffectLayer* layer) {
+inline api::models::NativeEffectLayerSummary BuildNativeEffectLayerSummary(const std::string& elementName, const std::string& submodelName, int layerIndex, const EffectLayer* layer) {
     api::models::NativeEffectLayerSummary summary;
     if (layer == nullptr) {
         return summary;
     }
     summary.elementName = elementName;
+    summary.submodelName = submodelName;
     summary.layerIndex = layerIndex;
     summary.layerNumber = layer->GetLayerNumber();
     summary.layerName = layer->GetLayerName();
@@ -2902,6 +2917,45 @@ public:
     }
 
     // Native effect and layer operations.
+    [[nodiscard]] api::models::NativeEffectSchemaResult readNativeEffectSchemas(const api::models::NativeEffectSchemaRequest& request) const {
+        api::models::NativeEffectSchemaResult result;
+        if (_frame == nullptr) {
+            return result;
+        }
+
+        std::set<std::string> requestedNames(request.effectNames.begin(), request.effectNames.end());
+        auto& effectManager = _frame->GetEffectManager();
+        for (int index = 0; index < static_cast<int>(effectManager.size()); ++index) {
+            RenderableEffect* effect = effectManager.GetEffect(index);
+            if (effect == nullptr) {
+                continue;
+            }
+            const std::string effectName = effect->Name();
+            if (!requestedNames.empty() && requestedNames.find(effectName) == requestedNames.end()) {
+                continue;
+            }
+
+            api::models::NativeEffectSchema schema;
+            schema.effectName = effectName;
+            schema.rawMetadata = effect->GetMetadata();
+            if (schema.rawMetadata.is_object()) {
+                schema.canvasMode = schema.rawMetadata.value("canvasMode", false);
+                if (schema.rawMetadata.contains("properties") && schema.rawMetadata["properties"].is_array()) {
+                    schema.properties = schema.rawMetadata["properties"];
+                }
+                if (schema.rawMetadata.contains("groups") && schema.rawMetadata["groups"].is_array()) {
+                    schema.groups = schema.rawMetadata["groups"];
+                }
+                if (schema.rawMetadata.contains("visibilityRules") && schema.rawMetadata["visibilityRules"].is_array()) {
+                    schema.visibilityRules = schema.rawMetadata["visibilityRules"];
+                }
+            }
+            result.schemas.push_back(std::move(schema));
+        }
+        result.revisionToken = std::string("effect-schemas:") + std::to_string(effectManager.size());
+        return result;
+    }
+
     [[nodiscard]] api::models::NativeEffectListResult readNativeEffects(const api::models::NativeEffectListRequest& request) const {
         api::models::NativeEffectListResult result;
         if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) {
@@ -2910,16 +2964,11 @@ public:
 
         result.sequenceOpen = true;
         auto& sequenceElements = _frame->GetSequenceElements();
-        const size_t elementCount = request.elementName.empty() ? sequenceElements.GetElementCount() : 1;
-        for (size_t elementIndex = 0; elementIndex < elementCount; ++elementIndex) {
-            Element* element = request.elementName.empty()
-                ? sequenceElements.GetElement(elementIndex)
-                : sequenceElements.GetElement(request.elementName);
+        auto collectEffects = [&](const std::string& parentName, const std::string& submodelName, Element* element) {
             if (element == nullptr) {
-                continue;
+                return;
             }
             result.elementFound = true;
-            const std::string elementName = element->GetName();
             for (size_t layerIndex = 0; layerIndex < element->GetEffectLayerCount(); ++layerIndex) {
                 EffectLayer* layer = element->GetEffectLayer(static_cast<int>(layerIndex));
                 if (layer == nullptr) {
@@ -2938,7 +2987,33 @@ public:
                     if (request.xldOnly && !detail::NativeEffectIsXldOwned(effect)) {
                         continue;
                     }
-                    result.effects.push_back(detail::BuildNativeEffectSummary(elementName, static_cast<int>(layerIndex), effect, request.includeSettings));
+                    result.effects.push_back(detail::BuildNativeEffectSummary(parentName, submodelName, static_cast<int>(layerIndex), effect, request.includeSettings));
+                }
+            }
+        };
+
+        const size_t elementCount = request.elementName.empty() ? sequenceElements.GetElementCount() : 1;
+        for (size_t elementIndex = 0; elementIndex < elementCount; ++elementIndex) {
+            Element* element = request.elementName.empty()
+                ? sequenceElements.GetElement(elementIndex)
+                : sequenceElements.GetElement(request.elementName);
+            if (element == nullptr) {
+                continue;
+            }
+            if (!request.submodelName.empty()) {
+                collectEffects(element->GetName(), request.submodelName, detail::ResolveNativeEffectElement(sequenceElements, element->GetName(), request.submodelName));
+            } else {
+                collectEffects(element->GetName(), std::string(), element);
+                if (request.elementName.empty()) {
+                    auto* modelElement = dynamic_cast<ModelElement*>(element);
+                    if (modelElement != nullptr) {
+                        for (int submodelIndex = 0; submodelIndex < modelElement->GetSubModelAndStrandCount(); ++submodelIndex) {
+                            SubModelElement* submodel = modelElement->GetSubModel(submodelIndex);
+                            if (submodel != nullptr) {
+                                collectEffects(element->GetName(), submodel->GetName(), submodel);
+                            }
+                        }
+                    }
                 }
             }
             if (!request.elementName.empty()) {
@@ -2956,6 +3031,16 @@ public:
 
         result.sequenceOpen = true;
         auto& sequenceElements = _frame->GetSequenceElements();
+        auto collectLayers = [&](const std::string& parentName, const std::string& submodelName, Element* element) {
+            if (element == nullptr) {
+                return;
+            }
+            result.elementFound = true;
+            for (size_t layerIndex = 0; layerIndex < element->GetEffectLayerCount(); ++layerIndex) {
+                result.layers.push_back(detail::BuildNativeEffectLayerSummary(parentName, submodelName, static_cast<int>(layerIndex), element->GetEffectLayer(static_cast<int>(layerIndex))));
+            }
+        };
+
         const size_t elementCount = request.elementName.empty() ? sequenceElements.GetElementCount() : 1;
         for (size_t elementIndex = 0; elementIndex < elementCount; ++elementIndex) {
             Element* element = request.elementName.empty()
@@ -2964,9 +3049,21 @@ public:
             if (element == nullptr) {
                 continue;
             }
-            result.elementFound = true;
-            for (size_t layerIndex = 0; layerIndex < element->GetEffectLayerCount(); ++layerIndex) {
-                result.layers.push_back(detail::BuildNativeEffectLayerSummary(element->GetName(), static_cast<int>(layerIndex), element->GetEffectLayer(static_cast<int>(layerIndex))));
+            if (!request.submodelName.empty()) {
+                collectLayers(element->GetName(), request.submodelName, detail::ResolveNativeEffectElement(sequenceElements, element->GetName(), request.submodelName));
+            } else {
+                collectLayers(element->GetName(), std::string(), element);
+                if (request.elementName.empty()) {
+                    auto* modelElement = dynamic_cast<ModelElement*>(element);
+                    if (modelElement != nullptr) {
+                        for (int submodelIndex = 0; submodelIndex < modelElement->GetSubModelAndStrandCount(); ++submodelIndex) {
+                            SubModelElement* submodel = modelElement->GetSubModel(submodelIndex);
+                            if (submodel != nullptr) {
+                                collectLayers(element->GetName(), submodel->GetName(), submodel);
+                            }
+                        }
+                    }
+                }
             }
             if (!request.elementName.empty()) {
                 break;
@@ -2982,10 +3079,10 @@ public:
                 return result;
             }
             result.sequenceOpen = true;
-            Element* element = _frame->GetSequenceElements().GetElement(request.elementName);
+            Element* element = detail::ResolveNativeEffectElement(_frame->GetSequenceElements(), request.elementName, request.submodelName);
             if (element == nullptr) {
                 result.errorCode = std::string("VALIDATION_ERROR");
-                result.errorMessage = std::string("Requested sequence element was not found.");
+                result.errorMessage = std::string("Requested sequence element or submodel was not found.");
                 return result;
             }
             result.elementFound = true;
@@ -3012,7 +3109,7 @@ public:
             wxPostEvent(_frame, eventRowHeaderChanged);
             result.layerFound = true;
             result.ok = true;
-            result.layer = detail::BuildNativeEffectLayerSummary(element->GetName(), targetIndex, layer);
+            result.layer = detail::BuildNativeEffectLayerSummary(request.elementName, request.submodelName, targetIndex, layer);
             return result;
         });
     }
@@ -3024,10 +3121,10 @@ public:
                 return result;
             }
             result.sequenceOpen = true;
-            Element* element = _frame->GetSequenceElements().GetElement(request.elementName);
+            Element* element = detail::ResolveNativeEffectElement(_frame->GetSequenceElements(), request.elementName, request.submodelName);
             if (element == nullptr) {
                 result.errorCode = std::string("VALIDATION_ERROR");
-                result.errorMessage = std::string("Requested sequence element was not found.");
+                result.errorMessage = std::string("Requested sequence element or submodel was not found.");
                 return result;
             }
             result.elementFound = true;
@@ -3038,7 +3135,7 @@ public:
                 return result;
             }
             result.layerFound = true;
-            result.layer = detail::BuildNativeEffectLayerSummary(element->GetName(), request.layerIndex, layer);
+            result.layer = detail::BuildNativeEffectLayerSummary(request.elementName, request.submodelName, request.layerIndex, layer);
             if (result.layer.hasUserOwnedEffects && !request.allowUserOwned) {
                 result.errorCode = std::string("OWNERSHIP_ERROR");
                 result.errorMessage = std::string("Refusing to remove a layer containing user-owned native effects.");
@@ -3061,10 +3158,10 @@ public:
                 return result;
             }
             result.sequenceOpen = true;
-            Element* element = _frame->GetSequenceElements().GetElement(request.elementName);
+            Element* element = detail::ResolveNativeEffectElement(_frame->GetSequenceElements(), request.elementName, request.submodelName);
             if (element == nullptr) {
                 result.errorCode = std::string("VALIDATION_ERROR");
-                result.errorMessage = std::string("Requested sequence element was not found.");
+                result.errorMessage = std::string("Requested sequence element or submodel was not found.");
                 return result;
             }
             result.elementFound = true;
@@ -3125,7 +3222,7 @@ public:
             wxCommandEvent eventRowHeaderChanged(EVT_ROW_HEADINGS_CHANGED);
             wxPostEvent(_frame, eventRowHeaderChanged);
             result.ok = true;
-            result.effect = detail::BuildNativeEffectSummary(element->GetName(), request.layerIndex, target, true);
+            result.effect = detail::BuildNativeEffectSummary(request.elementName, request.submodelName, request.layerIndex, target, true);
             return result;
         });
     }
@@ -3137,10 +3234,10 @@ public:
                 return result;
             }
             result.sequenceOpen = true;
-            Element* element = _frame->GetSequenceElements().GetElement(request.elementName);
+            Element* element = detail::ResolveNativeEffectElement(_frame->GetSequenceElements(), request.elementName, request.submodelName);
             if (element == nullptr) {
                 result.errorCode = std::string("VALIDATION_ERROR");
-                result.errorMessage = std::string("Requested sequence element was not found.");
+                result.errorMessage = std::string("Requested sequence element or submodel was not found.");
                 return result;
             }
             result.elementFound = true;
@@ -3172,7 +3269,7 @@ public:
                 return result;
             }
 
-            result.effect = detail::BuildNativeEffectSummary(element->GetName(), request.layerIndex, target, true);
+            result.effect = detail::BuildNativeEffectSummary(request.elementName, request.submodelName, request.layerIndex, target, true);
             layer->DeleteEffect(target->GetID());
             _frame->MarkEffectsFileDirty();
             wxCommandEvent eventRowHeaderChanged(EVT_ROW_HEADINGS_CHANGED);

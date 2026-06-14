@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 namespace xLightsDesigner::api::models {
 
 // Native xLights effects are controlled through their existing effect name,
@@ -13,6 +15,7 @@ namespace xLightsDesigner::api::models {
 struct NativeEffectSummary {
     std::string id;
     std::string elementName;
+    std::string submodelName;
     int layerIndex = 0;
     int effectIndex = 0;
     int nativeId = 0;
@@ -31,6 +34,7 @@ struct NativeEffectSummary {
 
 struct NativeEffectListRequest {
     std::string elementName;
+    std::string submodelName;
     std::optional<int> startMs;
     std::optional<int> endMs;
     bool xldOnly = false;
@@ -43,8 +47,27 @@ struct NativeEffectListResult {
     std::vector<NativeEffectSummary> effects;
 };
 
+struct NativeEffectSchemaRequest {
+    std::vector<std::string> effectNames;
+};
+
+struct NativeEffectSchema {
+    std::string effectName;
+    bool canvasMode = false;
+    nlohmann::json properties = nlohmann::json::array();
+    nlohmann::json groups = nlohmann::json::array();
+    nlohmann::json visibilityRules = nlohmann::json::array();
+    nlohmann::json rawMetadata = nlohmann::json::object();
+};
+
+struct NativeEffectSchemaResult {
+    std::vector<NativeEffectSchema> schemas;
+    std::string revisionToken;
+};
+
 struct NativeEffectLayerSummary {
     std::string elementName;
+    std::string submodelName;
     int layerIndex = 0;
     int layerNumber = 0;
     std::string layerName;
@@ -55,6 +78,7 @@ struct NativeEffectLayerSummary {
 
 struct NativeEffectLayerListRequest {
     std::string elementName;
+    std::string submodelName;
 };
 
 struct NativeEffectLayerListResult {
@@ -65,12 +89,14 @@ struct NativeEffectLayerListResult {
 
 struct NativeEffectLayerEnsureRequest {
     std::string elementName;
+    std::string submodelName;
     int layerIndex = -1;
     std::string layerName;
 };
 
 struct NativeEffectLayerRemoveRequest {
     std::string elementName;
+    std::string submodelName;
     int layerIndex = -1;
     bool allowUserOwned = false;
 };
@@ -89,6 +115,7 @@ struct NativeEffectLayerMutationResult {
 
 struct NativeEffectUpsertRequest {
     std::string elementName;
+    std::string submodelName;
     int layerIndex = 0;
     int nativeId = -1;
     std::string xldId;
@@ -116,6 +143,7 @@ struct NativeEffectMutationResult {
 
 struct NativeEffectRemoveRequest {
     std::string elementName;
+    std::string submodelName;
     int layerIndex = 0;
     int nativeId = -1;
     std::string xldId;

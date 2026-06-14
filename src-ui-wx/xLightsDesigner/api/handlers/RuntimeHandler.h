@@ -135,7 +135,7 @@ public:
             {"ensureLayers", true},
             {"removeLayers", true},
             {"displayElementSelection", true},
-            {"effectSpecificSettingsSchema", false}
+            {"effectSpecificSettingsSchema", true}
         };
         response.data["dataLayers"] = {
             {"list", true},

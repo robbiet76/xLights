@@ -521,7 +521,7 @@ bool xLightsFrame::SetDir(const wxString& newdir, bool permanent)
     _outputModelManager.AddImmediateWork(OutputModelManager::WORK_RESEND_CONTROLLER_CONFIG, "SetDir");
     spdlog::debug("Start channels done.");
 
-    if (mBackupOnLaunch && !_renderMode && !CurrentDir.StartsWith(wxFileName::GetTempDir())) {
+    if (mBackupOnLaunch && !xLightsDesigner::IsNonInteractiveLaunch() && !_renderMode && !CurrentDir.StartsWith(wxFileName::GetTempDir())) {
         spdlog::debug("Backing up show directory before we do anything this session in this folder : {}.", ToStdString(CurrentDir));
         DoBackup(false, true);
         spdlog::debug("Backup completed.");

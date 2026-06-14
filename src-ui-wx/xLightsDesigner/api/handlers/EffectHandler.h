@@ -1,5 +1,6 @@
 #pragma once
 
+#include <sstream>
 #include <utility>
 
 #include <nlohmann/json.hpp>
@@ -21,6 +22,43 @@ public:
     explicit EffectHandler(services::EffectService service)
         : _service(std::move(service)) {}
 
+    [[nodiscard]] transport::ApiResponse handleListSchemas(const transport::ApiRequest& request) const {
+        transport::ApiResponse response;
+        response.command = request.command;
+        response.requestId = request.requestId;
+
+        models::NativeEffectSchemaRequest schemaRequest;
+        const auto effectNamesIt = request.params.find("effectNames");
+        if (effectNamesIt != request.params.end()) {
+            const std::string& names = effectNamesIt->second;
+            if (!names.empty() && names.front() == '[') {
+                const auto parsedNames = nlohmann::json::parse(names, nullptr, false);
+                if (parsedNames.is_array()) {
+                    for (const auto& value : parsedNames) {
+                        if (value.is_string()) {
+                            schemaRequest.effectNames.push_back(value.get<std::string>());
+                        }
+                    }
+                }
+            } else {
+                std::stringstream stream(names);
+                std::string effectName;
+                while (std::getline(stream, effectName, ',')) {
+                    if (!effectName.empty()) {
+                        schemaRequest.effectNames.push_back(effectName);
+                    }
+                }
+            }
+        }
+        const auto result = _service.listSchemas(schemaRequest);
+        response.data["revisionToken"] = result.revisionToken;
+        response.data["schemas"] = nlohmann::json::array();
+        for (const auto& schema : result.schemas) {
+            response.data["schemas"].push_back(schemaToJson(schema));
+        }
+        return response;
+    }
+
     [[nodiscard]] transport::ApiResponse handleListEffects(const transport::ApiRequest& request) const {
         transport::ApiResponse response;
         response.command = request.command;
@@ -28,6 +66,7 @@ public:
 
         models::NativeEffectListRequest listRequest;
         listRequest.elementName = parsing::ReadString(request.params, "elementName");
+        listRequest.submodelName = parsing::ReadString(request.params, "submodelName");
         const int startMs = parsing::ReadInt(request.params, "startMs", -1);
         const int endMs = parsing::ReadInt(request.params, "endMs", -1);
         if (startMs >= 0) listRequest.startMs = startMs;
@@ -41,9 +80,9 @@ public:
             response.error = transport::ApiError{std::string(transport::errors::SequenceNotOpen), "No sequence open.", nlohmann::json::object()};
             return response;
         }
-        if (!listRequest.elementName.empty() && !result.elementFound) {
+        if ((!listRequest.elementName.empty() || !listRequest.submodelName.empty()) && !result.elementFound) {
             response.statusCode = 404;
-            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "Requested sequence element was not found.", {{"elementName", listRequest.elementName}}};
+            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "Requested sequence element or submodel was not found.", {{"elementName", listRequest.elementName}, {"submodelName", listRequest.submodelName}}};
             return response;
         }
         response.data["effects"] = nlohmann::json::array();
@@ -56,6 +95,7 @@ public:
     [[nodiscard]] transport::ApiResponse handleUpsertEffect(const transport::ApiRequest& request) const {
         models::NativeEffectUpsertRequest effectRequest;
         effectRequest.elementName = parsing::ReadString(request.params, "elementName");
+        effectRequest.submodelName = parsing::ReadString(request.params, "submodelName");
         effectRequest.layerIndex = parsing::ReadInt(request.params, "layerIndex", 0);
         effectRequest.nativeId = parsing::ReadInt(request.params, "nativeId", -1);
         effectRequest.xldId = parsing::ReadString(request.params, "xldId");
@@ -81,6 +121,7 @@ public:
     [[nodiscard]] transport::ApiResponse handleRemoveEffect(const transport::ApiRequest& request) const {
         models::NativeEffectRemoveRequest removeRequest;
         removeRequest.elementName = parsing::ReadString(request.params, "elementName");
+        removeRequest.submodelName = parsing::ReadString(request.params, "submodelName");
         removeRequest.layerIndex = parsing::ReadInt(request.params, "layerIndex", 0);
         removeRequest.nativeId = parsing::ReadInt(request.params, "nativeId", -1);
         removeRequest.xldId = parsing::ReadString(request.params, "xldId");
@@ -101,15 +142,16 @@ public:
         response.requestId = request.requestId;
         models::NativeEffectLayerListRequest listRequest;
         listRequest.elementName = parsing::ReadString(request.params, "elementName");
+        listRequest.submodelName = parsing::ReadString(request.params, "submodelName");
         const auto result = _service.listLayers(listRequest);
         if (!result.sequenceOpen) {
             response.statusCode = 404;
             response.error = transport::ApiError{std::string(transport::errors::SequenceNotOpen), "No sequence open.", nlohmann::json::object()};
             return response;
         }
-        if (!listRequest.elementName.empty() && !result.elementFound) {
+        if ((!listRequest.elementName.empty() || !listRequest.submodelName.empty()) && !result.elementFound) {
             response.statusCode = 404;
-            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "Requested sequence element was not found.", {{"elementName", listRequest.elementName}}};
+            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "Requested sequence element or submodel was not found.", {{"elementName", listRequest.elementName}, {"submodelName", listRequest.submodelName}}};
             return response;
         }
         response.data["layers"] = nlohmann::json::array();
@@ -122,6 +164,7 @@ public:
     [[nodiscard]] transport::ApiResponse handleEnsureLayer(const transport::ApiRequest& request) const {
         models::NativeEffectLayerEnsureRequest layerRequest;
         layerRequest.elementName = parsing::ReadString(request.params, "elementName");
+        layerRequest.submodelName = parsing::ReadString(request.params, "submodelName");
         layerRequest.layerIndex = parsing::ReadInt(request.params, "layerIndex", -1);
         layerRequest.layerName = parsing::ReadString(request.params, "layerName");
         if (layerRequest.elementName.empty()) {
@@ -137,6 +180,7 @@ public:
     [[nodiscard]] transport::ApiResponse handleRemoveLayer(const transport::ApiRequest& request) const {
         models::NativeEffectLayerRemoveRequest layerRequest;
         layerRequest.elementName = parsing::ReadString(request.params, "elementName");
+        layerRequest.submodelName = parsing::ReadString(request.params, "submodelName");
         layerRequest.layerIndex = parsing::ReadInt(request.params, "layerIndex", -1);
         layerRequest.allowUserOwned = parsing::ReadBool(request.params, "allowUserOwned", false);
         if (layerRequest.elementName.empty() || layerRequest.layerIndex < 0) {
@@ -154,6 +198,7 @@ private:
         nlohmann::json result = {
             {"id", effect.id},
             {"elementName", effect.elementName},
+            {"submodelName", effect.submodelName},
             {"layerIndex", effect.layerIndex},
             {"effectIndex", effect.effectIndex},
             {"nativeId", effect.nativeId},
@@ -174,9 +219,24 @@ private:
         return result;
     }
 
+    [[nodiscard]] static nlohmann::json schemaToJson(const models::NativeEffectSchema& schema) {
+        nlohmann::json result = {
+            {"effectName", schema.effectName},
+            {"canvasMode", schema.canvasMode},
+            {"properties", schema.properties.is_array() ? schema.properties : nlohmann::json::array()},
+            {"groups", schema.groups.is_array() ? schema.groups : nlohmann::json::array()},
+            {"visibilityRules", schema.visibilityRules.is_array() ? schema.visibilityRules : nlohmann::json::array()}
+        };
+        if (schema.rawMetadata.is_object() && !schema.rawMetadata.empty()) {
+            result["metadata"] = schema.rawMetadata;
+        }
+        return result;
+    }
+
     [[nodiscard]] static nlohmann::json layerToJson(const models::NativeEffectLayerSummary& layer) {
         return {
             {"elementName", layer.elementName},
+            {"submodelName", layer.submodelName},
             {"layerIndex", layer.layerIndex},
             {"layerNumber", layer.layerNumber},
             {"layerName", layer.layerName},

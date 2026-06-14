@@ -69,6 +69,7 @@ public:
         if (request.command == "sequence.dataLayers.validate") return _dataLayerHandler.handleValidate(request);
 
         // Native xLights effect and layer control.
+        if (request.command == "effects.schemas") return _effectHandler.handleListSchemas(request);
         if (request.command == "effects.list") return _effectHandler.handleListEffects(request);
         if (request.command == "effects.upsert") return _effectHandler.handleUpsertEffect(request);
         if (request.command == "effects.remove") return _effectHandler.handleRemoveEffect(request);
