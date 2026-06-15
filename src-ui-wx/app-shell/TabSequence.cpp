@@ -58,6 +58,7 @@
 #include "utils/ExternalHooks.h"
 #include "XmlSerializer/XmlSerializer.h"
 #include "XmlSerializer/StringSerializingVisitor.h"
+#include "xLightsDesigner/DesignerLaunchPolicy.h"
 
 #include "xLightsVersion.h"
 #include "sequencer/TopEffectsPanel.h"
@@ -209,7 +210,10 @@ void xLightsFrame::LoadEffectsFile()
                     "Would you like to use the autosave file instead?",
                     xmlTimeStr, backupTimeStr
                 );
-                if (wxMessageBox(msg, "Newer Autosave File Found", wxYES_NO | wxICON_QUESTION) == wxYES) {
+                const bool useAutosave = xLightsDesigner::ShouldSuppressPrompt()
+                    ? xLightsDesigner::ShouldUseAutosaveBackup()
+                    : wxMessageBox(msg, "Newer Autosave File Found", wxYES_NO | wxICON_QUESTION) == wxYES;
+                if (useAutosave) {
                     // run a backup ... equivalent of a F10
 
                     // we have not actually read the backup location yet so lets just use the show folder
@@ -234,14 +238,23 @@ void xLightsFrame::LoadEffectsFile()
         }
         pugi::xml_parse_result result = effectsXml.load_file(effectsFile.GetFullPath().ToStdString().c_str());
         if (!result) {
-            DisplayError(wxString::Format("Unable to load RGB effects File ... Creating a Default One.\nError at offset: %td Error '%s'", result.offset, result.description()), this);
+            const auto message = wxString::Format("Unable to load RGB effects File ... Creating a Default One.\nError at offset: %td Error '%s'", result.offset, result.description());
+            if (xLightsDesigner::ShouldSuppressPrompt()) {
+                spdlog::error("Suppressing RGB effects load error during xLightsDesigner noninteractive launch: {}", message.ToStdString());
+            } else {
+                DisplayError(message, this);
+            }
             CreateDefaultEffectsXml(effectsXml);
         }
     }
 
     pugi::xml_node root = effectsXml.document_element();
     if (std::string_view(root.name()) != "xrgb") {
-        DisplayError("Invalid RGB effects file ... creating a default one.", this);
+        if (xLightsDesigner::ShouldSuppressPrompt()) {
+            spdlog::error("Suppressing invalid RGB effects file error during xLightsDesigner noninteractive launch.");
+        } else {
+            DisplayError("Invalid RGB effects file ... creating a default one.", this);
+        }
         CreateDefaultEffectsXml(effectsXml);
         root = effectsXml.document_element();
     }
@@ -314,7 +327,10 @@ void xLightsFrame::LoadEffectsFile()
                         "Autosave file: %s\n\n"
                         "Would you like to use the autosave file instead?",
                         jsonTime.Format("%Y-%m-%d %H:%M:%S"), bkpTime.Format("%Y-%m-%d %H:%M:%S"));
-                    if (wxMessageBox(msg, "Newer Autosave Presets File Found", wxYES_NO | wxICON_QUESTION) == wxYES) {
+                    const bool useAutosave = xLightsDesigner::ShouldSuppressPrompt()
+                        ? xLightsDesigner::ShouldUseAutosaveBackup()
+                        : wxMessageBox(msg, "Newer Autosave Presets File Found", wxYES_NO | wxICON_QUESTION) == wxYES;
+                    if (useAutosave) {
                         wxRemoveFile(presetsFile.GetFullPath());
                         wxRenameFile(presetsBkp.GetFullPath(), presetsFile.GetFullPath());
                     } else {
@@ -343,7 +359,7 @@ void xLightsFrame::LoadEffectsFile()
     }
     // check version, do we need to convert?
     wxString effectsVersion = _effectPresetManager.GetVersion();
-    if (effectsVersion < "0004") {
+    if (effectsVersion < "0004" && !xLightsDesigner::ShouldSuppressPrompt()) {
         wxMessageBox("Loading of xLights v3 rgbeffects is no longer supported.", "Error", wxOK | wxCENTRE |wxICON_ERROR, xLightsFrame::GetFrame());
     }
     if (effectsVersion < "0005") {

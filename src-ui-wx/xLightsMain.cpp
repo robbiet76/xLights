@@ -38,10 +38,13 @@
 #include <wx/tooltip.h>
 #include <wx/valnum.h>
 #include <wx/version.h>
+#include "xLightsDesigner/DesignerDiagnostics.h"
+#include "xLightsDesigner/DesignerLaunchPolicy.h"
 #include <wx/wfstream.h>
 #include <wx/zipstrm.h>
 
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <thread>
 #include <string>
@@ -656,11 +659,33 @@ xLightsFrame::xLightsFrame(wxWindow* parent, int ab, wxWindowID id, bool renderO
     CurlManager::INSTANCE.setYieldFunction([] { wxYieldIfNeeded(); });
 
     OutputManager::SetConfirmCallback([](const std::string& message, const std::string& title) -> bool {
+        if (xLightsDesigner::ShouldSuppressPrompt()) {
+            spdlog::warn("Suppressing xLightsDesigner noninteractive confirmation dialog '{}': {}", title, message);
+            xLightsDesigner::RecordSuppressedDialog("warning", "OutputManagerConfirm", title, message);
+            return false;
+        }
         return wxMessageBox(message, title, wxICON_QUESTION | wxYES_NO) == wxYES;
     });
 
     AppCallbacks::SetDisplayMessageCallback([](AppCallbacks::DisplayMessageLevel level, const std::string& msg) {
         auto showBox = [level, msg]() {
+            if (xLightsDesigner::ShouldSuppressPrompt()) {
+                switch (level) {
+                case AppCallbacks::DisplayMessageLevel::Error:
+                    spdlog::error("Suppressing xLightsDesigner noninteractive error dialog: {}", msg);
+                    xLightsDesigner::RecordSuppressedDialog("error", "AppCallbacks", "Error", msg);
+                    break;
+                case AppCallbacks::DisplayMessageLevel::Warning:
+                    spdlog::warn("Suppressing xLightsDesigner noninteractive warning dialog: {}", msg);
+                    xLightsDesigner::RecordSuppressedDialog("warning", "AppCallbacks", "Warning", msg);
+                    break;
+                case AppCallbacks::DisplayMessageLevel::Info:
+                    spdlog::info("Suppressing xLightsDesigner noninteractive info dialog: {}", msg);
+                    xLightsDesigner::RecordSuppressedDialog("info", "AppCallbacks", "Information", msg);
+                    break;
+                }
+                return;
+            }
             switch (level) {
             case AppCallbacks::DisplayMessageLevel::Error:
                 wxMessageBox(msg, "Error", wxICON_ERROR | wxOK);
@@ -732,7 +757,7 @@ xLightsFrame::xLightsFrame(wxWindow* parent, int ab, wxWindowID id, bool renderO
     _renderEngine->SetOnAllRenderJobsComplete([this]() { CallAfter(&xLightsFrame::RenderDone); });
 
     _exiting = false;
-    SplashScreenShow splash(renderOnlyMode);
+    SplashScreenShow splash(renderOnlyMode || xLightsDesigner::ShouldSuppressPrompt());
     splash.Show();
     splash.Update();
     wxYield();
@@ -1513,7 +1538,7 @@ xLightsFrame::xLightsFrame(wxWindow* parent, int ab, wxWindowID id, bool renderO
     spdlog::debug("Show directory {}.", (const char*)dir.c_str());
 
 #if !defined(_DEBUG)
-    if (dir != "") {
+    if (dir != "" && !xLightsDesigner::IsNonInteractiveLaunch()) {
 #ifdef __WXMSW__
         _tod.PrepTipOfDay(this);
 #else
@@ -2032,15 +2057,19 @@ xLightsFrame::xLightsFrame(wxWindow* parent, int ab, wxWindowID id, bool renderO
     ResetEffectsXml();
     EnableSequenceControls(true);
     if (ok && !dir.IsEmpty()) {
-        if (!SetDir(dir, !showDirFromCommandLine)) {
-            CurrentDir = "";
-            if (!PromptForShowDirectory(true, dir)) {
+            if (!SetDir(dir, !showDirFromCommandLine)) {
                 CurrentDir = "";
-                splash.Hide();
-                wxMessageBox("Exiting as setting a show folder is not optional.");
-                wxExit();
-                return;
-            }
+                if (!PromptForShowDirectory(true, dir)) {
+                    CurrentDir = "";
+                    splash.Hide();
+                    if (xLightsDesigner::ShouldSuppressPrompt()) {
+                        spdlog::error("Exiting during noninteractive launch because a valid show folder could not be established.");
+                    } else {
+                        wxMessageBox("Exiting as setting a show folder is not optional.");
+                    }
+                    wxExit();
+                    return;
+                }
         } else {
             if (ShowFolderIsInBackup(dir.ToStdString())) {
                 DisplayWarning("WARNING: Opening a show folder inside a backup folder. This is generally a very very bad idea.", this);
@@ -2055,7 +2084,11 @@ xLightsFrame::xLightsFrame(wxWindow* parent, int ab, wxWindowID id, bool renderO
         if (!PromptForShowDirectory(true)) {
             CurrentDir = "";
             splash.Hide();
-            wxMessageBox("Exiting as setting a show folder is not optional.");
+            if (xLightsDesigner::ShouldSuppressPrompt()) {
+                spdlog::error("Exiting during noninteractive launch because no show folder was available.");
+            } else {
+                wxMessageBox("Exiting as setting a show folder is not optional.");
+            }
             wxExit();
             return;
         }
@@ -3309,7 +3342,12 @@ void xLightsFrame::DoBackup(bool prompt, bool startup, bool forceallfiles)
 
     //  first make sure there is a Backup sub directory
     if (_backupDirectory == "") {
-        wxMessageBox("Backup directory has not been set. Aborting backup.");
+        if (xLightsDesigner::ShouldSuppressPrompt()) {
+            spdlog::error("Suppressing xLightsDesigner noninteractive backup error dialog: Backup directory has not been set. Aborting backup.");
+            xLightsDesigner::RecordSuppressedDialog("error", "DoBackup", "Backup", "Backup directory has not been set. Aborting backup.");
+        } else {
+            wxMessageBox("Backup directory has not been set. Aborting backup.");
+        }
         return;
     }
 
@@ -3348,6 +3386,11 @@ void xLightsFrame::DoBackup(bool prompt, bool startup, bool forceallfiles)
     }
 
     if (prompt) {
+        if (xLightsDesigner::ShouldSuppressPrompt()) {
+            spdlog::warn("Suppressing xLightsDesigner noninteractive backup confirmation dialog; backup skipped.");
+            xLightsDesigner::RecordSuppressedDialog("warning", "DoBackup", "Backup", "Backup confirmation was suppressed; backup skipped.");
+            return;
+        }
         if (wxNO == wxMessageBox("All xml & xsq files under " + wxString::Format("%i", MAXBACKUPFILE_MB) + "MB in your xlights directory will be backed up to \"" +
                                      newDir + "\". Proceed?",
                                  "Backup", wxICON_QUESTION | wxYES_NO)) {
@@ -3758,11 +3801,24 @@ void xLightsFrame::OnMenuItem_File_Export_VideoSelected(wxCommandEvent& event)
     ExportVideoPreview(pExportDlg.GetPath());
 }
 
-bool xLightsFrame::ExportVideoPreview(wxString const& path)
+bool xLightsFrame::ExportVideoPreview(wxString const& path, bool showErrorDialog, int requestedWidth, int requestedHeight)
 {
     int frameCount = _seqData.NumFrames();
 
     if (CurrentSeqXmlFile == nullptr || frameCount == 0) {
+        return false;
+    }
+    if (path.empty()) {
+        return false;
+    }
+
+    wxFileName outputFile(path);
+    const wxString outputDir = outputFile.GetPath();
+    if (!outputDir.empty() && !wxDirExists(outputDir) && !outputFile.Mkdir(outputDir, wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL)) {
+        spdlog::error("Error exporting video: unable to create output directory '{}'.", outputDir.ToStdString());
+        if (showErrorDialog && !xLightsDesigner::ShouldSuppressPrompt()) {
+            DisplayError("Exporting house preview video failed. Unable to create output directory " + outputDir, this);
+        }
         return false;
     }
 
@@ -3789,12 +3845,36 @@ bool xLightsFrame::ExportVideoPreview(wxString const& path)
     
     spdlog::debug("Writing house-preview video to {}.", (const char*)path.c_str());
 
-    int width = housePreview->getWidth();
-    int height = housePreview->getHeight();
     double contentScaleFactor = housePreview->GetContentScaleFactor();
 #ifdef _WIN32
     contentScaleFactor = 1.;
 #endif // WIN32
+    int width = housePreview->getWidth();
+    int height = housePreview->getHeight();
+    const wxSize previousPanelMinSize = _housePreviewPanel->GetMinSize();
+    const wxSize previousPanelSize = _housePreviewPanel->GetSize();
+    const wxSize previousPreviewMinSize = housePreview->GetMinSize();
+    const wxSize previousPreviewSize = housePreview->GetSize();
+    bool resizedForExport = false;
+    if (requestedWidth > 0 && requestedHeight > 0) {
+        width = std::max(1, static_cast<int>(std::ceil(static_cast<double>(requestedWidth) / contentScaleFactor)));
+        height = std::max(1, static_cast<int>(std::ceil(static_cast<double>(requestedHeight) / contentScaleFactor)));
+        const wxSize requestedPreviewSize(width, height);
+        _housePreviewPanel->SetMinSize(requestedPreviewSize);
+        _housePreviewPanel->SetSize(requestedPreviewSize);
+        housePreview->SetMinSize(requestedPreviewSize);
+        housePreview->SetSize(requestedPreviewSize);
+        _housePreviewPanel->Layout();
+        m_mgr->Update();
+        wxYieldIfNeeded();
+        spdlog::info(
+            "VideoExporter - requested house preview export surface {} x {}; actual preview surface {} x {}.",
+            width,
+            height,
+            housePreview->getWidth(),
+            housePreview->getHeight());
+        resizedForExport = true;
+    }
 
     int audioChannelCount = 0;
     int audioSampleRate = 0;
@@ -3847,6 +3927,15 @@ bool xLightsFrame::ExportVideoPreview(wxString const& path)
 
     SetPlayStatus(playStatus);
 
+    if (resizedForExport) {
+        _housePreviewPanel->SetMinSize(previousPanelMinSize);
+        _housePreviewPanel->SetSize(previousPanelSize);
+        housePreview->SetMinSize(previousPreviewMinSize);
+        housePreview->SetSize(previousPreviewSize);
+        _housePreviewPanel->Layout();
+        m_mgr->Update();
+    }
+
     if (!visible) {
         m_mgr->GetPane("HousePreview").Hide();
         m_mgr->Update();
@@ -3857,7 +3946,11 @@ bool xLightsFrame::ExportVideoPreview(wxString const& path)
         float elapsedTime = sw.Time() / 1000.0; // msec => sec
         SetStatusText(wxString::Format("'%s' exported in %4.3f sec.", path.c_str(), elapsedTime));
     } else {
-        DisplayError("Exporting house preview video failed.  " + emsg, this);
+        if (!showErrorDialog || xLightsDesigner::ShouldSuppressPrompt()) {
+            spdlog::error("Exporting house preview video failed. {}", emsg);
+        } else {
+            DisplayError("Exporting house preview video failed.  " + emsg, this);
+        }
     }
     return exportStatus;
 }
@@ -4101,8 +4194,22 @@ void xLightsFrame::CheckUnsavedChanges()
         // to the user what this prompt is for
         Notebook1->SetSelection(LAYOUTTAB);
 
-        if (wxYES == wxMessageBox("Save Models, Views, Perspectives, and Preset changes?",
-                                  "RGB Effects File Changes Confirmation", wxICON_QUESTION | wxYES_NO | wxNO_DEFAULT)) {
+        bool saveRgbEffectsChanges = false;
+        if (xLightsDesigner::ShouldSuppressPrompt()) {
+            saveRgbEffectsChanges = xLightsDesigner::ShouldUseAutosaveBackup();
+            xLightsDesigner::RecordSuppressedDialog(
+                "warning",
+                "CheckUnsavedChanges",
+                "RGB Effects File Changes Confirmation",
+                saveRgbEffectsChanges
+                    ? "RGB effects save prompt was suppressed; saving because modal policy is save."
+                    : "RGB effects save prompt was suppressed; discarding because modal policy is not save.");
+        } else {
+            saveRgbEffectsChanges = wxYES == wxMessageBox("Save Models, Views, Perspectives, and Preset changes?",
+                                                          "RGB Effects File Changes Confirmation", wxICON_QUESTION | wxYES_NO | wxNO_DEFAULT);
+        }
+
+        if (saveRgbEffectsChanges) {
             SaveEffectsFile();
         } else {
             wxFileName effectsFile;
@@ -4120,8 +4227,22 @@ void xLightsFrame::CheckUnsavedChanges()
         // to the user what this prompt is for
         Notebook1->SetSelection(SETUPTAB);
 
-        if (wxYES == wxMessageBox("Save Network Setup changes?",
-                                  "Networks Changes Confirmation", wxICON_QUESTION | wxYES_NO | wxNO_DEFAULT)) {
+        bool saveNetworkChanges = false;
+        if (xLightsDesigner::ShouldSuppressPrompt()) {
+            saveNetworkChanges = xLightsDesigner::ShouldUseAutosaveBackup();
+            xLightsDesigner::RecordSuppressedDialog(
+                "warning",
+                "CheckUnsavedChanges",
+                "Networks Changes Confirmation",
+                saveNetworkChanges
+                    ? "Network setup save prompt was suppressed; saving because modal policy is save."
+                    : "Network setup save prompt was suppressed; discarding because modal policy is not save.");
+        } else {
+            saveNetworkChanges = wxYES == wxMessageBox("Save Network Setup changes?",
+                                                       "Networks Changes Confirmation", wxICON_QUESTION | wxYES_NO | wxNO_DEFAULT);
+        }
+
+        if (saveNetworkChanges) {
             SaveNetworksFile();
         }
     }

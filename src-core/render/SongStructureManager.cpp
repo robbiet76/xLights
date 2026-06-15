@@ -252,6 +252,14 @@ const std::string& SongStructureManager::GetViewName(size_t index) const
     return s_emptyName;
 }
 
+const std::vector<SongStructureRegion>& SongStructureManager::GetViewRegions(size_t index) const
+{
+    if (index < _views.size()) {
+        return _views[index].regions;
+    }
+    return s_emptyRegions;
+}
+
 void SongStructureManager::SetActiveView(int index)
 {
     if (index >= 0 && index < (int)_views.size()) {

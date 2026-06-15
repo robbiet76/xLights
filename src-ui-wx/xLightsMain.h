@@ -455,7 +455,7 @@ public:
     void PopTraceContext();
     void AddTraceMessage(const std::string &msg);
     void ClearTraceMessages();
-    bool ExportVideoPreview(wxString const& path);
+    bool ExportVideoPreview(wxString const& path, bool showErrorDialog = true, int requestedWidth = 0, int requestedHeight = 0);
 
 	void SetAudioControls();
     void ImportXLights(const wxFileName &filename, std::string const& mapFile = std::string(), bool autoMap = false, bool importMedia = true);

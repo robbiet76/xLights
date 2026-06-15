@@ -30,11 +30,14 @@
 #include <time.h>       /* time */
 #include <thread>
 #include <iomanip>
+#include <csignal>
 #include "utils/ThreadUtils.h"
 #include <curl/curl.h>
 
 #include "xLightsApp.h"
 #include "xLightsVersion.h"
+#include "xLightsDesigner/DesignerIntegration.h"
+#include "xLightsDesigner/DesignerLaunchPolicy.h"
 #include "UtilFunctions.h"
 #include "shared/utils/wxUtilities.h"
 #include "settings/XLightsConfigAdapter.h"
@@ -57,6 +60,25 @@
 #include "spdlog/sinks/rotating_file_sink.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
 #include "spdlog/common.h"
+
+#include <cstdio>
+
+namespace {
+void DesignerNonInteractiveAssertHandler(const wxString& file,
+                                         int line,
+                                         const wxString& function,
+                                         const wxString& condition,
+                                         const wxString& message)
+{
+    std::fprintf(stderr,
+                 "Suppressing wx assert during xLightsDesigner noninteractive launch: %s:%d %s condition='%s' message='%s'\n",
+                 file.ToStdString().c_str(),
+                 line,
+                 function.ToStdString().c_str(),
+                 condition.ToStdString().c_str(),
+                 message.ToStdString().c_str());
+}
+}
 
 #ifdef LINUX
 #include <GL/glut.h>
@@ -476,6 +498,9 @@ wxIMPLEMENT_APP_NO_MAIN(xLightsApp);
 xLightsApp::xLightsApp() :
     xLightsAppBaseClass("xLights")
 {
+    if (xLightsDesigner::IsNonInteractiveLaunch()) {
+        wxSetAssertHandler(DesignerNonInteractiveAssertHandler);
+    }
 }
 
 wxString xLightsFrame::GetThreadStatusReport() {
@@ -586,6 +611,10 @@ bool xLightsApp::OnInit()
 {
     SetMainThreadId();
     InitialiseLogging(false);
+    if (xLightsDesigner::IsNonInteractiveLaunch()) {
+        std::signal(SIGPIPE, SIG_IGN);
+        wxSetAssertHandler(DesignerNonInteractiveAssertHandler);
+    }
 
     AppCallbacks::SetPostToMainThread([](std::function<void()> fn) {
         wxTheApp->CallAfter(std::move(fn));
@@ -814,13 +843,20 @@ bool xLightsApp::OnInit()
             sequenceFiles.Clear();
         }
 
-        if (!parser.Found("cs") && !parser.Found("r") && !parser.Found("o") && !info.empty() && readOnlyZipFile == "")
-        {
-            wxMessageBox(info, "Information", wxICON_INFORMATION | wxOK); // pre-frame: callback not yet registered
+        if (!parser.Found("cs") && !parser.Found("r") && !parser.Found("o") && !info.empty() && readOnlyZipFile == "") {
+            if (xLightsDesigner::IsNonInteractiveLaunch()) {
+                spdlog::info("Suppressing pre-frame command line info dialog during noninteractive launch: {}", (const char*)info.c_str());
+            } else {
+                wxMessageBox(info, "Information", wxICON_INFORMATION | wxOK); // pre-frame: callback not yet registered
+            }
         }
         break;
     default:
-        wxMessageBox(_("Unrecognized command line parameters"), "Error", wxICON_ERROR | wxOK); // pre-frame: callback not yet registered
+        if (xLightsDesigner::IsNonInteractiveLaunch()) {
+            spdlog::error("Unrecognized command line parameters during noninteractive launch.");
+        } else {
+            wxMessageBox(_("Unrecognized command line parameters"), "Error", wxICON_ERROR | wxOK); // pre-frame: callback not yet registered
+        }
         return false;
     }
 
@@ -880,13 +916,23 @@ bool xLightsApp::OnInit()
         if (Frame->CurrentDir == "") {
             spdlog::info("Show directory not set");
         }
-    	Frame->Show();
+        if (xLightsDesigner::ShouldSuppressPrompt()) {
+            spdlog::info("Showing xLights main window without prompting during xLightsDesigner noninteractive launch.");
+            // Keep a real top-level window alive so macOS does not automatically
+            // terminate the app before the owned API listener is ready. The
+            // launcher is responsible for using LaunchServices no-activate
+            // flags when focus should stay with the caller.
+            Frame->Show();
+        } else {
+            Frame->Show();
+        }
     	SetTopWindow(Frame);
     }
     //*)
 
     xLightsFrame* const topFrame = (xLightsFrame*)GetTopWindow();
     __frame = topFrame;
+    xLightsDesigner::InitializeDesignerIntegration(topFrame);
 
     if (renderOnlyMode) {
         topFrame->CallAfter(&xLightsFrame::OpenRenderAndSaveSequencesF, sequenceFiles, xLightsFrame::RENDER_EXIT_ON_DONE);
@@ -919,6 +965,10 @@ bool xLightsApp::OnInit()
         glutInit(&(wxApp::argc), wxApp::argv);
     #endif
 
+    topFrame->CallAfter([]() {
+        xLightsDesigner::NotifyDesignerAppReady();
+    });
+
     spdlog::info("XLightsApp OnInit Done.");
 
     return wxsOK;
@@ -938,6 +988,12 @@ bool xLightsApp::ProcessIdle() {
         return wxApp::ProcessIdle() | b;
     }
     return b;
+}
+
+int xLightsApp::OnExit()
+{
+    xLightsDesigner::ShutdownDesignerIntegration();
+    return xLightsAppBaseClass::OnExit();
 }
 
 //global flags from command line:

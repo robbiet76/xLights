@@ -27,6 +27,8 @@
 #include <wx/stdpaths.h>
 #include <wx/wfstream.h>
 #include "utils/ExternalHooks.h"
+#include "xLightsDesigner/DesignerDiagnostics.h"
+#include "xLightsDesigner/DesignerLaunchPolicy.h"
 #include "xLightsVersion.h"
 #include "settings/XLightsConfigAdapter.h"
 #include "utils/CurlManager.h"
@@ -121,21 +123,41 @@ std::vector<xlImage> wxImagesToXlImages(const std::vector<wxImage>& images) {
 
 void DisplayError(const std::string& err, wxWindow* win) {
     spdlog::error("DisplayError: {}", err);
+    if (xLightsDesigner::ShouldSuppressPrompt()) {
+        spdlog::error("Suppressing xLightsDesigner noninteractive error dialog: {}", err);
+        xLightsDesigner::RecordSuppressedDialog("error", "DisplayError", "Error", err);
+        return;
+    }
     wxMessageBox(err, "Error", wxICON_ERROR | wxOK, win);
 }
 
 void DisplayWarning(const std::string& warn, wxWindow* win) {
     spdlog::warn("DisplayWarning: {}", warn);
+    if (xLightsDesigner::ShouldSuppressPrompt()) {
+        spdlog::warn("Suppressing xLightsDesigner noninteractive warning dialog: {}", warn);
+        xLightsDesigner::RecordSuppressedDialog("warning", "DisplayWarning", "Warning", warn);
+        return;
+    }
     wxMessageBox(warn, "Warning", wxICON_WARNING | wxOK, win);
 }
 
 void DisplayInfo(const std::string& info, wxWindow* win) {
     spdlog::info("DisplayInfo: {}", info);
+    if (xLightsDesigner::ShouldSuppressPrompt()) {
+        spdlog::info("Suppressing xLightsDesigner noninteractive info dialog: {}", info);
+        xLightsDesigner::RecordSuppressedDialog("info", "DisplayInfo", "Information", info);
+        return;
+    }
     wxMessageBox(info, "Information", wxICON_INFORMATION | wxOK, win);
 }
 
 void DisplayCrit(const std::string& crit, wxWindow* win) {
     spdlog::critical("DisplayCrit: {}", crit);
+    if (xLightsDesigner::ShouldSuppressPrompt()) {
+        spdlog::critical("Suppressing xLightsDesigner noninteractive critical dialog: {}", crit);
+        xLightsDesigner::RecordSuppressedDialog("critical", "DisplayCrit", "CRITICAL", crit);
+        return;
+    }
     wxMessageBox(crit, "CRITICAL", wxICON_ERROR | wxOK, win);
 }
 

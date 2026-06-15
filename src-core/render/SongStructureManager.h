@@ -77,6 +77,7 @@ public:
     int GetActiveViewIndex() const { return _activeViewIndex; }
     const std::string& GetActiveViewName() const;
     const std::string& GetViewName(size_t index) const;
+    const std::vector<SongStructureRegion>& GetViewRegions(size_t index) const;
     void SetActiveView(int index);
     int AddView(const std::string& name);
     int DuplicateView(int sourceIndex, const std::string& newName);
