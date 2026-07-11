@@ -8,7 +8,9 @@
 #include <nlohmann/json.hpp>
 
 #include "api/handlers/LayoutHandler.h"
+#include "api/handlers/MediaHandler.h"
 #include "api/services/LayoutService.h"
+#include "api/services/MediaService.h"
 #include "api/transport/ApiResponse.h"
 #include "api/transport/EndpointRouter.h"
 #include "api/transport/JsonTransport.h"
@@ -83,6 +85,8 @@ inline DesignerApiSelfTestResult RunDesignerApiSelfTests() {
               "EndpointRouter should map capability discovery endpoint.", result);
         Check(router.resolve("GET", "/xlightsdesigner/api/layout/channel-map") == std::optional<std::string>("layout.getChannelMap"),
               "EndpointRouter should map layout channel map endpoint.", result);
+        Check(router.resolve("GET", "/xlightsdesigner/api/layout/preview-groups") == std::optional<std::string>("layout.getPreviewGroups"),
+              "EndpointRouter should map layout preview-groups endpoint.", result);
         Check(router.resolve("GET", "/xlightsdesigner/api/sequence/data-layers") == std::optional<std::string>("sequence.dataLayers.list"),
               "EndpointRouter should map DataLayer list endpoint.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/sequence/data-layers/upsert") == std::optional<std::string>("sequence.dataLayers.upsert"),
@@ -99,6 +103,8 @@ inline DesignerApiSelfTestResult RunDesignerApiSelfTests() {
               "EndpointRouter should map selected element read endpoint.", result);
         Check(router.resolve("POST", "/xlightsdesigner/api/elements/selected") == std::optional<std::string>("elements.setSelected"),
               "EndpointRouter should map selected element mutation endpoint.", result);
+        Check(router.resolve("POST", "/xlightsdesigner/api/elements/visibility") == std::optional<std::string>("elements.setVisibility"),
+              "EndpointRouter should map element visibility mutation endpoint.", result);
         Check(router.resolve("GET", "/xlightsdesigner/api/effects") == std::optional<std::string>("effects.list"),
               "EndpointRouter should map native effect list endpoint.", result);
         Check(router.resolve("GET", "/xlightsdesigner/api/effects/schemas") == std::optional<std::string>("effects.schemas"),
@@ -121,6 +127,102 @@ inline DesignerApiSelfTestResult RunDesignerApiSelfTests() {
               "EndpointRouter should reject unsupported method/path pairs.", result);
         Check(router.resolve("GET", "/xlightsdesigner/api/timing/song-structure") == std::optional<std::string>("timing.getSongStructure"),
               "EndpointRouter should map native song structure reads.", result);
+    }
+
+    {
+        api::services::MediaService mediaService(
+            []() {
+                api::models::MediaSummary summary;
+                summary.sequenceOpen = true;
+                summary.mediaContentFingerprint = "xlights-audio-md5:0123456789abcdef";
+                return summary;
+            },
+            []() { return api::models::MediaDirectoriesSummary{}; },
+            [](const api::models::MediaShowDirectoryRequest&) { return api::models::MediaShowDirectoryResult{}; },
+            [](const api::models::MediaShowDirectoryRequest&) { return api::models::MediaShowDirectoryResult{}; },
+            [](const api::models::MediaPathAccessValidationRequest&) { return api::models::MediaPathAccessValidationResult{}; },
+            []() { return api::models::MediaAudioCapabilitiesSummary{}; },
+            []() { return api::models::MediaAudioAnalysisSummary{}; });
+        api::handlers::MediaHandler mediaHandler(std::move(mediaService));
+        api::transport::ApiRequest request;
+        request.command = "media.getCurrent";
+
+        const auto response = mediaHandler.handleGetCurrent(request);
+        Check(response.data.value("mediaContentFingerprint", "") == "xlights-audio-md5:0123456789abcdef",
+              "MediaHandler should expose the typed active-audio content fingerprint.", result);
+    }
+
+    {
+        api::services::LayoutService layoutService(
+            []() {
+                api::models::LayoutModelsSummary summary;
+                api::models::LayoutModelSummary configured;
+                configured.name = "Configured Tree";
+                configured.controllerCalibration.controllerName = "Front Controller";
+                configured.controllerCalibration.controllerPort = 3;
+                configured.controllerCalibration.connectionSource = "model_controller_connection";
+                configured.controllerCalibration.configuredBrightnessPercent = 42;
+                configured.controllerCalibration.brightnessExplicitlySet = true;
+                configured.controllerCalibration.brightnessActive = true;
+                configured.controllerCalibration.configuredBrightnessSource = "model_port_explicit";
+                configured.controllerCalibration.configuredGamma = 2.2;
+                configured.controllerCalibration.gammaExplicitlySet = true;
+                configured.controllerCalibration.gammaActive = true;
+                configured.controllerCalibration.configuredGammaSource = "model_port_explicit";
+                configured.controllerCalibration.fullXlightsControlActive = true;
+                configured.controllerCalibration.controllerDefaultBrightnessPercent = 80;
+                configured.controllerCalibration.controllerDefaultBrightnessSource = "controller_full_control_default";
+                configured.controllerCalibration.controllerDefaultGamma = 1.8;
+                configured.controllerCalibration.controllerDefaultGammaSource = "controller_full_control_default";
+                configured.controllerCalibration.effectiveBrightnessPercent = 42;
+                configured.controllerCalibration.effectiveBrightnessSource = "model_port_explicit";
+                configured.controllerCalibration.effectiveGamma = 2.2;
+                configured.controllerCalibration.effectiveGammaSource = "model_port_explicit";
+                summary.models.push_back(std::move(configured));
+
+                api::models::LayoutModelSummary unavailable;
+                unavailable.name = "Unassigned Prop";
+                summary.models.push_back(std::move(unavailable));
+                return summary;
+            },
+            []() { return api::models::LayoutSubmodelsSummary{}; },
+            [](const api::models::LayoutModelNodesRequest&) { return api::models::LayoutModelNodesSummary{}; },
+            [](const api::models::LayoutRenderBufferNodesRequest&) { return api::models::LayoutRenderBufferNodesSummary{}; },
+            []() { return api::models::LayoutChannelMapSummary{}; },
+            []() { return api::models::LayoutSettingsSummary{}; },
+            []() { return api::models::LayoutGroupMembershipsSummary{}; },
+            []() { return api::models::LayoutPreviewGroupsSummary{}; });
+        api::handlers::LayoutHandler layoutHandler(std::move(layoutService));
+        api::transport::ApiRequest request;
+        request.command = "layout.getModels";
+
+        const auto response = layoutHandler.handleGetModels(request);
+        const auto& configured = response.data["models"][0]["controllerCalibration"];
+        Check(configured.value("configuredBrightnessPercent", 0) == 42
+                  && configured.value("effectiveBrightnessSource", "") == "model_port_explicit",
+              "LayoutHandler should expose explicit model/port brightness and provenance.", result);
+        Check(configured.value("controllerDefaultBrightnessPercent", 0) == 80
+                  && configured.value("controllerDefaultBrightnessSource", "") == "controller_full_control_default",
+              "LayoutHandler should expose a resolvable full-control default without replacing an explicit value.", result);
+        Check(configured.value("configuredGamma", 0.0) == 2.2
+                  && configured.value("effectiveGammaSource", "") == "model_port_explicit",
+              "LayoutHandler should expose explicit model/port gamma and provenance.", result);
+        Check(configured.value("deploymentMetadataOnly", false)
+                  && !configured.value("previewApplicationProven", true),
+              "LayoutHandler should identify controller calibration as unproven preview metadata.", result);
+
+        const auto& unavailable = response.data["models"][1]["controllerCalibration"];
+        Check(unavailable["controllerName"].is_null()
+                  && unavailable["controllerPort"].is_null()
+                  && unavailable["configuredBrightnessPercent"].is_null()
+                  && unavailable["effectiveBrightnessPercent"].is_null()
+                  && unavailable["configuredGamma"].is_null()
+                  && unavailable["effectiveGamma"].is_null(),
+              "LayoutHandler should serialize unavailable calibration as null rather than implicit defaults.", result);
+        Check(unavailable.value("connectionSource", "") == "unavailable"
+                  && unavailable.value("controllerDefaultBrightnessSource", "") == "controller_not_resolved"
+                  && unavailable.value("effectiveBrightnessSource", "") == "unavailable",
+              "LayoutHandler should expose unavailable calibration provenance.", result);
     }
 
     {

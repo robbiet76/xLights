@@ -26,6 +26,7 @@ public:
         response.data["sequenceOpen"] = summary.sequenceOpen;
         response.data["sequencePath"] = summary.sequencePath.value_or("");
         response.data["mediaFile"] = summary.mediaFile.value_or("");
+        response.data["mediaContentFingerprint"] = summary.mediaContentFingerprint.value_or("");
         response.data["showDirectory"] = summary.showDirectory.value_or("");
         if (summary.durationMs.has_value()) response.data["durationMs"] = summary.durationMs.value();
         if (summary.sampleRate.has_value()) response.data["sampleRate"] = summary.sampleRate.value();

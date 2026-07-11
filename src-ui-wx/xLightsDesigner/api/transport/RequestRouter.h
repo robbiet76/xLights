@@ -100,6 +100,7 @@ public:
         if (request.command == "layout.getScene") return _layoutHandler.handleGetScene(request);
         if (request.command == "layout.getSettings") return _layoutHandler.handleGetSettings(request);
         if (request.command == "layout.getGroupMembers") return _layoutHandler.handleGetGroupMembers(request);
+        if (request.command == "layout.getPreviewGroups") return _layoutHandler.handleGetPreviewGroups(request);
 
         // Display element row/order state.
         if (request.command == "elements.getSummary") return _elementHandler.handleGetSummary(request);
@@ -108,6 +109,7 @@ public:
         if (request.command == "elements.setDisplayOrder") return _elementHandler.handleSetDisplayOrder(request);
         if (request.command == "elements.getSelected") return _elementHandler.handleGetSelectedDisplayElements(request);
         if (request.command == "elements.setSelected") return _elementHandler.handleSetSelectedDisplayElements(request);
+        if (request.command == "elements.setVisibility") return _elementHandler.handleSetDisplayElementVisibility(request);
 
         return std::nullopt;
     }

@@ -25,6 +25,9 @@ public:
         const auto summary = _service.getModels();
         response.data["models"] = nlohmann::json::array();
         for (const auto& model : summary.models) {
+            const auto optionalJson = [](const auto& value) -> nlohmann::json {
+                return value.has_value() ? nlohmann::json(*value) : nlohmann::json(nullptr);
+            };
             response.data["models"].push_back({
                 {"name", model.name},
                 {"displayAs", model.displayAs},
@@ -49,7 +52,31 @@ public:
                 {"renderWidth", model.renderWidth},
                 {"renderHeight", model.renderHeight},
                 {"renderDepth", model.renderDepth},
-                {"supportedRenderStyles", model.supportedRenderStyles}
+                {"supportedRenderStyles", model.supportedRenderStyles},
+                {"controllerCalibration", {
+                    {"controllerName", optionalJson(model.controllerCalibration.controllerName)},
+                    {"controllerPort", optionalJson(model.controllerCalibration.controllerPort)},
+                    {"connectionSource", model.controllerCalibration.connectionSource},
+                    {"configuredBrightnessPercent", optionalJson(model.controllerCalibration.configuredBrightnessPercent)},
+                    {"brightnessExplicitlySet", model.controllerCalibration.brightnessExplicitlySet},
+                    {"brightnessActive", model.controllerCalibration.brightnessActive},
+                    {"configuredBrightnessSource", model.controllerCalibration.configuredBrightnessSource},
+                    {"configuredGamma", optionalJson(model.controllerCalibration.configuredGamma)},
+                    {"gammaExplicitlySet", model.controllerCalibration.gammaExplicitlySet},
+                    {"gammaActive", model.controllerCalibration.gammaActive},
+                    {"configuredGammaSource", model.controllerCalibration.configuredGammaSource},
+                    {"fullXlightsControlActive", optionalJson(model.controllerCalibration.fullXlightsControlActive)},
+                    {"controllerDefaultBrightnessPercent", optionalJson(model.controllerCalibration.controllerDefaultBrightnessPercent)},
+                    {"controllerDefaultBrightnessSource", model.controllerCalibration.controllerDefaultBrightnessSource},
+                    {"controllerDefaultGamma", optionalJson(model.controllerCalibration.controllerDefaultGamma)},
+                    {"controllerDefaultGammaSource", model.controllerCalibration.controllerDefaultGammaSource},
+                    {"effectiveBrightnessPercent", optionalJson(model.controllerCalibration.effectiveBrightnessPercent)},
+                    {"effectiveBrightnessSource", model.controllerCalibration.effectiveBrightnessSource},
+                    {"effectiveGamma", optionalJson(model.controllerCalibration.effectiveGamma)},
+                    {"effectiveGammaSource", model.controllerCalibration.effectiveGammaSource},
+                    {"deploymentMetadataOnly", model.controllerCalibration.deploymentMetadataOnly},
+                    {"previewApplicationProven", model.controllerCalibration.previewApplicationProven}
+                }}
             });
         }
         return response;
@@ -415,6 +442,25 @@ public:
                 {"activeMembers", serializeMembers(group.activeMembers)},
                 {"flattenedMembers", serializeMembers(group.flattenedMembers)},
                 {"flattenedAllMembers", serializeMembers(group.flattenedAllMembers)}
+            });
+        }
+        return response;
+    }
+
+    [[nodiscard]] transport::ApiResponse handleGetPreviewGroups(const transport::ApiRequest& request) const {
+        transport::ApiResponse response;
+        response.command = request.command;
+        response.requestId = request.requestId;
+
+        const auto summary = _service.getPreviewGroups();
+        response.data["previewGroups"] = nlohmann::json::array();
+        for (const auto& group : summary.previewGroups) {
+            response.data["previewGroups"].push_back({
+                {"name", group.name},
+                {"systemGroup", group.systemGroup},
+                {"unassigned", group.unassigned},
+                {"modelCount", group.modelCount},
+                {"modelNames", group.modelNames}
             });
         }
         return response;

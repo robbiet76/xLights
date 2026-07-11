@@ -13,6 +13,7 @@ struct MediaSummary {
     bool sequenceOpen = false;
     std::optional<std::string> sequencePath;
     std::optional<std::string> mediaFile;
+    std::optional<std::string> mediaContentFingerprint;
     std::optional<std::string> showDirectory;
     std::optional<int> durationMs;
     std::optional<int> sampleRate;

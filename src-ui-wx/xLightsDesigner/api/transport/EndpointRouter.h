@@ -75,6 +75,7 @@ public:
         if (method == "GET" && path == "/xlightsdesigner/api/layout/scene") return "layout.getScene";
         if (method == "GET" && path == "/xlightsdesigner/api/layout/settings") return "layout.getSettings";
         if (method == "GET" && path == "/xlightsdesigner/api/layout/group-members") return "layout.getGroupMembers";
+        if (method == "GET" && path == "/xlightsdesigner/api/layout/preview-groups") return "layout.getPreviewGroups";
 
         // Sequence elements expose row/order/selection state.
         if (method == "GET" && path == "/xlightsdesigner/api/elements/summary") return "elements.getSummary";
@@ -83,6 +84,7 @@ public:
         if (method == "POST" && path == "/xlightsdesigner/api/elements/display-order") return "elements.setDisplayOrder";
         if (method == "GET" && path == "/xlightsdesigner/api/elements/selected") return "elements.getSelected";
         if (method == "POST" && path == "/xlightsdesigner/api/elements/selected") return "elements.setSelected";
+        if (method == "POST" && path == "/xlightsdesigner/api/elements/visibility") return "elements.setVisibility";
 
         return std::nullopt;
     }

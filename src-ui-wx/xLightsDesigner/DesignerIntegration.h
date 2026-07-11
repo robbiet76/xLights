@@ -249,14 +249,16 @@ inline std::optional<api::transport::ApiResponse> HandleDesignerApiRequest(
         [host](const api::models::LayoutRenderBufferNodesRequest& request) { return host->readLayoutRenderBufferNodes(request); },
         [host]() { return host->readLayoutChannelMap(); },
         [host]() { return host->readLayoutSettings(); },
-        [host]() { return host->readLayoutGroupMemberships(); });
+        [host]() { return host->readLayoutGroupMemberships(); },
+        [host]() { return host->readLayoutPreviewGroups(); });
     api::services::ElementService elementService(
         [host]() { return host->readElements(); },
         [host]() { return host->readDisplayElementOrder(); },
         [host](const api::models::SetDisplayElementOrderRequest& request) { return host->setDisplayElementOrder(request); },
         [host](const api::models::EnsureSequenceElementsRequest& request) { return host->ensureSequenceElements(request); },
         [host]() { return host->readSelectedDisplayElements(); },
-        [host](const api::models::SetSelectedDisplayElementsRequest& request) { return host->setSelectedDisplayElements(request); });
+        [host](const api::models::SetSelectedDisplayElementsRequest& request) { return host->setSelectedDisplayElements(request); },
+        [host](const api::models::SetDisplayElementVisibilityRequest& request) { return host->setDisplayElementVisibility(request); });
     api::handlers::RuntimeHandler runtimeHandler([host]() { return host->readModalState(); });
     api::handlers::SequenceHandler sequenceHandler(std::move(sequenceService));
     api::handlers::DataLayerHandler dataLayerHandler(std::move(dataLayerService));

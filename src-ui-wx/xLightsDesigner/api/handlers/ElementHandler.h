@@ -42,6 +42,7 @@ public:
                 {"name", element.name},
                 {"type", element.type},
                 {"selected", element.selected},
+                {"visible", element.visible},
                 {"totalEffectCount", element.totalEffectCount},
                 {"layers", nlohmann::json::array()}
             };
@@ -186,6 +187,63 @@ public:
             }
             queuedResponse.data["ok"] = true;
             queuedResponse.data["selectedCount"] = result.selectedCount;
+            return queuedResponse;
+        });
+        return BuildQueuedJobAcceptedResponse(request, jobId);
+    }
+
+    [[nodiscard]] transport::ApiResponse handleSetDisplayElementVisibility(const transport::ApiRequest& request) const {
+        const auto visibleNamesText = parsing::ReadString(request.params, "visibleElementNames");
+        if (visibleNamesText.empty()) {
+            transport::ApiResponse response; response.command = request.command; response.requestId = request.requestId; response.statusCode = 400;
+            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "elements.setVisibility requires visibleElementNames JSON.", nlohmann::json::object()};
+            return response;
+        }
+
+        nlohmann::json visibleNamesJson;
+        try {
+            visibleNamesJson = nlohmann::json::parse(visibleNamesText);
+        } catch (const std::exception& ex) {
+            transport::ApiResponse response; response.command = request.command; response.requestId = request.requestId; response.statusCode = 400;
+            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "elements.setVisibility received invalid visibleElementNames JSON.", {{"reason", ex.what()}}};
+            return response;
+        }
+        if (!visibleNamesJson.is_array()) {
+            transport::ApiResponse response; response.command = request.command; response.requestId = request.requestId; response.statusCode = 400;
+            response.error = transport::ApiError{std::string(transport::errors::ValidationError), "elements.setVisibility requires visibleElementNames to be a JSON array.", nlohmann::json::object()};
+            return response;
+        }
+
+        models::SetDisplayElementVisibilityRequest visibilityRequest;
+        visibilityRequest.hideUnlistedModels = parsing::ReadBool(request.params, "hideUnlistedModels", true);
+        for (const auto& item : visibleNamesJson) {
+            if (item.is_string()) {
+                visibilityRequest.visibleElementNames.push_back(item.get<std::string>());
+            }
+        }
+
+        const auto jobId = SubmitDesignerApiJob(request.command, request.requestId, [service = _service, request, visibilityRequest]() {
+            transport::ApiResponse queuedResponse;
+            queuedResponse.command = request.command;
+            queuedResponse.requestId = request.requestId;
+            const auto result = service.setDisplayElementVisibility(visibilityRequest);
+            if (!result.sequenceOpen) {
+                queuedResponse.statusCode = 404;
+                queuedResponse.error = transport::ApiError{std::string(transport::errors::SequenceNotOpen), "No sequence open.", nlohmann::json::object()};
+                return queuedResponse;
+            }
+            if (!result.ok) {
+                queuedResponse.statusCode = 400;
+                queuedResponse.error = transport::ApiError{
+                    result.errorCode.value_or(std::string(transport::errors::ValidationError)),
+                    result.errorMessage.value_or("elements.setVisibility failed."),
+                    {{"missingNames", result.missingNames}}
+                };
+                return queuedResponse;
+            }
+            queuedResponse.data["ok"] = true;
+            queuedResponse.data["visibleCount"] = result.visibleCount;
+            queuedResponse.data["hiddenCount"] = result.hiddenCount;
             return queuedResponse;
         });
         return BuildQueuedJobAcceptedResponse(request, jobId);

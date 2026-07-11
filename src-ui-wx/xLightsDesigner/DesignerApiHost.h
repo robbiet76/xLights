@@ -37,6 +37,7 @@
 #include "models/ModelGroup.h"
 #include "models/OutputModelManager.h"
 #include "models/SubModel.h"
+#include "outputs/Controller.h"
 #include "ExternalHooks.h"
 #include "effects/RenderableEffect.h"
 #include "DesignerDiagnostics.h"
@@ -1825,6 +1826,10 @@ public:
             summary.durationMs = static_cast<int>(media->LengthMS());
             summary.sampleRate = static_cast<int>(media->GetRate());
             summary.channelCount = media->GetChannels();
+            const auto mediaHash = media->Hash();
+            if (!mediaHash.empty()) {
+                summary.mediaContentFingerprint = "xlights-audio-md5:" + mediaHash;
+            }
         }
         return summary;
     }
@@ -2331,6 +2336,85 @@ public:
     // Read-only layout discovery. These endpoints provide the physical display
     // skeleton for native-effect planning, proof validation, and optional
     // advanced direct-channel writing.
+    [[nodiscard]] api::models::LayoutControllerCalibrationSummary readControllerCalibration(const Model* model) const {
+        api::models::LayoutControllerCalibrationSummary calibration;
+        if (_frame == nullptr || model == nullptr) {
+            return calibration;
+        }
+
+        const auto controllerName = model->GetControllerName();
+        if (!controllerName.empty() && controllerName != NO_CONTROLLER && controllerName != USE_START_CHANNEL) {
+            calibration.controllerName = controllerName;
+            calibration.connectionSource = "model_controller_connection";
+        }
+        const int controllerPort = model->GetControllerPort();
+        if (controllerPort > 0) {
+            calibration.controllerPort = controllerPort;
+            calibration.connectionSource = "model_controller_connection";
+        }
+
+        const auto& connection = model->GetConstCtrlConn();
+        calibration.brightnessActive = connection.IsPropertySet(ControllerConnection::BRIGHTNESS_ACTIVE);
+        calibration.brightnessExplicitlySet = calibration.brightnessActive;
+        if (calibration.brightnessActive) {
+            calibration.configuredBrightnessPercent = connection.GetBrightness();
+            calibration.configuredBrightnessSource = "model_port_explicit";
+            calibration.effectiveBrightnessPercent = calibration.configuredBrightnessPercent;
+            calibration.effectiveBrightnessSource = "model_port_explicit";
+        }
+
+        calibration.gammaActive = connection.IsPropertySet(ControllerConnection::GAMMA_ACTIVE);
+        calibration.gammaExplicitlySet = calibration.gammaActive;
+        if (calibration.gammaActive) {
+            calibration.configuredGamma = static_cast<double>(connection.GetGamma());
+            calibration.configuredGammaSource = "model_port_explicit";
+            calibration.effectiveGamma = calibration.configuredGamma;
+            calibration.effectiveGammaSource = "model_port_explicit";
+        }
+
+        Controller* controller = calibration.controllerName.has_value()
+            ? _frame->GetOutputManager()->GetController(*calibration.controllerName)
+            : nullptr;
+        if (controller == nullptr) {
+            return calibration;
+        }
+
+        const bool supportsFullControl = controller->SupportsFullxLightsControl();
+        const bool fullControlActive = supportsFullControl && controller->IsFullxLightsControl();
+        calibration.fullXlightsControlActive = fullControlActive;
+
+        auto unavailableDefaultSource = [&]() -> std::string {
+            if (!supportsFullControl) {
+                return "full_control_unsupported";
+            }
+            return fullControlActive ? "controller_default_unsupported" : "full_control_inactive";
+        };
+
+        if (fullControlActive && controller->SupportsDefaultBrightness()) {
+            calibration.controllerDefaultBrightnessPercent = controller->GetDefaultBrightnessUnderFullControl();
+            calibration.controllerDefaultBrightnessSource = "controller_full_control_default";
+            if (!calibration.effectiveBrightnessPercent.has_value()) {
+                calibration.effectiveBrightnessPercent = calibration.controllerDefaultBrightnessPercent;
+                calibration.effectiveBrightnessSource = "controller_full_control_default";
+            }
+        } else {
+            calibration.controllerDefaultBrightnessSource = unavailableDefaultSource();
+        }
+
+        if (fullControlActive && controller->SupportsDefaultGamma()) {
+            calibration.controllerDefaultGamma = static_cast<double>(controller->GetDefaultGammaUnderFullControl());
+            calibration.controllerDefaultGammaSource = "controller_full_control_default";
+            if (!calibration.effectiveGamma.has_value()) {
+                calibration.effectiveGamma = calibration.controllerDefaultGamma;
+                calibration.effectiveGammaSource = "controller_full_control_default";
+            }
+        } else {
+            calibration.controllerDefaultGammaSource = unavailableDefaultSource();
+        }
+
+        return calibration;
+    }
+
     [[nodiscard]] api::models::LayoutModelsSummary readLayoutModels() const {
         api::models::LayoutModelsSummary summary;
         if (_frame == nullptr) {
@@ -2372,6 +2456,7 @@ public:
             modelSummary.renderHeight = static_cast<double>(location.GetRenderHt());
             modelSummary.renderDepth = static_cast<double>(location.GetRenderDp());
             modelSummary.supportedRenderStyles = model->GetBufferStyles();
+            modelSummary.controllerCalibration = readControllerCalibration(model);
             summary.models.push_back(std::move(modelSummary));
         }
         return summary;
@@ -2659,6 +2744,26 @@ public:
             target.nodeCount = static_cast<int>(model->GetNodeCount());
             target.usableForFseq = model->GetDisplayAs() != DisplayAsType::ModelGroup && target.nodeCount > 0;
             fingerprint << target.targetName << ":" << target.startChannel << "-" << target.endChannel << ":" << target.nodeCount << ";";
+            const auto calibration = readControllerCalibration(model);
+            fingerprint << "calibration="
+                        << calibration.connectionSource << ":"
+                        << calibration.controllerName.value_or("") << ":"
+                        << calibration.controllerPort.value_or(-1) << ":"
+                        << calibration.brightnessActive << ":"
+                        << calibration.configuredBrightnessPercent.value_or(-1) << ":"
+                        << calibration.configuredBrightnessSource << ":"
+                        << calibration.gammaActive << ":"
+                        << calibration.configuredGamma.value_or(-1.0) << ":"
+                        << calibration.configuredGammaSource << ":"
+                        << (calibration.fullXlightsControlActive.has_value() ? (*calibration.fullXlightsControlActive ? 1 : 0) : -1) << ":"
+                        << calibration.controllerDefaultBrightnessPercent.value_or(-1) << ":"
+                        << calibration.controllerDefaultBrightnessSource << ":"
+                        << calibration.controllerDefaultGamma.value_or(-1.0) << ":"
+                        << calibration.controllerDefaultGammaSource << ":"
+                        << calibration.effectiveBrightnessPercent.value_or(-1) << ":"
+                        << calibration.effectiveBrightnessSource << ":"
+                        << calibration.effectiveGamma.value_or(-1.0) << ":"
+                        << calibration.effectiveGammaSource << ";";
 
             if (model->GetDisplayAs() == DisplayAsType::ModelGroup) {
                 target.warnings.push_back("Model groups do not expose direct node channel mapping; use member model mappings.");
@@ -2753,6 +2858,42 @@ public:
         return summary;
     }
 
+    [[nodiscard]] api::models::LayoutPreviewGroupsSummary readLayoutPreviewGroups() const {
+        api::models::LayoutPreviewGroupsSummary summary;
+        if (_frame == nullptr) {
+            return summary;
+        }
+
+        auto previewGroupNames = Model::GetLayoutGroups(_frame->AllModels);
+        std::sort(previewGroupNames.begin(), previewGroupNames.end());
+        previewGroupNames.erase(std::unique(previewGroupNames.begin(), previewGroupNames.end()), previewGroupNames.end());
+
+        for (const auto& groupName : previewGroupNames) {
+            api::models::LayoutPreviewGroupSummary group;
+            group.name = groupName;
+            group.systemGroup = groupName == "Default" || groupName == "All Previews" || groupName == "Unassigned";
+            group.unassigned = groupName == "Unassigned";
+
+            for (auto it = _frame->AllModels.begin(); it != _frame->AllModels.end(); ++it) {
+                const auto* model = it->second;
+                if (model == nullptr || model->GetDisplayAs() == DisplayAsType::ModelGroup) {
+                    continue;
+                }
+                const auto modelLayoutGroup = model->GetLayoutGroup();
+                const bool belongs = groupName == "All Models"
+                    || modelLayoutGroup == groupName
+                    || (modelLayoutGroup == "All Previews" && groupName != "Unassigned");
+                if (belongs) {
+                    group.modelNames.push_back(model->GetName());
+                }
+            }
+            std::sort(group.modelNames.begin(), group.modelNames.end());
+            group.modelCount = static_cast<int>(group.modelNames.size());
+            summary.previewGroups.push_back(std::move(group));
+        }
+        return summary;
+    }
+
     // Sequence element inventory and row ordering.
     [[nodiscard]] api::models::ElementsSummary readElements() const {
         api::models::ElementsSummary summary;
@@ -2772,6 +2913,7 @@ public:
             api::models::SequenceElementSummary elementSummary;
             elementSummary.name = element->GetName();
             elementSummary.type = element->GetTypeDescription();
+            elementSummary.visible = element->GetVisible();
             if (auto* modelElement = dynamic_cast<ModelElement*>(element); modelElement != nullptr) {
                 elementSummary.selected = modelElement->GetSelected();
             }
@@ -2865,6 +3007,59 @@ public:
             wxPostEvent(_frame, eventRowHeaderChanged);
             result.ok = true;
             result.orderedCount = destination;
+            return result;
+        });
+    }
+
+    [[nodiscard]] api::models::SetDisplayElementVisibilityResult setDisplayElementVisibility(const api::models::SetDisplayElementVisibilityRequest& request) const {
+        return RunOnMainThread<api::models::SetDisplayElementVisibilityResult>([this, request]() {
+            api::models::SetDisplayElementVisibilityResult result;
+            if (_frame == nullptr || _frame->CurrentSeqXmlFile == nullptr) {
+                return result;
+            }
+            result.sequenceOpen = true;
+            auto& sequenceElements = _frame->GetSequenceElements();
+
+            std::set<std::string> visibleNames;
+            for (const auto& name : request.visibleElementNames) {
+                if (!name.empty()) {
+                    visibleNames.insert(name);
+                }
+            }
+            for (const auto& name : visibleNames) {
+                Element* element = sequenceElements.GetElement(name);
+                if (element == nullptr || element->GetType() == ElementType::ELEMENT_TYPE_TIMING) {
+                    result.missingNames.push_back(name);
+                }
+            }
+            if (!result.missingNames.empty()) {
+                result.errorCode = std::string("VALIDATION_ERROR");
+                result.errorMessage = std::string("Visibility contains unknown or non-model display elements.");
+                return result;
+            }
+
+            for (size_t i = 0; i < sequenceElements.GetElementCount(); ++i) {
+                Element* element = sequenceElements.GetElement(i);
+                if (element == nullptr || element->GetType() == ElementType::ELEMENT_TYPE_TIMING) {
+                    continue;
+                }
+                const bool shouldBeVisible = visibleNames.find(element->GetName()) != visibleNames.end();
+                if (shouldBeVisible || request.hideUnlistedModels) {
+                    element->SetVisible(shouldBeVisible);
+                }
+                if (element->GetVisible()) {
+                    result.visibleCount++;
+                } else {
+                    result.hiddenCount++;
+                }
+            }
+
+            sequenceElements.PopulateRowInformation();
+            sequenceElements.PopulateVisibleRowInformation();
+            _frame->MarkEffectsFileDirty();
+            wxCommandEvent eventRowHeaderChanged(EVT_ROW_HEADINGS_CHANGED);
+            wxPostEvent(_frame, eventRowHeaderChanged);
+            result.ok = true;
             return result;
         });
     }

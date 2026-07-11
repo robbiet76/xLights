@@ -19,20 +19,23 @@ public:
     using ReadChannelMapFn = std::function<models::LayoutChannelMapSummary()>;
     using ReadSettingsFn = std::function<models::LayoutSettingsSummary()>;
     using ReadGroupMembershipsFn = std::function<models::LayoutGroupMembershipsSummary()>;
+    using ReadPreviewGroupsFn = std::function<models::LayoutPreviewGroupsSummary()>;
     LayoutService(ReadModelsFn readModels,
                   ReadSubmodelsFn readSubmodels,
                   ReadModelNodesFn readModelNodes,
                   ReadRenderBufferNodesFn readRenderBufferNodes,
                   ReadChannelMapFn readChannelMap,
                   ReadSettingsFn readSettings,
-                  ReadGroupMembershipsFn readGroupMemberships)
+                  ReadGroupMembershipsFn readGroupMemberships,
+                  ReadPreviewGroupsFn readPreviewGroups)
         : _readModels(std::move(readModels)),
           _readSubmodels(std::move(readSubmodels)),
           _readModelNodes(std::move(readModelNodes)),
           _readRenderBufferNodes(std::move(readRenderBufferNodes)),
           _readChannelMap(std::move(readChannelMap)),
           _readSettings(std::move(readSettings)),
-          _readGroupMemberships(std::move(readGroupMemberships)) {}
+          _readGroupMemberships(std::move(readGroupMemberships)),
+          _readPreviewGroups(std::move(readPreviewGroups)) {}
 
     [[nodiscard]] models::LayoutModelsSummary getModels() const {
         return _readModels ? _readModels() : models::LayoutModelsSummary{};
@@ -40,6 +43,10 @@ public:
 
     [[nodiscard]] models::LayoutGroupMembershipsSummary getGroupMemberships() const {
         return _readGroupMemberships ? _readGroupMemberships() : models::LayoutGroupMembershipsSummary{};
+    }
+
+    [[nodiscard]] models::LayoutPreviewGroupsSummary getPreviewGroups() const {
+        return _readPreviewGroups ? _readPreviewGroups() : models::LayoutPreviewGroupsSummary{};
     }
 
     [[nodiscard]] models::LayoutSubmodelsSummary getSubmodels() const {
@@ -70,6 +77,7 @@ private:
     ReadChannelMapFn _readChannelMap;
     ReadSettingsFn _readSettings;
     ReadGroupMembershipsFn _readGroupMemberships;
+    ReadPreviewGroupsFn _readPreviewGroups;
 };
 
 } // namespace xLightsDesigner::api::services

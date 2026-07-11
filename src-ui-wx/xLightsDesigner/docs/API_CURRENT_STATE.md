@@ -87,6 +87,7 @@ Routes:
 - `GET /xlightsdesigner/api/layout/scene`
 - `GET /xlightsdesigner/api/layout/settings`
 - `GET /xlightsdesigner/api/layout/group-members`
+- `GET /xlightsdesigner/api/layout/preview-groups`
 
 The layout API is read-only. It exposes existing xLights layout geometry,
 submodels, group membership, channel spans, node coordinates, preview settings,
@@ -95,6 +96,22 @@ channel mapping source for generated FSEQ alignment.
 `layout/render-buffer-nodes` materializes a requested target and xLights render
 style through xLights' own render-buffer pipeline so external render boards do
 not recreate buffer-style geometry in app code.
+
+Each `layout/models` row includes `controllerCalibration`, a typed snapshot of
+physical-controller/deployment metadata from the model's xLights
+`ControllerConnection` and, when safely resolvable, its assigned controller.
+Nullable fields remain JSON `null` when unassigned or unsupported; an inactive
+connection default is never reported as an implicit 100%. Explicit model/port
+brightness and gamma use `model_port_explicit` provenance. Effective values
+fall back to `controller_full_control_default` only when the assigned controller
+is resolved, full xLights control is active, and that controller advertises the
+corresponding default capability. Other provenance values distinguish
+`controller_not_resolved`, `full_control_unsupported`,
+`full_control_inactive`, `controller_default_unsupported`, and `unavailable`.
+`deploymentMetadataOnly=true` and `previewApplicationProven=false` make clear
+that this is deployment calibration, not proof that preview rendering applied
+the values. Calibration content participates in the channel-map fingerprint,
+so changes invalidate dependent XLD freshness evidence.
 
 ## Timing
 
@@ -119,6 +136,10 @@ Routes:
 - `GET /xlightsdesigner/api/media/audio/capabilities`
 
 Show-folder switching is explicit and should be followed by fresh display, channel-map, timing, and sequence state readback.
+When active audio is available, `media/current` reports `mediaContentFingerprint`
+as `xlights-audio-md5:<hex>`, using xLights' content hash of the decoded audio
+samples rather than a path or file-metadata surrogate. The field is an empty
+string when no valid active audio is available.
 
 ## Elements
 

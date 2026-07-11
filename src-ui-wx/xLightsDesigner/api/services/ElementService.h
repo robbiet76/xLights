@@ -17,19 +17,22 @@ public:
     using EnsureSequenceElementsFn = std::function<models::EnsureSequenceElementsResult(const models::EnsureSequenceElementsRequest&)>;
     using ReadSelectedDisplayElementsFn = std::function<models::SelectedDisplayElementsSummary()>;
     using SetSelectedDisplayElementsFn = std::function<models::SetSelectedDisplayElementsResult(const models::SetSelectedDisplayElementsRequest&)>;
+    using SetDisplayElementVisibilityFn = std::function<models::SetDisplayElementVisibilityResult(const models::SetDisplayElementVisibilityRequest&)>;
 
     ElementService(ReadElementsFn readElements,
                    ReadDisplayOrderFn readDisplayOrder,
                    SetDisplayOrderFn setDisplayOrder,
                    EnsureSequenceElementsFn ensureSequenceElements,
                    ReadSelectedDisplayElementsFn readSelectedDisplayElements,
-                   SetSelectedDisplayElementsFn setSelectedDisplayElements)
+                   SetSelectedDisplayElementsFn setSelectedDisplayElements,
+                   SetDisplayElementVisibilityFn setDisplayElementVisibility)
         : _readElements(std::move(readElements)),
           _readDisplayOrder(std::move(readDisplayOrder)),
           _setDisplayOrder(std::move(setDisplayOrder)),
           _ensureSequenceElements(std::move(ensureSequenceElements)),
           _readSelectedDisplayElements(std::move(readSelectedDisplayElements)),
-          _setSelectedDisplayElements(std::move(setSelectedDisplayElements)) {}
+          _setSelectedDisplayElements(std::move(setSelectedDisplayElements)),
+          _setDisplayElementVisibility(std::move(setDisplayElementVisibility)) {}
 
     [[nodiscard]] models::ElementsSummary getSummary() const {
         return _readElements ? _readElements() : models::ElementsSummary{};
@@ -55,6 +58,10 @@ public:
         return _setSelectedDisplayElements ? _setSelectedDisplayElements(request) : models::SetSelectedDisplayElementsResult{};
     }
 
+    [[nodiscard]] models::SetDisplayElementVisibilityResult setDisplayElementVisibility(const models::SetDisplayElementVisibilityRequest& request) const {
+        return _setDisplayElementVisibility ? _setDisplayElementVisibility(request) : models::SetDisplayElementVisibilityResult{};
+    }
+
 private:
     ReadElementsFn _readElements;
     ReadDisplayOrderFn _readDisplayOrder;
@@ -62,6 +69,7 @@ private:
     EnsureSequenceElementsFn _ensureSequenceElements;
     ReadSelectedDisplayElementsFn _readSelectedDisplayElements;
     SetSelectedDisplayElementsFn _setSelectedDisplayElements;
+    SetDisplayElementVisibilityFn _setDisplayElementVisibility;
 };
 
 } // namespace xLightsDesigner::api::services

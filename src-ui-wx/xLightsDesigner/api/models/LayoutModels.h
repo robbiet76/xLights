@@ -8,6 +8,38 @@ namespace xLightsDesigner::api::models {
 
 // Layout models describe the existing xLights display skeleton. This API is
 // read-only: callers use it to generate and map pixels/nodes, not to edit layout.
+struct LayoutControllerCalibrationSummary {
+    std::optional<std::string> controllerName;
+    std::optional<int> controllerPort;
+    std::string connectionSource = "unavailable";
+
+    std::optional<int> configuredBrightnessPercent;
+    bool brightnessExplicitlySet = false;
+    bool brightnessActive = false;
+    std::string configuredBrightnessSource = "unavailable";
+
+    std::optional<double> configuredGamma;
+    bool gammaExplicitlySet = false;
+    bool gammaActive = false;
+    std::string configuredGammaSource = "unavailable";
+
+    std::optional<bool> fullXlightsControlActive;
+    std::optional<int> controllerDefaultBrightnessPercent;
+    std::string controllerDefaultBrightnessSource = "controller_not_resolved";
+    std::optional<double> controllerDefaultGamma;
+    std::string controllerDefaultGammaSource = "controller_not_resolved";
+
+    std::optional<int> effectiveBrightnessPercent;
+    std::string effectiveBrightnessSource = "unavailable";
+    std::optional<double> effectiveGamma;
+    std::string effectiveGammaSource = "unavailable";
+
+    // These values describe upload/deployment configuration. The layout API
+    // does not prove that xLights' preview renderer applies them.
+    bool deploymentMetadataOnly = true;
+    bool previewApplicationProven = false;
+};
+
 struct LayoutModelSummary {
     std::string name;
     std::string displayAs;
@@ -33,6 +65,7 @@ struct LayoutModelSummary {
     double renderHeight = 0.0;
     double renderDepth = 0.0;
     std::vector<std::string> supportedRenderStyles;
+    LayoutControllerCalibrationSummary controllerCalibration;
 };
 
 struct LayoutModelsSummary {
@@ -219,6 +252,18 @@ struct LayoutGroupMembersSummary {
 
 struct LayoutGroupMembershipsSummary {
     std::vector<LayoutGroupMembersSummary> groups;
+};
+
+struct LayoutPreviewGroupSummary {
+    std::string name;
+    bool systemGroup = false;
+    bool unassigned = false;
+    int modelCount = 0;
+    std::vector<std::string> modelNames;
+};
+
+struct LayoutPreviewGroupsSummary {
+    std::vector<LayoutPreviewGroupSummary> previewGroups;
 };
 
 } // namespace xLightsDesigner::api::models

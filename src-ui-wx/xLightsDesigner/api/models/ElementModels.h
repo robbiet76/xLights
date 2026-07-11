@@ -18,6 +18,7 @@ struct SequenceElementSummary {
     std::string name;
     std::string type;
     bool selected = false;
+    bool visible = false;
     int totalEffectCount = 0;
     std::vector<ElementLayerSummary> layers;
 };
@@ -52,6 +53,21 @@ struct SetSelectedDisplayElementsResult {
     bool sequenceOpen = false;
     bool ok = false;
     int selectedCount = 0;
+    std::vector<std::string> missingNames;
+    std::optional<std::string> errorCode;
+    std::optional<std::string> errorMessage;
+};
+
+struct SetDisplayElementVisibilityRequest {
+    std::vector<std::string> visibleElementNames;
+    bool hideUnlistedModels = true;
+};
+
+struct SetDisplayElementVisibilityResult {
+    bool sequenceOpen = false;
+    bool ok = false;
+    int visibleCount = 0;
+    int hiddenCount = 0;
     std::vector<std::string> missingNames;
     std::optional<std::string> errorCode;
     std::optional<std::string> errorMessage;
