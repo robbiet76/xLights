@@ -37,6 +37,7 @@ public:
                 {"endChannel", model.endChannel},
                 {"submodelCount", model.submodelCount},
                 {"nodeCount", model.nodeCount},
+                {"previewPixelSize", model.previewPixelSize},
                 {"positionX", model.positionX},
                 {"positionY", model.positionY},
                 {"positionZ", model.positionZ},

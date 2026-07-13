@@ -158,6 +158,7 @@ inline DesignerApiSelfTestResult RunDesignerApiSelfTests() {
                 api::models::LayoutModelsSummary summary;
                 api::models::LayoutModelSummary configured;
                 configured.name = "Configured Tree";
+                configured.previewPixelSize = 18;
                 configured.controllerCalibration.controllerName = "Front Controller";
                 configured.controllerCalibration.controllerPort = 3;
                 configured.controllerCalibration.connectionSource = "model_controller_connection";
@@ -198,6 +199,8 @@ inline DesignerApiSelfTestResult RunDesignerApiSelfTests() {
 
         const auto response = layoutHandler.handleGetModels(request);
         const auto& configured = response.data["models"][0]["controllerCalibration"];
+        Check(response.data["models"][0].value("previewPixelSize", 0) == 18,
+              "LayoutHandler should expose the configured model preview pixel size as footprint-proxy evidence.", result);
         Check(configured.value("configuredBrightnessPercent", 0) == 42
                   && configured.value("effectiveBrightnessSource", "") == "model_port_explicit",
               "LayoutHandler should expose explicit model/port brightness and provenance.", result);

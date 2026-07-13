@@ -11,6 +11,7 @@ Issue Tracker is found here: www.github.com/xLightsSequencer/xLights/issues
 XLIGHTS/NUTCRACKER RELEASE NOTES
 ---------------------------------
 2026.12  ?
+    -enh (robterry)              Report model preview pixel size through the xLightsDesigner layout API for physical-light footprint context.
     -enh (robterry)              Report the active audio content fingerprint through the xLightsDesigner media API.
 
 2026.11  June 14, 2026

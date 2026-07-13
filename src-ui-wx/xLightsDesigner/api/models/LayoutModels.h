@@ -49,6 +49,7 @@ struct LayoutModelSummary {
     int endChannel = 0;   // 1-based inclusive
     int submodelCount = 0;
     int nodeCount = 0;
+    int previewPixelSize = 2;
     double positionX = 0.0;
     double positionY = 0.0;
     double positionZ = 0.0;

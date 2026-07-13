@@ -2440,6 +2440,7 @@ public:
             modelSummary.endChannel = static_cast<int>(model->GetLastChannel()) + 1;
             modelSummary.submodelCount = static_cast<int>(model->GetSubModels().size());
             modelSummary.nodeCount = static_cast<int>(model->GetNodeCount());
+            modelSummary.previewPixelSize = model->GetPixelSize();
             modelSummary.positionX = static_cast<double>(position.x);
             modelSummary.positionY = static_cast<double>(position.y);
             modelSummary.positionZ = static_cast<double>(position.z);
